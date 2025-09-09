@@ -7,3 +7,4 @@ DerivedData
 *.xccheckout
 .github
 README.md
+.DS_Store
