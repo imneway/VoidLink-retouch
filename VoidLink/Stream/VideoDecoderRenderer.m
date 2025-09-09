@@ -68,8 +68,21 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     }
 
     // Ensure the AVSampleBufferDisplayLayer is sized to preserve the aspect ratio
-    // of the video stream. 强制以容器宽度等比适配，避免在高度未稳定时选到错误分支。
-    CGSize videoSize = CGSizeMake(_view.bounds.size.width, _view.bounds.size.width / _streamAspectRatio);
+    // of the video stream. iPad 使用宽度等比，iPhone 使用原先的宽/高择优逻辑。
+    // 备注：如下为曾经使用的“始终按宽等比”的实现，能规避高度未更新导致的误判，但会在部分 iPhone 竖屏场景产生顶部或底部留黑等副作用。
+    // 保留注释供回退或问题对比使用：
+    // CGSize videoSize = CGSizeMake(_view.bounds.size.width, _view.bounds.size.width / _streamAspectRatio);
+    CGSize videoSize;
+    BOOL isPad = [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad;
+    if (isPad) {
+        videoSize = CGSizeMake(_view.bounds.size.width, _view.bounds.size.width / _streamAspectRatio);
+    } else {
+        if (_view.bounds.size.width > _view.bounds.size.height * _streamAspectRatio) {
+            videoSize = CGSizeMake(_view.bounds.size.height * _streamAspectRatio, _view.bounds.size.height);
+        } else {
+            videoSize = CGSizeMake(_view.bounds.size.width, _view.bounds.size.width / _streamAspectRatio);
+        }
+    }
 
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
