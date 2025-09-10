@@ -677,7 +677,7 @@ static float L3_Y;
     }
     
     // Calculate the distances of each button from the shared center based on their transformed positions
-    CGFloat newDPadDistFactor = 0.2/_dPadSizeFactor;
+    CGFloat newDPadDistFactor = (0.2 * D_PAD_DISTANCE_SCALE)/_dPadSizeFactor; // 使用可配置的缩放因子
     CGFloat newLongSideLength = standardLeftRightButtonBounds.size.width * _dPadSizeFactor;
     CGFloat newShortSideLength = standardLeftRightButtonBounds.size.height * _dPadSizeFactor;
     CGPoint sharedCenter = CGPointMake(D_PAD_CENTER_X, D_PAD_CENTER_Y); // this will anchor the center point of the dPad
@@ -1886,7 +1886,7 @@ static float L3_Y;
 
     if (layer == self._dPadBackground){
         // Calculate the distances of each button from the shared center based on their transformed positions
-        CGFloat newDPadDistFactor = 0.2/sizeFactor;
+        CGFloat newDPadDistFactor = (0.2 * D_PAD_DISTANCE_SCALE)/sizeFactor; // 使用可配置的缩放因子
 
         // 1. Resize and reposition the Down button
         

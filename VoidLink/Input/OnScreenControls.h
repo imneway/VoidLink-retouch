@@ -26,6 +26,7 @@
 
 static const float D_PAD_DIST = 10;
 static const float BUTTON_DIST = 20;
+static const float D_PAD_DISTANCE_SCALE = 0.8; // d-pad 按钮距离缩放因子，0.8 = 80%
 
 @interface OnScreenControls : NSObject{
     @protected
