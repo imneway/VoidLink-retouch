@@ -130,6 +130,7 @@ import UIKit
     
     // key / button label
     private let label: UILabel
+    private let outlineLabel: UILabel
     
     // first touch location within the button or pad view (self)
     @objc public var touchBeganLocation: CGPoint = .zero
@@ -150,7 +151,7 @@ import UIKit
     
     // border & visual effect
     private var minimumBorderAlpha: CGFloat = 0.19
-    private var defaultBorderColor: CGColor = UIColor(white: 0.2, alpha: 0.3).cgColor
+    private var defaultBorderColor: CGColor = UIColor(white: 0.27, alpha: 0.3).cgColor
 //    private let voidlinkPurple: CGColor = UIColor(red: 0.5, green: 0.5, blue: 1.0, alpha: 0.86).cgColor
     private let voidlinkPurple: CGColor = UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.4).cgColor //Overwrite the purple border color
     
@@ -230,6 +231,7 @@ import UIKit
         self.buttonLabel = buttonLabel
         self.shape = shape
         self.label = UILabel()
+        self.outlineLabel = UILabel()
         // self.originalBackgroundColor = UIColor(white: 0.2, alpha: 0.7)
         self.pressed = false
         // self.widthFactor = 1.0
@@ -378,7 +380,7 @@ import UIKit
     private func tweakAlpha(){
         // setup default border from self.backgroundAlpha
         let realBackgroundAlpha = self.backgroundAlpha - 0.18 // offset to be consistent with legacy onScreen controller layer opacity
-        self.backgroundColor = UIColor(white: 0.2, alpha: realBackgroundAlpha) // offset to be consistent with legacy onScreen controller layer opacity
+        self.backgroundColor = UIColor(white: 0.27, alpha: realBackgroundAlpha) // offset to be consistent with legacy onScreen controller layer opacity
         var borderAlpha = realBackgroundAlpha * 1.01
         if widgetType == WidgetTypeEnum.touchPad {
            minimumBorderAlpha = 0.0
@@ -386,12 +388,12 @@ import UIKit
         if borderAlpha < minimumBorderAlpha {
             borderAlpha = minimumBorderAlpha
         }
-        defaultBorderColor = UIColor(white: 0.2, alpha: borderAlpha).cgColor
+        defaultBorderColor = UIColor(white: 0.27, alpha: borderAlpha).cgColor
         self.layer.borderColor = defaultBorderColor
 
         if widgetType == WidgetTypeEnum.touchPad {
             self.backgroundColor = UIColor.clear // make touchPad transparent
-            self.layer.borderColor = UIColor(white: 0.2, alpha: borderAlpha - 0.15).cgColor // reduced border alpha for touchPad
+            self.layer.borderColor = UIColor(white: 0.27, alpha: borderAlpha - 0.15).cgColor // reduced border alpha for touchPad
         }
     }
     
@@ -439,6 +441,10 @@ import UIKit
         }
 
         NSLayoutConstraint.activate([
+            outlineLabel.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: 10),
+            outlineLabel.trailingAnchor.constraint(equalTo: self.trailingAnchor, constant: -10),
+            outlineLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            outlineLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             label.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: 10), // set up label size contrain within UIView
             label.trailingAnchor.constraint(equalTo: self.trailingAnchor, constant: -10),
             label.centerXAnchor.constraint(equalTo: centerXAnchor),
@@ -452,16 +458,27 @@ import UIKit
     
     private func setupView() {
         label.text = self.buttonLabel
-        label.font = UIFont.boldSystemFont(ofSize: 19)
+        label.font = roundedBoldFont(ofSize: 19)
         label.translatesAutoresizingMaskIntoConstraints = false
         label.adjustsFontSizeToFitWidth = true
         label.minimumScaleFactor = 0.1  // Adjust the scale factor as needed
         
         label.textColor = UIColor(white: 1.0, alpha: 0.82)
         label.textAlignment = .center
-        label.shadowColor = .black
-        label.shadowOffset = CGSize(width: 1, height: 1)
+        label.shadowColor = nil
+        label.shadowOffset = .zero
         label.translatesAutoresizingMaskIntoConstraints = false // enable auto alignment for the label
+
+        // setup outline label (stroke-only behind main label)
+        outlineLabel.text = self.buttonLabel
+        outlineLabel.font = label.font
+        outlineLabel.translatesAutoresizingMaskIntoConstraints = false
+        outlineLabel.adjustsFontSizeToFitWidth = true
+        outlineLabel.minimumScaleFactor = label.minimumScaleFactor
+        outlineLabel.textAlignment = .center
+        outlineLabel.textColor = .clear
+        outlineLabel.shadowColor = nil
+        outlineLabel.shadowOffset = .zero
         
         self.translatesAutoresizingMaskIntoConstraints = true // this is mandatory to prevent unexpected key view location change
         
@@ -498,18 +515,22 @@ import UIKit
             self.layer.cornerRadius = self.frame.width/2
             // self.layer.borderWidth = self.borderWidth
             label.minimumScaleFactor = 0.15  // Adjust the scale factor for oscButtons
-            label.font = UIFont.boldSystemFont(ofSize: 22)
+            label.font = roundedBoldFont(ofSize: 22)
+            outlineLabel.font = label.font
         }
         if self.shape == "square" || self.shape == "largeSquare" {
             //just do nothing here
         }
 
+        // Ensure subview order: outline behind, label on top
+        if outlineLabel.superview !== self { self.addSubview(outlineLabel) }
+        if label.superview !== self { self.addSubview(label) }
+        self.bringSubviewToFront(label)
+        applyLabelStroke()
         
         // self.layer.shadowColor = UIColor.clear.cgColor
         // self.layer.shadowRadius = 8
         // self.layer.shadowOpacity = 0.5
-        
-        addSubview(label)
         
         self.changeAndActivateContraints()
         
@@ -522,6 +543,29 @@ import UIKit
             if self.crossMarkLayer.superlayer == nil {self.crossMarkLayer = createCrossMark()}
             if self.stickBallLayer.superlayer == nil {self.stickBallLayer = createStickBall()}
         }
+    }
+
+    private func roundedBoldFont(ofSize size: CGFloat) -> UIFont {
+        var base = UIFont.systemFont(ofSize: size, weight: .bold)
+        if #available(iOS 13.0, *), let rounded = base.fontDescriptor.withDesign(.rounded) {
+            base = UIFont(descriptor: rounded, size: size)
+        }
+        return base
+    }
+
+    private func applyLabelStroke() {
+        let text = label.text ?? ""
+        let font = label.font ?? roundedBoldFont(ofSize: 19)
+        // 使用正值描边宽度绘制仅描边（无填充），再由上层 label 负责填充，从而呈现外描边
+        let pointSize = max(font.pointSize, 1)
+        let strokeWidthPercent = (1.5 / pointSize) * 100.0
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: UIColor.clear,
+            .strokeColor: UIColor(white: 0.0, alpha: 0.32),
+            .strokeWidth: strokeWidthPercent
+        ]
+        outlineLabel.attributedText = NSAttributedString(string: text, attributes: attributes)
     }
     
     private func createl3r3Indicator() -> CAShapeLayer{
