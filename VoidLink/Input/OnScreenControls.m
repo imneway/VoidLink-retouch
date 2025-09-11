@@ -1193,14 +1193,14 @@ static float L3_Y;
     button.cornerRadius = button.bounds.size.width/2;
     
     // 使用 shadowPath 定义阴影形状和扩展范围
-    CGFloat spread = 15;  // 扩散的大小
+    CGFloat spread = -4;  // 扩散的大小
     if([button.name isEqualToString:@"leftStick"] || [button.name isEqualToString:@"rightStick"]) spread = 12;
     CGRect largerRect = CGRectInset(button.bounds, -spread, -spread);
     UIBezierPath *shadowPath = [UIBezierPath bezierPathWithRoundedRect:largerRect cornerRadius:button.cornerRadius];
     button.shadowPath = shadowPath.CGPath;
     
     //button.shadowColor = [[UIColor colorWithRed:0/255.0 green:110/255.0 blue:255/255.0 alpha:1.0] colorWithAlphaComponent:0.7].CGColor;
-    button.shadowColor = [[UIColor colorWithRed:0.5 green:0.5 blue:1.0 alpha:1] colorWithAlphaComponent:1].CGColor;
+    button.shadowColor = [[UIColor colorWithRed:1.0 green:1.0 blue:1.0 alpha:1] colorWithAlphaComponent:0.4].CGColor;
     //button.shadowColor = [UIColor colorWithRed:0/255.0 green:51/255.0 blue:102/255.0 alpha:0.6].CGColor;
     button.shadowOffset = CGSizeZero;
     button.shadowOpacity = 1.0;

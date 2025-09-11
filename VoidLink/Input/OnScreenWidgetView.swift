@@ -151,7 +151,8 @@ import UIKit
     // border & visual effect
     private var minimumBorderAlpha: CGFloat = 0.19
     private var defaultBorderColor: CGColor = UIColor(white: 0.2, alpha: 0.3).cgColor
-    private let voidlinkPurple: CGColor = UIColor(red: 0.5, green: 0.5, blue: 1.0, alpha: 0.86).cgColor
+//    private let voidlinkPurple: CGColor = UIColor(red: 0.5, green: 0.5, blue: 1.0, alpha: 0.86).cgColor
+    private let voidlinkPurple: CGColor = UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.4).cgColor //Overwrite the purple border color
     
     //slide buttons
     private var capturedTouches: NSMutableSet
@@ -1120,11 +1121,11 @@ import UIKit
     }
     
     private func setupButtonDownVisualEffectLayer() {
-        self.buttonDownVisualEffectWidth = 8
-        if self.shape == "round" {
-            if deNormalizedWidthFactor < 1.3 {self.buttonDownVisualEffectWidth = 15.3} // wider visual effect for osc buttons
-            else {self.buttonDownVisualEffectWidth = 9}
-        }
+        self.buttonDownVisualEffectWidth = 2.5 // original 8
+//        if self.shape == "round" {
+//            if deNormalizedWidthFactor < 1.3 {self.buttonDownVisualEffectWidth = 15.3} // wider visual effect for osc buttons
+//            else {self.buttonDownVisualEffectWidth = 9}
+//        }
         
         // Set the frame to be larger than the view to expand outward
         buttonDownVisualEffectLayer.borderWidth = 0 // set this 0 to hide the visual effect first
