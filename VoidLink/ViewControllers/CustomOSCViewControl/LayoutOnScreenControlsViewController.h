@@ -100,6 +100,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (weak, nonatomic) IBOutlet UIStackView *widgetPanelStack;
 
+// 白色半透明 overlay，显示在串流画面之上，但在所有控件之下
+@property (strong, nonatomic) UIView *streamOverlay;
+
 
 @end
 

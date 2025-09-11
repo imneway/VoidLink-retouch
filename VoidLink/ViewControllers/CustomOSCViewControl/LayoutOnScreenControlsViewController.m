@@ -164,6 +164,9 @@
                                             action:@selector(moveToolbar:)];
     [self.chevronView addGestureRecognizer:singleFingerTap];
     
+    // 创建白色半透明 overlay
+    [self setupStreamOverlay];
+    
     self.layoutOSC = [[LayoutOnScreenControls alloc] initWithView:self.view controllerSup:nil streamConfig:nil oscLevel:OSCSegmentSelected];
     self.layoutOSC._level = OnScreenControlsLevelCustom;
     self.layoutOSC.layoutToolVC = self;
@@ -287,6 +290,9 @@
     [OSCProfilesManager setOnScreenWidgetViewsSet:self.onScreenWidgetViews];   // pass the keyboard button dict to profiles manager
     [self reloadOnScreenWidgetViews];
     [self reloadLegacyOnScreenControls];
+    
+    // 确保 stream overlay 始终在最底层
+    [self ensureStreamOverlayAtBottom];
 }
 
 - (void)handleEnterBackground{
@@ -1173,6 +1179,9 @@
     
     [self.view bringSubviewToFront:self.toolbarRootView];
     [self.view insertSubview:self.widgetPanelStack belowSubview:self.toolbarRootView];
+    
+    // 确保 stream overlay 始终在最底层
+    [self ensureStreamOverlayAtBottom];
     self.widgetPanelStack.translatesAutoresizingMaskIntoConstraints = YES;
     
     
@@ -1352,6 +1361,10 @@
     OnScreenWidgetView* widget = (OnScreenWidgetView* )sender;
     [self.layoutOSC updateGuidelinesForOnScreenWidget:widget];
     [self.view bringSubviewToFront:widget];
+    
+    // 确保 stream overlay 始终在最底层
+    [self ensureStreamOverlayAtBottom];
+    
     trashCanButton.tintColor = trashCanButton.titleLabel.textColor = [self layerIsOverlappingWithTrashcanButton:widget.layer] ? [UIColor redColor] : trashCanStoryBoardColor;
 
     self.undoButton.alpha = 1.0;
@@ -1503,6 +1516,32 @@
         [overlay removeFromSuperview];
     }
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"OSCProfilesOverlayRemove" object:nil];
+    
+    // 确保 stream overlay 始终在最底层
+    [self ensureStreamOverlayAtBottom];
+}
+
+#pragma mark - Stream Overlay
+
+- (void)setupStreamOverlay {
+    // 创建白色半透明 overlay
+    self.streamOverlay = [[UIView alloc] initWithFrame:self.view.bounds];
+    self.streamOverlay.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.3];
+    self.streamOverlay.userInteractionEnabled = NO; // 不拦截触摸事件
+    self.streamOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.streamOverlay.tag = 999999; // 使用特殊标签标识我们的 overlay
+    
+    // 将 overlay 添加到视图的最底层（在串流画面之上，但在所有控件之下）
+    [self.view insertSubview:self.streamOverlay atIndex:0];
+    
+    NSLog(@"✅ Stream overlay 已创建并添加到视图层次结构");
+}
+
+- (void)ensureStreamOverlayAtBottom {
+    // 确保 stream overlay 始终在最底层
+    if (self.streamOverlay && self.streamOverlay.superview) {
+        [self.view sendSubviewToBack:self.streamOverlay];
+    }
 }
 
 @end
