@@ -100,6 +100,14 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (weak, nonatomic) IBOutlet UIStackView *widgetPanelStack;
 
+// 坐标显示和方向移动控件
+@property (weak, nonatomic) IBOutlet UILabel *coordinateLabel;
+@property (weak, nonatomic) IBOutlet UIButton *moveUpButton;
+@property (weak, nonatomic) IBOutlet UIButton *moveDownButton;
+@property (weak, nonatomic) IBOutlet UIButton *moveLeftButton;
+@property (weak, nonatomic) IBOutlet UIButton *moveRightButton;
+@property (weak, nonatomic) IBOutlet UIStackView *coordinateControlStack;
+
 // 白色半透明 overlay，显示在串流画面之上，但在所有控件之下
 @property (strong, nonatomic) UIView *streamOverlay;
 

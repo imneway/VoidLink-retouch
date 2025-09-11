@@ -1345,6 +1345,18 @@
         }
       }
     },
+    "coordinate-label-ipad.text" : {
+      "comment" : "Class = \"UILabel\"; text = \"坐标：[0], [0]\"; ObjectID = \"coordinate-label-ipad\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "坐标：[0], [0]"
+          }
+        }
+      }
+    },
     "CpY-Sb-BDc.title" : {
       "comment" : "Class = \"UIBarButtonItem\"; title = \"Import\"; ObjectID = \"CpY-Sb-BDc\";",
       "extractionState" : "extracted_with_value",

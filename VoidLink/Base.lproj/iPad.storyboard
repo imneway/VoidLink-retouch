@@ -1399,7 +1399,7 @@
                                     <constraint firstItem="YLK-IE-ajS" firstAttribute="centerX" secondItem="fZU-G0-fgM" secondAttribute="centerX" id="xm7-a0-8G7"/>
                                 </constraints>
                             </view>
-                            <stackView opaque="NO" contentMode="scaleToFill" ambiguous="YES" axis="vertical" spacing="5" translatesAutoresizingMaskIntoConstraints="NO" id="z5Q-bW-WQ8" userLabel="widgetPanelStack" customClass="WidgetPanelStackView">
+                            <stackView opaque="NO" contentMode="scaleToFill" ambiguous="YES" axis="vertical" spacing="8" translatesAutoresizingMaskIntoConstraints="NO" id="z5Q-bW-WQ8" userLabel="widgetPanelStack" customClass="WidgetPanelStackView">
                                 <rect key="frame" x="325" y="156" width="650" height="379.5"/>
                                 <subviews>
                                     <label opaque="NO" userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Profile:" textAlignment="center" lineBreakMode="tailTruncation" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="iel-xl-xd9">
@@ -1631,6 +1631,95 @@
                                             </label>
                                         </subviews>
                                     </stackView>
+                                    <stackView opaque="NO" contentMode="scaleToFill" spacing="8" translatesAutoresizingMaskIntoConstraints="NO" id="coordinate-control-stack-ipad" userLabel="coordinateControlStack">
+                                        <rect key="frame" x="0.0" y="386.5" width="650" height="32"/>
+                                        <subviews>
+                                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="坐标：[0], [0]" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="coordinate-label-ipad" userLabel="coordinateLabel">
+                                                <rect key="frame" x="0.0" y="0.0" width="200" height="31"/>
+                                                <constraints>
+                                                    <constraint firstAttribute="width" constant="200" id="coordinate-label-width-ipad"/>
+                                                </constraints>
+                                                <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                                <color key="textColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                                <nil key="highlightedColor"/>
+                                            </label>
+                                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="move-up-button-ipad" userLabel="moveUpButton">
+                                                <rect key="frame" x="200" y="0.0" width="24" height="24"/>
+                                                <constraints>
+                                                    <constraint firstAttribute="width" constant="32" id="move-up-width-ipad"/>
+                                                    <constraint firstAttribute="height" constant="32" id="move-up-height-ipad"/>
+                                                </constraints>
+                                                <state key="normal" image="arrowtriangle.up.fill" catalog="system"/>
+                                                <color key="tintColor" red="0.18823529410000001" green="0.69019607839999997" blue="0.78039215689999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <color key="backgroundColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <userDefinedRuntimeAttributes>
+                                                    <userDefinedRuntimeAttribute type="number" keyPath="layer.cornerRadius">
+                                                        <integer key="value" value="6"/>
+                                                    </userDefinedRuntimeAttribute>
+                                                </userDefinedRuntimeAttributes>
+                                                <connections>
+                                                    <action selector="moveUpButtonTapped:" destination="xSZ-i2-Jts" eventType="touchUpInside" id="move-up-action-ipad"/>
+                                                </connections>
+                                            </button>
+                                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="move-down-button-ipad" userLabel="moveDownButton">
+                                                <rect key="frame" x="240" y="0.0" width="24" height="24"/>
+                                                <constraints>
+                                                    <constraint firstAttribute="width" constant="32" id="move-down-width-ipad"/>
+                                                    <constraint firstAttribute="height" constant="32" id="move-down-height-ipad"/>
+                                                </constraints>
+                                                <state key="normal" image="arrowtriangle.down.fill" catalog="system"/>
+                                                <color key="tintColor" red="0.18823529410000001" green="0.69019607839999997" blue="0.78039215689999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <color key="backgroundColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <userDefinedRuntimeAttributes>
+                                                    <userDefinedRuntimeAttribute type="number" keyPath="layer.cornerRadius">
+                                                        <integer key="value" value="6"/>
+                                                    </userDefinedRuntimeAttribute>
+                                                </userDefinedRuntimeAttributes>
+                                                <connections>
+                                                    <action selector="moveDownButtonTapped:" destination="xSZ-i2-Jts" eventType="touchUpInside" id="move-down-action-ipad"/>
+                                                </connections>
+                                            </button>
+                                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="move-left-button-ipad" userLabel="moveLeftButton">
+                                                <rect key="frame" x="280" y="0.0" width="24" height="24"/>
+                                                <constraints>
+                                                    <constraint firstAttribute="width" constant="32" id="move-left-width-ipad"/>
+                                                    <constraint firstAttribute="height" constant="32" id="move-left-height-ipad"/>
+                                                </constraints>
+                                                <state key="normal" image="arrowtriangle.left.fill" catalog="system"/>
+                                                <color key="tintColor" red="0.18823529410000001" green="0.69019607839999997" blue="0.78039215689999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <color key="backgroundColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <userDefinedRuntimeAttributes>
+                                                    <userDefinedRuntimeAttribute type="number" keyPath="layer.cornerRadius">
+                                                        <integer key="value" value="6"/>
+                                                    </userDefinedRuntimeAttribute>
+                                                </userDefinedRuntimeAttributes>
+                                                <connections>
+                                                    <action selector="moveLeftButtonTapped:" destination="xSZ-i2-Jts" eventType="touchUpInside" id="move-left-action-ipad"/>
+                                                </connections>
+                                            </button>
+                                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="move-right-button-ipad" userLabel="moveRightButton">
+                                                <rect key="frame" x="320" y="0.0" width="24" height="24"/>
+                                                <constraints>
+                                                    <constraint firstAttribute="width" constant="32" id="move-right-width-ipad"/>
+                                                    <constraint firstAttribute="height" constant="32" id="move-right-height-ipad"/>
+                                                </constraints>
+                                                <state key="normal" image="arrowtriangle.right.fill" catalog="system"/>
+                                                <color key="tintColor" red="0.18823529410000001" green="0.69019607839999997" blue="0.78039215689999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <color key="backgroundColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <userDefinedRuntimeAttributes>
+                                                    <userDefinedRuntimeAttribute type="number" keyPath="layer.cornerRadius">
+                                                        <integer key="value" value="6"/>
+                                                    </userDefinedRuntimeAttribute>
+                                                </userDefinedRuntimeAttributes>
+                                                <connections>
+                                                    <action selector="moveRightButtonTapped:" destination="xSZ-i2-Jts" eventType="touchUpInside" id="move-right-action-ipad"/>
+                                                </connections>
+                                            </button>
+                                        </subviews>
+                                        <constraints>
+                                            <constraint firstAttribute="height" constant="32" id="coordinate-stack-height-ipad"/>
+                                        </constraints>
+                                    </stackView>
                                 </subviews>
                                 <color key="backgroundColor" red="0.0" green="0.0" blue="0.0" alpha="0.5" colorSpace="custom" customColorSpace="displayP3"/>
                                 <constraints>
@@ -1691,6 +1780,12 @@
                         <outlet property="widgetSizeLabel" destination="ZuV-4A-0Zb" id="Nr8-Wg-POM"/>
                         <outlet property="widgetSizeSlider" destination="Xzq-VC-hP3" id="lW5-0R-s5U"/>
                         <outlet property="widgetSizeStack" destination="GOp-1e-oUF" id="v7q-w3-Tls"/>
+                        <outlet property="coordinateLabel" destination="coordinate-label-ipad" id="coordinate-label-outlet-ipad"/>
+                        <outlet property="moveUpButton" destination="move-up-button-ipad" id="move-up-outlet-ipad"/>
+                        <outlet property="moveDownButton" destination="move-down-button-ipad" id="move-down-outlet-ipad"/>
+                        <outlet property="moveLeftButton" destination="move-left-button-ipad" id="move-left-outlet-ipad"/>
+                        <outlet property="moveRightButton" destination="move-right-button-ipad" id="move-right-outlet-ipad"/>
+                        <outlet property="coordinateControlStack" destination="coordinate-control-stack-ipad" id="coordinate-stack-outlet-ipad"/>
                     </connections>
                 </viewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="dev-Ck-vTF" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>

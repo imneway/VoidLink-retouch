@@ -794,6 +794,9 @@
     self.widgetHeightStack.hidden = NO;
     self.borderWidthAlphaStack.hidden = NO;
     if([self isIPhone]) self.vibrationStyleStack.hidden = NO;
+    
+    // 显示坐标控件
+    self.coordinateControlStack.hidden = NO;
 }
 
 - (void)autoFitLabel:(UILabel* )label{
@@ -906,6 +909,9 @@
         [self autoFitStack:self.widgetPanelStack];
         self.vibrationStyleSelector.selectedSegmentIndex = self->selectedWidgetView.vibrationStyle;
     }
+    
+    // 更新坐标显示
+    [self updateCoordinateDisplay];
 }
 
 
@@ -949,6 +955,9 @@
         self.vibrationStyleSelector.selectedSegmentIndex = [style unsignedCharValue];
     }
     [self autoFitStack:_widgetPanelStack];
+    
+    // 更新坐标显示
+    [self updateCoordinateDisplay];
 }
 
 - (void)widgetSizeSliderMoved:(UISlider* )sender{
@@ -1098,6 +1107,9 @@
 - (void)setupWidgetPanel{
     self.widgetPanelStack.hidden = _quickSwitchEnabled;
     self.loadConfigTipLabel.hidden = NO;
+    
+    // 初始隐藏坐标控件
+    self.coordinateControlStack.hidden = YES;
 
     self.widgetPanelStack.layoutMargins = UIEdgeInsetsMake(10, 10, 10, 10);
     self.widgetPanelStack.layoutMarginsRelativeArrangement = YES;
@@ -1179,6 +1191,9 @@
     
     [self.view bringSubviewToFront:self.toolbarRootView];
     [self.view insertSubview:self.widgetPanelStack belowSubview:self.toolbarRootView];
+    
+    // 设置坐标控件
+    [self setupCoordinateControls];
     
     // 确保 stream overlay 始终在最底层
     [self ensureStreamOverlayAtBottom];
@@ -1400,11 +1415,22 @@
         touchLocation = [[touch view] convertPoint:touchLocation toView:nil];
         CALayer *layer = [self.view.layer hitTest:touchLocation];
         
-        if (layer == self.toolbarRootView.layer ||
-            layer == self.chevronView.layer ||
-            layer == self.chevronImageView.layer ||
-            layer == self.toolbarStackView.layer ||
-            layer == self.view.layer) {  // don't let user move toolbar or toolbar UI buttons, toolbar's chevron 'pull tab', or the layer associated with this VC's view
+        // 检查是否点击了toolbar相关的控件
+        BOOL isToolbarTouched = (layer == self.toolbarRootView.layer ||
+                                layer == self.chevronView.layer ||
+                                layer == self.chevronImageView.layer ||
+                                layer == self.toolbarStackView.layer ||
+                                layer == self.view.layer);
+        
+        // 如果点击了toolbar，直接返回
+        if (isToolbarTouched) {
+            return;
+        }
+        
+        // 检查是否点击了widgetPanelStack
+        BOOL isWidgetPanelTouched = [self widgetPanelTouched:touch];
+        if (isWidgetPanelTouched) {
+            // 如果点击了widgetPanelStack，不传递给layoutOSC
             return;
         }
     }
@@ -1542,6 +1568,96 @@
     if (self.streamOverlay && self.streamOverlay.superview) {
         [self.view sendSubviewToBack:self.streamOverlay];
     }
+}
+
+#pragma mark - Coordinate Controls
+
+- (void)setupCoordinateControls {
+    // 设置坐标控件的初始状态
+    self.coordinateControlStack.hidden = YES;
+    
+    // 设置坐标标签的样式
+    self.coordinateLabel.font = [UIFont systemFontOfSize:17];
+    self.coordinateLabel.textColor = [UIColor whiteColor];
+    self.coordinateLabel.text = @"坐标：[0], [0]";
+    
+    // 设置方向按钮的样式
+    [self.moveUpButton setTintColor:[UIColor systemTealColor]];
+    [self.moveDownButton setTintColor:[UIColor systemTealColor]];
+    [self.moveLeftButton setTintColor:[UIColor systemTealColor]];
+    [self.moveRightButton setTintColor:[UIColor systemTealColor]];
+    
+    // 设置按钮背景和圆角
+    [self.moveUpButton setBackgroundColor:[UIColor whiteColor]];
+    [self.moveDownButton setBackgroundColor:[UIColor whiteColor]];
+    [self.moveLeftButton setBackgroundColor:[UIColor whiteColor]];
+    [self.moveRightButton setBackgroundColor:[UIColor whiteColor]];
+    
+    // 设置圆角
+    self.moveUpButton.layer.cornerRadius = 6.0;
+    self.moveDownButton.layer.cornerRadius = 6.0;
+    self.moveLeftButton.layer.cornerRadius = 6.0;
+    self.moveRightButton.layer.cornerRadius = 6.0;
+    
+    // 设置按钮的图片大小（12pt）
+    UIImage *upImage = [UIImage systemImageNamed:@"arrowtriangle.up.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12]];
+    UIImage *downImage = [UIImage systemImageNamed:@"arrowtriangle.down.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12]];
+    UIImage *leftImage = [UIImage systemImageNamed:@"arrowtriangle.left.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12]];
+    UIImage *rightImage = [UIImage systemImageNamed:@"arrowtriangle.right.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12]];
+    
+    [self.moveUpButton setImage:upImage forState:UIControlStateNormal];
+    [self.moveDownButton setImage:downImage forState:UIControlStateNormal];
+    [self.moveLeftButton setImage:leftImage forState:UIControlStateNormal];
+    [self.moveRightButton setImage:rightImage forState:UIControlStateNormal];
+}
+
+- (void)updateCoordinateDisplay {
+    if (self->selectedWidgetView != nil && self->widgetViewSelected) {
+        // 显示WidgetView的坐标
+        CGPoint center = self->selectedWidgetView.center;
+        self.coordinateLabel.text = [NSString stringWithFormat:@"坐标：[%.0f], [%.0f]", center.x, center.y];
+        self.coordinateControlStack.hidden = NO;
+    } else if (self->selectedControllerLayer != nil && self->controllerLayerSelected) {
+        // 显示Legacy OSC按钮的坐标
+        CGPoint position = self->selectedControllerLayer.position;
+        self.coordinateLabel.text = [NSString stringWithFormat:@"坐标：[%.0f], [%.0f]", position.x, position.y];
+        self.coordinateControlStack.hidden = NO;
+    } else {
+        // 没有选中任何控件时隐藏坐标控件
+        self.coordinateControlStack.hidden = YES;
+    }
+}
+
+- (void)moveSelectedControlByOffset:(CGPoint)offset {
+    if (self->selectedWidgetView != nil && self->widgetViewSelected) {
+        // 移动WidgetView
+        CGPoint newCenter = CGPointMake(self->selectedWidgetView.center.x + offset.x, 
+                                       self->selectedWidgetView.center.y + offset.y);
+        self->selectedWidgetView.center = newCenter;
+        [self updateCoordinateDisplay];
+    } else if (self->selectedControllerLayer != nil && self->controllerLayerSelected) {
+        // 移动Legacy OSC按钮
+        CGPoint newPosition = CGPointMake(self->selectedControllerLayer.position.x + offset.x, 
+                                         self->selectedControllerLayer.position.y + offset.y);
+        self->selectedControllerLayer.position = newPosition;
+        [self updateCoordinateDisplay];
+    }
+}
+
+- (IBAction)moveUpButtonTapped:(id)sender {
+    [self moveSelectedControlByOffset:CGPointMake(0, -1)];
+}
+
+- (IBAction)moveDownButtonTapped:(id)sender {
+    [self moveSelectedControlByOffset:CGPointMake(0, 1)];
+}
+
+- (IBAction)moveLeftButtonTapped:(id)sender {
+    [self moveSelectedControlByOffset:CGPointMake(-1, 0)];
+}
+
+- (IBAction)moveRightButtonTapped:(id)sender {
+    [self moveSelectedControlByOffset:CGPointMake(1, 0)];
 }
 
 @end

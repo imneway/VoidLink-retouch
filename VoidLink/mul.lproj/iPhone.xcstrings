@@ -1231,6 +1231,18 @@
         }
       }
     },
+    "coordinate-label.text" : {
+      "comment" : "Class = \"UILabel\"; text = \"坐标：[0], [0]\"; ObjectID = \"coordinate-label\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "坐标：[0], [0]"
+          }
+        }
+      }
+    },
     "cti-T5-cSE.text" : {
       "comment" : "Class = \"UILabel\"; text = \"Gesture Slide Distance\"; ObjectID = \"cti-T5-cSE\";",
       "extractionState" : "extracted_with_value",

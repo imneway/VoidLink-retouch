@@ -258,11 +258,38 @@
         CALayer *layer = [_view.layer hitTest:touchLocation];
         
         /* Don't let user drag and move anything other than on screen controller buttons, which are CALayer types. The reason is that 'LayoutOnScreenControls' should only be responsible for managing and letting users move on screen controller buttons. Since this class's view is currently set to be set equal to the 'LayoutOnScreenControlsViewController' view it belongs to, we need to make sure touches on the VC's objects don't propagate down to 'LayoutOnScreenControls'. Weird stuff can happen to the UI buttons that belong to that VC (trash can button, undo button, save button, etc), such as them being dragged around the screen with the user's touches */
-        for (UIView *subview in self._view.subviews) {
-            
-            if (CGRectContainsPoint(subview.frame, touchLocation)) {
-                if (![subview isKindOfClass:[CALayer class]]) {
-                    return;
+        
+        // 首先检查是否点击了传统OSC按钮
+        BOOL isOSCButtonTouched = NO;
+        if (layer == self._upButton ||
+            layer == self._downButton ||
+            layer == self._leftButton ||
+            layer == self._rightButton ||
+            layer == self._rightStick ||
+            layer == self._leftStick ||
+            layer == self._aButton ||
+            layer == self._bButton ||
+            layer == self._xButton ||
+            layer == self._yButton ||
+            layer == self._l1Button ||
+            layer == self._l2Button ||
+            layer == self._r1Button ||
+            layer == self._r2Button ||
+            layer == self._selectButton ||
+            layer == self._startButton ||
+            layer == self._dPadBackground ||
+            layer == self._rightStickBackground ||
+            layer == self._leftStickBackground) {
+            isOSCButtonTouched = YES;
+        }
+        
+        // 如果没有点击OSC按钮，检查是否点击了其他UI控件
+        if (!isOSCButtonTouched) {
+            for (UIView *subview in self._view.subviews) {
+                if (CGRectContainsPoint(subview.frame, touchLocation)) {
+                    if (![subview isKindOfClass:[CALayer class]]) {
+                        return;
+                    }
                 }
             }
         }
