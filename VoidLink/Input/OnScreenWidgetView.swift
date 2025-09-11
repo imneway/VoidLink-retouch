@@ -1127,7 +1127,9 @@ import UIKit
     
     //==== wholeButtonPress visual effect=============================================
     private func handleButtonDown() {
-        if !OnScreenWidgetView.editMode {self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)}
+        if !OnScreenWidgetView.editMode && !CommandManager.specialOverlayButtonCmds.contains(self.cmdString) {
+            self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)
+        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         // self.layer.borderWidth = 0
@@ -1143,7 +1145,9 @@ import UIKit
     }
     
     private func handlebuttonUp() {
-        if !OnScreenWidgetView.editMode {self.sendComboButtonsUpEvent(comboStrings: self.comboButtonStrings)}
+        if !OnScreenWidgetView.editMode && !CommandManager.specialOverlayButtonCmds.contains(self.cmdString) {
+            self.sendComboButtonsUpEvent(comboStrings: self.comboButtonStrings)
+        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         // self.layer.borderWidth = 1
@@ -1741,7 +1745,9 @@ import UIKit
             if CACurrentMediaTime() - self.touchTapTimeStamp < 0.3 {
                 switch self.cmdString {
                 case "SETTINGS":
-                    NotificationCenter.default.post(name: Notification.Name("SettingsOverlayButtonPressedNotification"), object:nil) // inform layout tool controller to fetch button size factors. self will be passed as the object of the notification
+                    NotificationCenter.default.post(name: Notification.Name("SettingsOverlayButtonPressedNotification"), object:nil)
+                case "CMD":
+                    NotificationCenter.default.post(name: Notification.Name("CommandManagerOverlayButtonPressedNotification"), object:nil)
                 default:
                     break
                 }

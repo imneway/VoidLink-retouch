@@ -85,6 +85,7 @@
 #if !TARGET_OS_TV
     CustomEdgeSlideGestureRecognizer *_slideToSettingsRecognizer;
     CustomEdgeSlideGestureRecognizer *_slideToCmdToolRecognizer;
+    CustomEdgeSlideGestureRecognizer *_rightEdgeToggleOscRecognizer;
     CustomTapGestureRecognizer *_oscLayoutTapRecoginizer;
     LayoutOnScreenControlsViewController *_layoutOnScreenControlsVC;
     ToolboxViewController* toolBoxViewController;
@@ -283,15 +284,18 @@
     _slideToSettingsRecognizer.delaysTouchesBegan = NO;
     _slideToSettingsRecognizer.delaysTouchesEnded = NO;
     [self.view addGestureRecognizer:_slideToSettingsRecognizer];
-    
-    
-    _slideToCmdToolRecognizer = [[CustomEdgeSlideGestureRecognizer alloc] initWithTarget:self action:@selector(presentToolboxViewController)];
-    if(_settings.slideToSettingsScreenEdge.intValue == UIRectEdgeLeft) _slideToCmdToolRecognizer.edges = UIRectEdgeRight;
-    else _slideToCmdToolRecognizer.edges = UIRectEdgeLeft;  // _commandManager triggered by sliding from another side.
-    _slideToCmdToolRecognizer.normalizedThresholdDistance = _settings.slideToSettingsDistance.floatValue;
-    _slideToCmdToolRecognizer.delaysTouchesBegan = NO;
-    _slideToCmdToolRecognizer.delaysTouchesEnded = NO;
-    [self.view addGestureRecognizer:_slideToCmdToolRecognizer];
+    // Right-side edge is freed; Command Manager is opened by on-screen widget "CMD"
+
+    // Add a small-threshold right-edge gesture to toggle OSC visibility
+    _rightEdgeToggleOscRecognizer = [[CustomEdgeSlideGestureRecognizer alloc] initWithTarget:self action:@selector(toggleOscVisibility)];
+    _rightEdgeToggleOscRecognizer.edges = UIRectEdgeRight;
+    CGFloat smallThreshold = 15.0f / self.view.frame.size.width; // ~15pt swipe distance
+    _rightEdgeToggleOscRecognizer.normalizedThresholdDistance = smallThreshold;
+    _rightEdgeToggleOscRecognizer.delaysTouchesBegan = NO;
+    _rightEdgeToggleOscRecognizer.delaysTouchesEnded = NO;
+    _rightEdgeToggleOscRecognizer.cancelsTouchesInView = NO;
+    // Right edge small gesture is standalone now; no dependency on Command Manager gesture
+    [self.view addGestureRecognizer:_rightEdgeToggleOscRecognizer];
     
     if([self isOscLayoutToolEnabled]){
         _oscLayoutTapRecoginizer = [[CustomTapGestureRecognizer alloc] initWithTarget:self action:@selector(handleWidgetLayoutGesture)];
@@ -471,6 +475,11 @@
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(expandSettingsView) // //force expand settings view to update resolution table, and all setting includes current fullscreen resolution will be updated.
                                                  name:@"SettingsOverlayButtonPressedNotification"
+                                               object:nil];
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(presentToolboxViewController) // open command manager via on-screen widget
+                                                 name:@"CommandManagerOverlayButtonPressedNotification"
                                                object:nil];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
@@ -1106,6 +1115,25 @@
         return;
     } */
     [self expandSettingsView];  // expand settings view in other cases;
+}
+
+- (void)toggleOscVisibility{
+    // Avoid interference when widget layout tool is open
+    if (self->_streamView.widgetToolOpened) {
+        return;
+    }
+    OnScreenControlsLevel current = [self->_streamView getCurrentOscState];
+    if (current == OnScreenControlsLevelOff) {
+        // Restore OSC & widgets per current settings
+        [self->_streamView reloadOnScreenControlsRealtimeWith:(ControllerSupport*)self->_controllerSupport
+                                                    andConfig:(StreamConfiguration*)self->_streamConfig];
+        [self->_streamView reloadOnScreenWidgetViews];
+    }
+    else {
+        // Hide OSC & widgets
+        [self->_streamView disableOnScreenControls];
+        [self->_streamView clearOnScreenWidgets];
+    }
 }
 
 - (void)disconnectRemoteSession {

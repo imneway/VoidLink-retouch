@@ -119,7 +119,7 @@ import UIKit
     @objc public static let directionPads: [String] = ["DPAD", "WASDPAD", "ARROWPAD"]
     @objc public static let stickTouchPads: [String] = ["LSVPAD", "RSVPAD", "LSPAD", "LSPADALT", "RSPAD", "RSPADALT"]
     @objc public static let nonVectorStickPads: [String] = ["LSPAD", "LSPADALT", "RSPAD", "RSPADALT"]
-    @objc public static let specialOverlayButtonCmds: [String] = ["SETTINGS"]
+    @objc public static let specialOverlayButtonCmds: [String] = ["SETTINGS", "CMD"]
 
     // @objc public static let specialGameWidgets: [String] = ["YSRSV", "YSLT", "YSRT", "YSRB", "YSB", "YSRT2", "YSRB2", "YSB2", "YSEM", "YSML", "YSMR", "YSWASD"]
     
