@@ -26,6 +26,7 @@
 #import "LocalizationHelper.h"
 #import "VoidLink-Swift.h"
 #import "OSCProfilesManager.h"
+#import "OSCProfilesTableViewController.h"
 #import "ThemeManager.h"
 
 #include <sys/socket.h>
@@ -697,6 +698,11 @@
                                              selector:@selector(presentToolboxViewController) // open command manager via on-screen widget
                                                  name:@"CommandManagerOverlayButtonPressedNotification"
                                                object:nil];
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(presentLayoutProfilesList) // open layout profiles list via on-screen widget
+                                                 name:@"ProfileOverlayButtonPressedNotification"
+                                               object:nil];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(keyboardWillShow:)
@@ -986,6 +992,33 @@
     [self presentViewController:_layoutOnScreenControlsVC animated:NO completion:^{
         [self->_layoutOnScreenControlsVC presentProfilesTableView];
     }];
+}
+
+- (void)presentLayoutProfilesList{
+    // 直接显示布局列表，不显示背后的布局编辑界面
+    [self configOscLayoutTool];
+    
+    UIStoryboard *storyboard;
+    BOOL isIPhone = ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPhone);
+    if (isIPhone) {
+        storyboard = [UIStoryboard storyboardWithName:@"iPhone" bundle:nil];
+    }
+    else {
+        storyboard = [UIStoryboard storyboardWithName:@"iPad" bundle:nil];
+    }
+    
+    OSCProfilesTableViewController *oscProfilesTableViewController = [storyboard instantiateViewControllerWithIdentifier:@"OSCProfilesTableViewController"];
+    oscProfilesTableViewController.layoutViewBounds = self.view.bounds;
+    oscProfilesTableViewController.currentOSCButtonLayers = _layoutOnScreenControlsVC.layoutOSC.OSCButtonLayers;
+    
+    oscProfilesTableViewController.needToUpdateOscLayoutTVC = ^() {
+        // 当用户选择了新的布局配置时，重新加载布局
+        [self->_layoutOnScreenControlsVC profileRefresh];
+    };
+    
+    oscProfilesTableViewController.modalPresentationStyle = UIModalPresentationOverCurrentContext;
+    
+    [self presentViewController:oscProfilesTableViewController animated:YES completion:nil];
 }
 
 - (void)bringUpSoftKeyboard{

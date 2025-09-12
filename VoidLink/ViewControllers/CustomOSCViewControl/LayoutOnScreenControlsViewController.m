@@ -274,6 +274,12 @@
                                                  name:@"ScreenChanged"
                                                object:nil];
     
+    // 监听Profile覆盖按钮按下通知
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(handleProfileOverlayButtonPressed)
+                                                 name:@"ProfileOverlayButtonPressedNotification"
+                                               object:nil];
+    
     OnScreenWidgetView.editMode = true;
     [self handleMissingToolBarIcon:toolbarRootView];
     [self profileRefresh];
@@ -1366,6 +1372,11 @@
 
 /* Presents the view controller that lists all OSC profiles the user can choose from */
 - (IBAction) loadTapped:(id)sender {
+    [self presentProfilesTableView];
+}
+
+/* 处理Profile覆盖按钮按下事件 - 打开布局列表窗口 */
+- (void)handleProfileOverlayButtonPressed {
     [self presentProfilesTableView];
 }
 

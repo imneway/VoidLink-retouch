@@ -1748,6 +1748,8 @@ import UIKit
                     NotificationCenter.default.post(name: Notification.Name("SettingsOverlayButtonPressedNotification"), object:nil)
                 case "CMD":
                     NotificationCenter.default.post(name: Notification.Name("CommandManagerOverlayButtonPressedNotification"), object:nil)
+                case "PROFILE":
+                    NotificationCenter.default.post(name: Notification.Name("ProfileOverlayButtonPressedNotification"), object:nil)
                 default:
                     break
                 }
