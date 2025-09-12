@@ -1640,6 +1640,7 @@
 }
 
 - (BOOL)prefersHomeIndicatorAutoHidden {
+        /* Turnoff the fullscreen mode
     if ( [_controllerSupport getConnectedGamepadCount] > 0 && [_streamView getCurrentOscState] == OnScreenControlsLevelOff &&
         _userIsInteracting == NO) {
         // Autohide the home bar when a gamepad is connected
@@ -1652,7 +1653,8 @@
         return YES;
     }
     
-    return NO;
+    return NO;*/
+    return YES;
 }
 
 - (BOOL)shouldAutorotate {
