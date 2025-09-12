@@ -53,6 +53,7 @@
     TemporarySettings *_settings;
     NSTimer *_inactivityTimer;
     NSTimer *_statsUpdateTimer;
+    NSTimer *_timeBatteryUpdateTimer;
     PaddedLabel *_overlayView;
     UITapGestureRecognizer *_menuTapGestureRecognizer;
     UITapGestureRecognizer *_menuDoubleTapGestureRecognizer;
@@ -61,6 +62,8 @@
     UILabel *_stageLabel;
     UILabel *_tipLabel;
     UIActivityIndicatorView *_spinner;
+    UILabel *_timeLabel;
+    UILabel *_batteryLabel;
     StreamView *_streamView;
     UIScrollView *_scrollView;
     BOOL _userIsInteracting;
@@ -464,6 +467,17 @@
         [_overlayView removeFromSuperview];
     }
     
+    // Restart time and battery update timer
+    if (self->_timeBatteryUpdateTimer) {
+        [self->_timeBatteryUpdateTimer invalidate];
+        self->_timeBatteryUpdateTimer = nil;
+    }
+    self->_timeBatteryUpdateTimer = [NSTimer scheduledTimerWithTimeInterval:60.0f
+                                                                   target:self
+                                                                 selector:@selector(updateTimeBatteryDisplay)
+                                                                 userInfo:nil
+                                                                  repeats:YES];
+    
     // Re-create the ImGui view to properly apply the 'enableGraphs' setting
     if (self.imguiView && self.imguiView.mtkView) {
         [self.imguiView stop];
@@ -557,6 +571,56 @@
     CGFloat x = self.view.bounds.size.width - 24 - size.width;
     CGFloat y = self.view.bounds.size.height - 12 - size.height;
     _snapRatioButton.frame = CGRectMake(x, y, size.width, size.height);
+}
+
+- (void)createTimeBatteryDisplay {
+    // Create time label
+    if (!_timeLabel) {
+        _timeLabel = [[UILabel alloc] init];
+        _timeLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+        _timeLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.64];
+        _timeLabel.userInteractionEnabled = NO;
+        [self.view addSubview:_timeLabel];
+    }
+    
+    // Create battery label
+    if (!_batteryLabel) {
+        _batteryLabel = [[UILabel alloc] init];
+        _batteryLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+        _batteryLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.64];
+        _batteryLabel.userInteractionEnabled = NO;
+        [self.view addSubview:_batteryLabel];
+    }
+    
+    [self updateTimeBatteryDisplay];
+}
+
+- (void)updateTimeBatteryDisplay {
+    // Update time
+    NSDateFormatter *timeFormatter = [[NSDateFormatter alloc] init];
+    timeFormatter.dateFormat = @"HH:mm";
+    _timeLabel.text = [timeFormatter stringFromDate:[NSDate date]];
+    [_timeLabel sizeToFit];
+    
+    // Update battery
+    UIDevice *device = [UIDevice currentDevice];
+    device.batteryMonitoringEnabled = YES;
+    float batteryLevel = device.batteryLevel;
+    int batteryPercent = (int)(batteryLevel * 100);
+    _batteryLabel.text = [NSString stringWithFormat:@"%d%%", batteryPercent];
+    [_batteryLabel sizeToFit];
+    
+    // Layout labels at bottom-left
+    CGFloat leftMargin = 24.0f;
+    CGFloat bottomMargin = 12.0f;
+    CGFloat spacing = 12.0f;
+    
+    CGFloat timeX = leftMargin;
+    CGFloat batteryX = timeX + _timeLabel.frame.size.width + spacing;
+    CGFloat y = self.view.bounds.size.height - bottomMargin - _timeLabel.frame.size.height;
+    
+    _timeLabel.frame = CGRectMake(timeX, y, _timeLabel.frame.size.width, _timeLabel.frame.size.height);
+    _batteryLabel.frame = CGRectMake(batteryX, y, _batteryLabel.frame.size.width, _batteryLabel.frame.size.height);
 }
 
 - (void)toggleSnapRatio {
@@ -870,6 +934,9 @@
     [self.view addSubview:_spinner];
     [self.view addSubview:_tipLabel];
     [self applySnapToTopIfNeeded];
+    
+    // Create time and battery display
+    [self createTimeBatteryDisplay];
 
     if ([_settings.renderingBackend intValue] == RENDER_METAL) {
         // Metal view for video
@@ -961,6 +1028,10 @@
         if (_inactivityTimer != nil) {
             [_inactivityTimer invalidate];
             _inactivityTimer = nil;
+        }
+        if (_timeBatteryUpdateTimer != nil) {
+            [_timeBatteryUpdateTimer invalidate];
+            _timeBatteryUpdateTimer = nil;
         }
         if (self.metalViewController) {
             [self.metalViewController.view removeFromSuperview];
@@ -1076,6 +1147,8 @@
 
     [_statsUpdateTimer invalidate];
     _statsUpdateTimer = nil;
+    [_timeBatteryUpdateTimer invalidate];
+    _timeBatteryUpdateTimer = nil;
     
     [self.navigationController popToRootViewControllerAnimated:NO];
     
@@ -1334,6 +1407,13 @@
                                                                      userInfo:nil
                                                                       repeats:YES];
         }
+        
+        // Start time and battery update timer (update every minute)
+        self->_timeBatteryUpdateTimer = [NSTimer scheduledTimerWithTimeInterval:60.0f
+                                                                         target:self
+                                                                       selector:@selector(updateTimeBatteryDisplay)
+                                                                       userInfo:nil
+                                                                        repeats:YES];
     });
 }
 
