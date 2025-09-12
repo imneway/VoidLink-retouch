@@ -79,6 +79,17 @@
 
     NSTimer *_foregroundHostUpdateTimer;
 
+    // Auto Enter Desktop (URL/Shortcut) helpers
+    NSTimer *_autoEnterTimer;
+    double _autoEnterElapsedSeconds;
+    NSInteger _autoEnterProbeTick;
+    UIView *_autoEnterToast;
+    UILabel *_autoEnterLabel;
+    UIButton *_autoEnterCancelButton;
+    TemporaryHost *_autoEnterTargetHost;
+    NSString *_autoEnterTargetHostName;
+    BOOL _autoEnterActive;
+
 #if TARGET_OS_TV
     UITapGestureRecognizer* _menuRecognizer;
 #endif
@@ -1225,6 +1236,179 @@ static NSMutableSet* hostList;
     }
 }
 
+// MARK: - Auto Enter Desktop
+
+- (void)showAutoEnterToast {
+    if (_autoEnterToast != nil) return;
+
+    _autoEnterToast = [[UIView alloc] init];
+    _autoEnterToast.translatesAutoresizingMaskIntoConstraints = NO;
+    _autoEnterToast.backgroundColor = [UIColor whiteColor];
+    _autoEnterToast.layer.cornerRadius = 12.0;
+    _autoEnterToast.layer.shadowColor = [UIColor blackColor].CGColor;
+    _autoEnterToast.layer.shadowOpacity = 0.15;
+    _autoEnterToast.layer.shadowRadius = 8.0;
+    _autoEnterToast.layer.shadowOffset = CGSizeMake(0, 2);
+
+    _autoEnterLabel = [[UILabel alloc] init];
+    _autoEnterLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    _autoEnterLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightRegular];
+    _autoEnterLabel.textColor = [UIColor blackColor];
+    _autoEnterLabel.text = @"";
+
+    _autoEnterCancelButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    _autoEnterCancelButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [_autoEnterCancelButton setTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] forState:UIControlStateNormal];
+    _autoEnterCancelButton.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
+    [_autoEnterCancelButton addTarget:self action:@selector(cancelAutoEnter) forControlEvents:UIControlEventTouchUpInside];
+
+    [_autoEnterToast addSubview:_autoEnterLabel];
+    [_autoEnterToast addSubview:_autoEnterCancelButton];
+    [self.view addSubview:_autoEnterToast];
+
+    UILayoutGuide *guide;
+    if (@available(iOS 11.0, *)) { guide = self.view.safeAreaLayoutGuide; }
+
+    [NSLayoutConstraint activateConstraints:@[
+        [_autoEnterToast.leadingAnchor constraintEqualToAnchor:guide.leadingAnchor constant:24],
+        [_autoEnterToast.trailingAnchor constraintEqualToAnchor:guide.trailingAnchor constant:-24],
+        [_autoEnterToast.bottomAnchor constraintEqualToAnchor:guide.bottomAnchor constant:-20],
+
+        [_autoEnterLabel.topAnchor constraintEqualToAnchor:_autoEnterToast.topAnchor constant:12],
+        [_autoEnterLabel.leadingAnchor constraintEqualToAnchor:_autoEnterToast.leadingAnchor constant:16],
+        [_autoEnterLabel.bottomAnchor constraintEqualToAnchor:_autoEnterToast.bottomAnchor constant:-12],
+
+        [_autoEnterCancelButton.centerYAnchor constraintEqualToAnchor:_autoEnterLabel.centerYAnchor],
+        [_autoEnterCancelButton.trailingAnchor constraintEqualToAnchor:_autoEnterToast.trailingAnchor constant:-16]
+    ]];
+}
+
+- (void)hideAutoEnterToast {
+    [_autoEnterToast removeFromSuperview];
+    _autoEnterToast = nil;
+    _autoEnterLabel = nil;
+    _autoEnterCancelButton = nil;
+}
+
+- (void)updateAutoEnterLabel {
+    if (_autoEnterLabel == nil) return;
+    long secs = (long)floor(_autoEnterElapsedSeconds);
+    _autoEnterLabel.text = [NSString stringWithFormat:@"正在启动桌面%lds", secs];
+}
+
+- (void)cancelAutoEnter {
+    _autoEnterActive = NO;
+    [_autoEnterTimer invalidate];
+    _autoEnterTimer = nil;
+    [self hideAutoEnterToast];
+    _autoEnterTargetHost = nil;
+    _autoEnterTargetHostName = nil;
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterDesktopHostName"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+- (void)tryLaunchIfReady:(TemporaryHost *)host {
+    if (host.state == StateOnline && host.pairState == PairStatePaired && host.appList.count > 0) {
+        [self hideAutoEnterToast];
+        _autoEnterActive = NO;
+        [_autoEnterTimer invalidate];
+        _autoEnterTimer = nil;
+        // Clear pending markers to avoid re-entry after exit
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterDesktopHostName"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        [self launchButtonTappedForHost:host];
+    }
+}
+
+- (TemporaryHost *)findHostByName:(NSString *)name {
+    if (name == nil) return nil;
+    NSString *target = [name stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (target.length == 0) return nil;
+    TemporaryHost *found = nil;
+    @synchronized(hostList) {
+        for (TemporaryHost *h in hostList) {
+            if ([[h.name lowercaseString] isEqualToString:[target lowercaseString]]) {
+                found = h;
+                break;
+            }
+        }
+    }
+    return found;
+}
+
+- (void)beginAutoEnterForHostName:(NSString *)hostName {
+    if (hostName == nil || hostName.length == 0) return;
+    // If already streaming or already active, ignore to avoid duplicates
+    if (self.revealViewController.isStreaming || _autoEnterActive) return;
+    _autoEnterTargetHostName = hostName;
+    _autoEnterTargetHost = [self findHostByName:hostName];
+    _autoEnterElapsedSeconds = 0;
+    _autoEnterProbeTick = 0;
+    _autoEnterActive = YES;
+
+    [self showAutoEnterToast];
+    [self updateAutoEnterLabel];
+
+    if (_autoEnterTargetHost) {
+        // Select host and refresh app list
+        [self appButtonTappedForHost:_autoEnterTargetHost];
+        [self tryLaunchIfReady:_autoEnterTargetHost];
+    }
+
+    __weak typeof(self) weakSelf = self;
+    _autoEnterTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
+        typeof(self) selfRef = weakSelf;
+        if (!selfRef || !selfRef->_autoEnterActive) { [timer invalidate]; return; }
+
+        selfRef->_autoEnterElapsedSeconds += 0.5;
+        if (fmod((double)selfRef->_autoEnterElapsedSeconds, 1.0) == 0) {
+            [selfRef updateAutoEnterLabel];
+        }
+
+        TemporaryHost *host = selfRef->_autoEnterTargetHost ?: [selfRef findHostByName:selfRef->_autoEnterTargetHostName];
+        if (host) {
+            selfRef->_autoEnterTargetHost = host;
+            // Probe occasionally to speed up state convergence
+            selfRef->_autoEnterProbeTick++;
+            if (selfRef->_autoEnterProbeTick % 2 == 0) { // every 1s
+                [selfRef probeHostStatusSilently:host completion:^{ }];
+            }
+            [selfRef tryLaunchIfReady:host];
+        }
+    }];
+}
+
+- (void)probeHostStatusSilently:(TemporaryHost *)host completion:(void (^)(void))completion {
+    if (host == nil) { if (completion) completion(); return; }
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        HttpManager* hMan = [[HttpManager alloc] initWithHost:host];
+        ServerInfoResponse* serverInfoResp = [[ServerInfoResponse alloc] init];
+        [self->_discMan pauseDiscoveryForHost:host];
+        [hMan executeRequestSynchronously:[HttpRequest requestForResponse:serverInfoResp withUrlRequest:[hMan newServerInfoRequest:false]
+                                                            fallbackError:401 fallbackRequest:[hMan newHttpServerInfoRequest]]];
+        [self->_discMan resumeDiscoveryForHost:host];
+
+        if ([serverInfoResp isStatusOk]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [serverInfoResp populateHost:host];
+                if (host == self->_selectedHost && host.pairState == PairStatePaired && host.appList.count == 0) {
+                    [self alreadyPaired];
+                }
+                if (completion) completion();
+            });
+        } else {
+            if (completion) dispatch_async(dispatch_get_main_queue(), completion);
+        }
+    });
+}
+
+- (void)setAutoEnterInactiveIfStreamingStarted
+{
+    if (self.revealViewController.isStreaming && _autoEnterActive) {
+        [self cancelAutoEnter];
+    }
+}
+
 - (void) showLoadingFrame:(void (^)(void))completion {
     [_loadingFrame showLoadingFrame:completion];
 }
@@ -1793,9 +1977,25 @@ static NSMutableSet* hostList;
     _background = NO;
     
     [self beginForegroundRefresh];
+    [self setAutoEnterInactiveIfStreamingStarted];
     
     // Check for a pending shortcut action when returning to foreground
     [self handlePendingShortcutAction];
+}
+
+- (void)handleRuntimeAutoEnterNotification:(NSNotification *)notification
+{
+    NSString *host = notification.userInfo[@"host"];
+    if (host.length > 0) {
+        [self beginAutoEnterForHostName:host];
+    } else {
+        NSString *pendingHost = [[NSUserDefaults standardUserDefaults] stringForKey:@"AutoEnterDesktopHostName"];
+        if (pendingHost.length > 0) {
+            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterDesktopHostName"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+            [self beginAutoEnterForHostName:pendingHost];
+        }
+    }
 }
 
 -(void)handleEnterBackground
@@ -1848,10 +2048,37 @@ static NSMutableSet* hostList;
                                              selector: @selector(handleEnterBackground)
                                                  name: UIApplicationWillResignActiveNotification
                                                object: nil];
+    
+    // Listen for runtime auto-enter requests (URL while running / AppIntent Darwin bridge)
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleRuntimeAutoEnterNotification:) name:@"VoidLinkAutoEnterRequested" object:nil];
     //[self simulateSettingsButtonPress]; //force reload resolution table in the setting
     //[self simulateSettingsButtonPress];
     [self updateResolutionAccordingly];
     if([self isFirstLaunch])[self helpButtonTapped];
+    [self setAutoEnterInactiveIfStreamingStarted];
+
+    // Consume pending Auto Enter Desktop action from URL/App Intents
+    [self performSelector:@selector(consumePendingAutoEnter) withObject:nil afterDelay:0.0];
+}
+
+- (void)consumePendingAutoEnter
+{
+    AppDelegate* delegate = (AppDelegate*)[UIApplication sharedApplication].delegate;
+    NSString *pendingHost = nil;
+    if (delegate.autoEnterHostName != nil && delegate.autoEnterHostName.length > 0) {
+        pendingHost = delegate.autoEnterHostName;
+        delegate.autoEnterHostName = nil;
+    }
+    if (pendingHost == nil || pendingHost.length == 0) {
+        pendingHost = [[NSUserDefaults standardUserDefaults] stringForKey:@"AutoEnterDesktopHostName"];
+        if (pendingHost != nil && pendingHost.length > 0) {
+            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterDesktopHostName"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+        }
+    }
+    if (pendingHost.length > 0) {
+        [self beginAutoEnterForHostName:pendingHost];
+    }
 }
 
 
@@ -1907,6 +2134,12 @@ static NSMutableSet* hostList;
     // Remove our lifetime observers to avoid triggering them
     // while streaming
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+
+    // Stop auto enter timer if active
+    [_autoEnterTimer invalidate];
+    _autoEnterTimer = nil;
+    _autoEnterActive = NO;
+    [self hideAutoEnterToast];
 }
 
 - (void) retrieveSavedHosts {

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		017883F22E73B68000235B70 /* AutoEnterDesktopIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 017883F02E73B68000235B70 /* AutoEnterDesktopIntent.swift */; };
 		18341A042DEB662C0094E5F2 /* FixedTintImageView.m in Sources */ = {isa = PBXBuildFile; fileRef = 18341A032DEB662C0094E5F2 /* FixedTintImageView.m */; };
 		187F4B282E04658A00EECC59 /* WidgetPanelStackView.m in Sources */ = {isa = PBXBuildFile; fileRef = 187F4B272E04658A00EECC59 /* WidgetPanelStackView.m */; };
 		1888C1922E24C33100108730 /* AboutViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1888C1912E24C33100108730 /* AboutViewController.swift */; };
@@ -150,6 +151,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		017883F02E73B68000235B70 /* AutoEnterDesktopIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoEnterDesktopIntent.swift; sourceTree = "<group>"; };
 		1829CE3D2E2154DF0074A99A /* SceneDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SceneDelegate.h; sourceTree = "<group>"; };
 		1829CE3E2E2154DF0074A99A /* SceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SceneDelegate.m; sourceTree = "<group>"; };
 		18341A022DEB65AB0094E5F2 /* FixedTintImageView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FixedTintImageView.h; sourceTree = "<group>"; };
@@ -402,6 +404,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		017883F12E73B68000235B70 /* AppIntents */ = {
+			isa = PBXGroup;
+			children = (
+				017883F02E73B68000235B70 /* AutoEnterDesktopIntent.swift */,
+			);
+			path = AppIntents;
+			sourceTree = "<group>";
+		};
 		84351B052C29ACAF00A77989 /* CustomOSC */ = {
 			isa = PBXGroup;
 			children = (
@@ -585,6 +595,7 @@
 		FB290CF919B2C406004C83CF /* VoidLink */ = {
 			isa = PBXGroup;
 			children = (
+				017883F12E73B68000235B70 /* AppIntents */,
 				97E20DEB2E21654B000D5DCA /* Stats */,
 				97E20DE82E216532000D5DCA /* SceneDelegate.h */,
 				97E20DE92E216532000D5DCA /* SceneDelegate.m */,
@@ -1000,6 +1011,7 @@
 				843E93BE2C41528700B1651F /* OrientationHelper.swift in Sources */,
 				FB4678FF1A565DAC00377732 /* WakeOnLanManager.m in Sources */,
 				97E21BBF2E21882D000D5DCA /* imgui_tables.cpp in Sources */,
+				017883F22E73B68000235B70 /* AutoEnterDesktopIntent.swift in Sources */,
 				97E21BC02E21882D000D5DCA /* imgui_demo.cpp in Sources */,
 				97E21BC12E21882D000D5DCA /* imgui_widgets.cpp in Sources */,
 				97E21BC22E21882D000D5DCA /* imgui.cpp in Sources */,

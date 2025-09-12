@@ -13,6 +13,18 @@
 #import "MainFrameViewController.h"
 #import "VoidLink-Swift.h"
 
+// Darwin notification callback to bridge App Intent events while app is running
+static void AutoEnterDarwinCallback(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *host = [[NSUserDefaults standardUserDefaults] stringForKey:@"AutoEnterDesktopHostName"];
+        if (host.length > 0) {
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"VoidLinkAutoEnterRequested" object:nil userInfo:@{ @"host": host }];
+        } else {
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"VoidLinkAutoEnterRequested" object:nil userInfo:nil];
+        }
+    });
+}
+
 @implementation AppDelegate
 
 @synthesize managedObjectContext = _managedObjectContext;
@@ -81,6 +93,8 @@ static NSString* DB_NAME = @"Limelight_iOS.sqlite";
         [self.window makeKeyAndVisible];
     }
     
+    // Register Darwin notification listener to receive App Intent triggers while app is running
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, AutoEnterDarwinCallback, CFSTR("com.imneway.voidlink.autoenter"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
     return YES;
 }
 
@@ -88,6 +102,28 @@ static NSString* DB_NAME = @"Limelight_iOS.sqlite";
 - (void)application:(UIApplication *)application performActionForShortcutItem:(UIApplicationShortcutItem *)shortcutItem completionHandler:(void (^)(BOOL succeeded))completionHandler {
     _pcUuidToLoad = (NSString*)[shortcutItem.userInfo objectForKey:@"UUID"];
     _shortcutCompletionHandler = completionHandler;
+}
+#pragma mark - URL Scheme (iOS 12 and below)
+- (BOOL)application:(UIApplication *)app openURL:(NSURL *)url options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options {
+    if ([[url.scheme lowercaseString] isEqualToString:@"voidlink"]) {
+        NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+        NSString *hostParam = nil;
+        for (NSURLQueryItem *item in components.queryItems) {
+            if ([[item.name lowercaseString] isEqualToString:@"host"]) {
+                hostParam = item.value;
+                break;
+            }
+        }
+        if ([[components.host lowercaseString] isEqualToString:@"auto-enter"] && hostParam.length > 0) {
+            self.autoEnterHostName = hostParam;
+            [[NSUserDefaults standardUserDefaults] setObject:hostParam forKey:@"AutoEnterDesktopHostName"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+            // Notify running app instance if present
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"VoidLinkAutoEnterRequested" object:nil userInfo:@{ @"host": hostParam }];
+            return YES;
+        }
+    }
+    return NO;
 }
 #endif
 
@@ -117,6 +153,8 @@ static NSString* DB_NAME = @"Limelight_iOS.sqlite";
 {
     // Saves changes in the application's managed object context before the application terminates.
     [self saveContext];
+    // Remove observer for Darwin notifications
+    CFNotificationCenterRemoveEveryObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL);
 }
 
 - (void)saveContext

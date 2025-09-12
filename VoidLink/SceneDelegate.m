@@ -40,8 +40,55 @@ static UIWindow *_externalSceneWindow = nil;
             Log(LOG_I, @"SceneDelegate: External display scene connected.");
         }
     }
+
+    // Handle URL contexts (iOS 13+)
+    if (connectionOptions.URLContexts.count > 0) {
+        UIOpenURLContext *openURLContext = connectionOptions.URLContexts.allObjects.firstObject;
+        NSURL *url = openURLContext.URL;
+        if ([url.scheme.lowercaseString isEqualToString:@"voidlink"]) {
+            NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+            NSString *hostParam = nil;
+            for (NSURLQueryItem *item in components.queryItems) {
+                if ([item.name.lowercaseString isEqualToString:@"host"]) {
+                    hostParam = item.value;
+                    break;
+                }
+            }
+            if ([components.host.lowercaseString isEqualToString:@"auto-enter"] && hostParam.length > 0) {
+                AppDelegate *delegate = (AppDelegate *)[UIApplication sharedApplication].delegate;
+                if (@available(iOS 13.0, *)) {
+                    delegate.autoEnterHostName = hostParam; // foreground delivery
+                } else {
+                    [[NSUserDefaults standardUserDefaults] setObject:hostParam forKey:@"AutoEnterDesktopHostName"];
+                    [[NSUserDefaults standardUserDefaults] synchronize];
+                }
+            }
+        }
+    }
 }
 
+// Handle URL while app is running (iOS 13+)
+- (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts API_AVAILABLE(ios(13.0))
+{
+    if (URLContexts.count == 0) return;
+    UIOpenURLContext *openURLContext = URLContexts.allObjects.firstObject;
+    NSURL *url = openURLContext.URL;
+    if ([url.scheme.lowercaseString isEqualToString:@"voidlink"]) {
+        NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+        NSString *hostParam = nil;
+        for (NSURLQueryItem *item in components.queryItems) {
+            if ([item.name.lowercaseString isEqualToString:@"host"]) {
+                hostParam = item.value;
+                break;
+            }
+        }
+        if ([components.host.lowercaseString isEqualToString:@"auto-enter"] && hostParam.length > 0) {
+            AppDelegate *delegate = (AppDelegate *)[UIApplication sharedApplication].delegate;
+            delegate.autoEnterHostName = hostParam;
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"VoidLinkAutoEnterRequested" object:nil userInfo:@{ @"host": hostParam }];
+        }
+    }
+}
 
 // Method for StreamFrameViewController to provide its render view
 + (void)setExternalDisplayRenderView:(UIView *)renderView {

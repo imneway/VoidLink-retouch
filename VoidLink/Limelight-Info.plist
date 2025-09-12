@@ -121,5 +121,16 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.voidlink.urlscheme</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>voidlink</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
