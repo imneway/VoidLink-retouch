@@ -89,6 +89,7 @@
     CustomTapGestureRecognizer *_oscLayoutTapRecoginizer;
     LayoutOnScreenControlsViewController *_layoutOnScreenControlsVC;
     ToolboxViewController* toolBoxViewController;
+    UIControl *_toolboxOverlay;
 #else
     UITapGestureRecognizer *_menuTapGestureRecognizer;
     UITapGestureRecognizer *_menuDoubleTapGestureRecognizer;
@@ -272,9 +273,80 @@
     toolBoxViewController.specialEntryDelegate = self;
     toolBoxViewController.specialEntries = oldToolboxVC.specialEntries;
     toolBoxViewController.modalPresentationStyle = UIModalPresentationOverCurrentContext;
+    toolBoxViewController.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+    // delegate will be set again in completion when presentationController is ready
+
     [self presentViewController:toolBoxViewController animated:YES completion:^{
+        // Ensure delegate is set after presentation
+        self->toolBoxViewController.presentationController.delegate = self;
         //[self->toolBoxViewController setupConstraints];
     }];
+
+    id<UIViewControllerTransitionCoordinator> presentationCoordinator = self.transitionCoordinator ?: toolBoxViewController.transitionCoordinator;
+    if (presentationCoordinator) {
+        [presentationCoordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext>  _Nonnull context) {
+            UIView *container = self->toolBoxViewController.view.superview ?: self.view;
+            if (self->_toolboxOverlay == nil) {
+                CGRect frame = container.bounds;
+                self->_toolboxOverlay = [[UIControl alloc] initWithFrame:frame];
+                self->_toolboxOverlay.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.4];
+                self->_toolboxOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                [self->_toolboxOverlay addTarget:self action:@selector(_toolboxOverlayTapped) forControlEvents:UIControlEventTouchDown];
+                self->_toolboxOverlay.alpha = 0.0;
+            }
+            if (self->_toolboxOverlay.superview != container) {
+                [self->_toolboxOverlay removeFromSuperview];
+                [container insertSubview:self->_toolboxOverlay belowSubview:self->toolBoxViewController.view];
+            }
+            self->_toolboxOverlay.alpha = 1.0; // will animate alongside transition
+        } completion:^(id<UIViewControllerTransitionCoordinatorContext>  _Nonnull context) {
+            if ([context isCancelled]) {
+                // Rollback overlay if presentation cancelled
+                [self _removeToolboxOverlayIfNeeded];
+            }
+        }];
+    } else {
+        // Fallback: insert on next runloop to minimize latency
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIView *container = self->toolBoxViewController.view.superview ?: self.view;
+            if (self->_toolboxOverlay == nil) {
+                CGRect frame = container.bounds;
+                self->_toolboxOverlay = [[UIControl alloc] initWithFrame:frame];
+                self->_toolboxOverlay.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.4];
+                self->_toolboxOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                [self->_toolboxOverlay addTarget:self action:@selector(_toolboxOverlayTapped) forControlEvents:UIControlEventTouchDown];
+                self->_toolboxOverlay.alpha = 0.0;
+            }
+            if (self->_toolboxOverlay.superview != container) {
+                [self->_toolboxOverlay removeFromSuperview];
+                [container insertSubview:self->_toolboxOverlay belowSubview:self->toolBoxViewController.view];
+            }
+            [UIView animateWithDuration:0.2 animations:^{ self->_toolboxOverlay.alpha = 1.0; }];
+        });
+    }
+}
+
+- (void)_toolboxOverlayTapped {
+    if (toolBoxViewController && [toolBoxViewController isPinned]) {
+        return;
+    }
+    [UIView animateWithDuration:0.2 animations:^{ self->_toolboxOverlay.alpha = 0.0; }];
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)presentationControllerWillDismiss:(UIPresentationController *)presentationController {
+    // Fade out overlay alongside dismissal
+    [UIView animateWithDuration:0.2 animations:^{ self->_toolboxOverlay.alpha = 0.0; }];
+}
+
+- (void)presentationControllerDidDismiss:(UIPresentationController *)presentationController {
+    [self _removeToolboxOverlayIfNeeded];
+}
+
+- (void)_removeToolboxOverlayIfNeeded {
+    if (_toolboxOverlay && _toolboxOverlay.superview) {
+        [_toolboxOverlay removeFromSuperview];
+    }
 }
 
 - (void)configGestures{

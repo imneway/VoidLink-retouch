@@ -558,6 +558,16 @@ import UIKit
             UserDefaults.standard.set(data, forKey: "savedCommands")
         }
     }
+
+    @objc public func moveCommand(fromIndex: Int, toIndex: Int) {
+        guard fromIndex != toIndex,
+              fromIndex >= 0, fromIndex < commands.count,
+              toIndex >= 0, toIndex < commands.count else { return }
+        let moved = commands.remove(at: fromIndex)
+        commands.insert(moved, at: toIndex)
+        saveCommands()
+        viewController?.reloadTableView()
+    }
     
     @objc public func sendKeyComboCommand(keyboardCmdStrings: [String], delay: TimeInterval = 0.2, index: Int = 0) { // we need a large delay for WAN streaming
         // 如果已处理完所有按键，则开始释放按键

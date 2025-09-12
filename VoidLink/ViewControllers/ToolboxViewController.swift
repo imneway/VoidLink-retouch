@@ -41,6 +41,7 @@ import UIKit
     ]
     
     private var viewPinned: Bool = false
+    @objc public var isPinned: Bool { return viewPinned }
     private var isEditingMode: Bool = false {
         didSet {
             updateEditingMode()
@@ -91,6 +92,8 @@ import UIKit
         
         view.backgroundColor = viewBackgroundColor
         tableView.backgroundColor = .clear
+        tableView.allowsSelectionDuringEditing = true
+        tableView.tintColor = .white
         tableView.rowHeight = isIPhone() ? 47 : 60
         tableView.separatorColor = .white.withAlphaComponent(0.33)
         tableView.separatorInset = UIEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
@@ -155,7 +158,7 @@ import UIKit
             
             // Set the width and height of the view
             view.widthAnchor.constraint(equalTo: view.superview!.widthAnchor, multiplier: isIPhone() ? 0.6 : 0.52),
-            view.heightAnchor.constraint(equalTo: view.superview!.heightAnchor, multiplier: 0.93),
+            view.heightAnchor.constraint(equalTo: view.superview!.heightAnchor, multiplier: 0.8),
             // Set the width and height of the view
             //view.leadingAnchor.constraint(equalTo: view.superview!.leadingAnchor, constant: 60),
             //view.trailingAnchor.constraint(equalTo: view.superview!.trailingAnchor, constant: -60),
@@ -204,6 +207,7 @@ import UIKit
         deleteButton.isEnabled = isEditingMode
         if(isEditingMode){ editButton.setTitle(SwiftLocalizationHelper.localizedString(forKey: "Done"), for: .normal) }
         else{ editButton.setTitle(SwiftLocalizationHelper.localizedString(forKey: "Edit"), for: .normal) }
+        tableView.setEditing(isEditingMode, animated: true)
     }
     
     @objc private func pinButtonTapped() {
@@ -318,9 +322,10 @@ import UIKit
         cell.textLabel?.font = UIFont.systemFont(ofSize: 18.5)
         
         
-        // Set selected background view
+        cell.tintColor = .white
+        // Set custom selection highlight color (12% white)
         let selectedBackgroundView = UIView()
-        selectedBackgroundView.backgroundColor = highlightColor // Color for the selected state
+        selectedBackgroundView.backgroundColor = UIColor(white: 1.0, alpha: 0.12)
         cell.selectedBackgroundView = selectedBackgroundView
         
         if indexPath.row < specialEntries.count {
@@ -336,18 +341,7 @@ import UIKit
     // UITableViewDelegate
     public func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         
-        if let cell = tableView.cellForRow(at: indexPath) {
-            // Set the cell background color to the flashing color
-            // Animate the flash effect
-            UIView.animate(withDuration: 0.1, animations: {
-                cell.selectedBackgroundView?.backgroundColor = .clear
-            }) { _ in
-                // Reset the cell background color after the animation
-                UIView.animate(withDuration: 0.1) {
-                    cell.selectedBackgroundView?.backgroundColor = self.highlightColor
-                }
-            }
-        }
+        // Use system default highlight without custom flashing animation
     
         if !isEditingMode {
             // Sending keyboard command
@@ -358,13 +352,50 @@ import UIKit
                 let command = CommandManager.shared.getAllCommands()[indexPath.row-specialEntries.count]
                 sendKeyboardCommand(command)
             }
-            if !viewPinned { dismiss(animated: false, completion: nil) } // dimiss the view in sending mode & the view is not pinned
+            if !viewPinned { dismiss(animated: true, completion: nil) } // dimiss the view in sending mode & the view is not pinned
         }
         else {
             let specialEntrySelected = indexPath.row < specialEntries.count
             addButton.isEnabled = !specialEntrySelected
             deleteButton.isEnabled = !specialEntrySelected
         }
+    }
+
+    // 支持排序
+    public func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool {
+        return indexPath.row >= specialEntries.count
+    }
+
+    public func tableView(_ tableView: UITableView, moveRowAt sourceIndexPath: IndexPath, to destinationIndexPath: IndexPath) {
+        let commandsCount = CommandManager.shared.getAllCommands().count
+        guard commandsCount > 0 else { return }
+        let fromIndex = sourceIndexPath.row - specialEntries.count
+        let toIndex = destinationIndexPath.row - specialEntries.count
+        if fromIndex >= 0 && fromIndex < commandsCount && toIndex >= 0 && toIndex < commandsCount {
+            CommandManager.shared.moveCommand(fromIndex: fromIndex, toIndex: toIndex)
+        }
+    }
+
+    public func tableView(_ tableView: UITableView, editingStyleForRowAt indexPath: IndexPath) -> UITableViewCell.EditingStyle {
+        return .none
+    }
+
+    public func tableView(_ tableView: UITableView, targetIndexPathForMoveFromRowAt sourceIndexPath: IndexPath, toProposedIndexPath proposedIndexPath: IndexPath) -> IndexPath {
+        let commandsCount = CommandManager.shared.getAllCommands().count
+        // 如果没有可移动的命令，保持原位置
+        guard commandsCount > 0 else { return sourceIndexPath }
+
+        let minRow = specialEntries.count
+        let maxRow = specialEntries.count + commandsCount - 1
+
+        var clampedRow = proposedIndexPath.row
+        if clampedRow < minRow { clampedRow = minRow }
+        if clampedRow > maxRow { clampedRow = maxRow }
+        return IndexPath(row: clampedRow, section: sourceIndexPath.section)
+    }
+
+    public func tableView(_ tableView: UITableView, shouldIndentWhileEditingRowAt indexPath: IndexPath) -> Bool {
+        return false
     }
     
     private func isSpecialEntrySelected() -> Bool {
