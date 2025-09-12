@@ -1012,6 +1012,53 @@
                                     <constraint firstAttribute="width" constant="380" id="7VX-PK-miO"/>
                                 </constraints>
                             </stackView>
+                            <stackView opaque="NO" contentMode="scaleToFill" spacing="20" id="Dtc-pH-hPH" userLabel="snapToTopSettingsStack">
+                                <rect key="frame" x="37" y="2677" width="280" height="31"/>
+                                <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
+                                <subviews>
+                                    <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Snap screen to top" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" minimumScaleFactor="0.64999997615814209" adjustsLetterSpacingToFitWidth="YES" adjustsFontForContentSizeCategory="YES" translatesAutoresizingMaskIntoConstraints="NO" id="hM4-Jv-lbl" userLabel="Snap to Top Settings">
+                                        <rect key="frame" x="0.0" y="0.0" width="130" height="31"/>
+                                        <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                        <nil key="textColor"/>
+                                        <nil key="highlightedColor"/>
+                                    </label>
+                                    <switch opaque="NO" contentMode="scaleToFill" horizontalHuggingPriority="750" verticalHuggingPriority="750" contentHorizontalAlignment="center" contentVerticalAlignment="center" on="YES" translatesAutoresizingMaskIntoConstraints="NO" id="HpZ-CQ-gCp" userLabel="snapToTopSwitch">
+                                        <rect key="frame" x="150" y="0.0" width="132" height="31"/>
+                                        <constraints>
+                                            <constraint firstAttribute="width" constant="130" id="NGh-cS-kzB"/>
+                                        </constraints>
+                                        <connections>
+                                            <action selector="snapScreenToTopChanged:" destination="BsV-3c-455" eventType="valueChanged" id="znl-1b-YE6"/>
+                                        </connections>
+                                    </switch>
+                                </subviews>
+                            </stackView>
+                            <stackView verifyAmbiguity="off" opaque="NO" contentMode="scaleToFill" ambiguous="YES" axis="vertical" spacing="5" translatesAutoresizingMaskIntoConstraints="NO" id="ZDL-hI-Vdt" userLabel="snapToTopOptions Stack">
+                                <rect key="frame" x="20" y="2716" width="380" height="56.5"/>
+                                <subviews>
+                                    <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Screen Ratio" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="URP-B9-aZm">
+                                        <rect key="frame" x="0.0" y="0.0" width="380" height="20.5"/>
+                                        <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                        <color key="textColor" red="0.93902439019999995" green="0.9625305918" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                        <nil key="highlightedColor"/>
+                                    </label>
+                                    <segmentedControl opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="left" contentVerticalAlignment="top" segmentControlStyle="plain" selectedSegmentIndex="0" translatesAutoresizingMaskIntoConstraints="NO" id="2Ew-vv-Io3" userLabel="SnapToTopOptions">
+                                        <rect key="frame" x="0.0" y="25.5" width="380" height="32"/>
+                                        <segments>
+                                            <segment title="16:9"/>
+                                            <segment title="Full Screen"/>
+                                        </segments>
+                                        <color key="tintColor" red="0.6716768742" green="0.61711704730000005" blue="0.99902987480000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                        <color key="selectedSegmentTintColor" systemColor="linkColor"/>
+                                        <connections>
+                                            <action selector="screenRatioChanged:" destination="BsV-3c-455" eventType="valueChanged" id="6Y2-7b-vyt"/>
+                                        </connections>
+                                    </segmentedControl>
+                                </subviews>
+                                <constraints>
+                                    <constraint firstAttribute="width" constant="380" id="q8W-kG-QHe"/>
+                                </constraints>
+                            </stackView>
                         </subviews>
                         <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                     </view>
@@ -1080,6 +1127,8 @@
                         <outlet property="resolutionStack" destination="zpX-lo-MLA" id="9Hu-I9-hjH"/>
                         <outlet property="reverseMouseWheelDirectionSelector" destination="mTM-NL-CcF" id="EYZ-Qg-OLu"/>
                         <outlet property="reverseMouseWheelDirectionStack" destination="2P0-Tg-zWd" id="Zz1-VC-0hC"/>
+                        <outlet property="screenRatioSelector" destination="2Ew-vv-Io3" id="f7x-ln-hty"/>
+                        <outlet property="screenRatioStack" destination="ZDL-hI-Vdt" id="TI5-si-PsI"/>
                         <outlet property="scrollView" destination="WRy-3f-gEP" id="V8B-oF-27B"/>
                         <outlet property="slideToMenuDistanceSlider" destination="8p6-FP-UWP" id="8z3-2I-oPd"/>
                         <outlet property="slideToSettingsDistanceStack" destination="pN7-bs-8yu" id="azp-qU-GnS"/>
@@ -1089,6 +1138,8 @@
                         <outlet property="slideToSettingsScreenEdgeUILabel" destination="IvI-tw-APj" id="7qc-yD-pry"/>
                         <outlet property="slideToToolboxScreenEdgeSelector" destination="yY7-Sf-Zes" id="bZE-uc-KcL"/>
                         <outlet property="slideToToolboxScreenEdgeStack" destination="msN-pa-Kn3" id="p9F-Aj-h3X"/>
+                        <outlet property="snapScreenToTopStack" destination="Dtc-pH-hPH" id="7yi-Rr-mDH"/>
+                        <outlet property="snapScreenToTopSwitch" destination="HpZ-CQ-gCp" id="GLV-OM-w7Y"/>
                         <outlet property="softKeyboardGestureSelector" destination="kho-5R-daP" id="AaA-Xg-0fw"/>
                         <outlet property="softKeyboardGestureStack" destination="Tv6-pw-87l" id="RtJ-Ib-GJg"/>
                         <outlet property="softKeyboardToolbarStack" destination="EKY-6m-OBd" id="B8n-Tm-yrf"/>
@@ -1096,7 +1147,6 @@
                         <outlet property="statsOverlaySelector" destination="NLH-qN-qCo" id="EF8-JF-O3S"/>
                         <outlet property="statsOverlayStack" destination="UcP-0b-nJD" id="UdI-NS-O6k"/>
                         <outlet property="swapAbaxyStack" destination="2rP-Ui-wVU" id="gUR-Vz-ORP"/>
-                        <outlet property="swapAbxySwitch" destination="hv7-6b-rez" id="iKX-qk-Dep"/>
                         <outlet property="touchModeLabel" destination="MUY-2Y-bHi" id="6jD-aq-rmE"/>
                         <outlet property="touchModeSelector" destination="bhC-da-VGd" id="hna-Cr-kyd"/>
                         <outlet property="touchModeStack" destination="M78-Pw-jWx" id="mdl-y3-54B"/>

@@ -124,6 +124,9 @@
     self.renderingBackend = settings.renderingBackend;
     self.framePacingMode = settings.framePacingMode;
     self.backgroundSessionTimer = settings.backroundSessionTimer;
+    // New UI options are stored in NSUserDefaults for now
+    self.snapScreenToTop = [[NSUserDefaults standardUserDefaults] boolForKey:@"snapScreenToTop"];
+    self.snapScreenRatioMode = [NSNumber numberWithInteger:[[NSUserDefaults standardUserDefaults] integerForKey:@"snapScreenRatioMode"]];
 #endif
     self.uniqueId = settings.uniqueId;
     

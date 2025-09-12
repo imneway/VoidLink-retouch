@@ -70,6 +70,10 @@
 @property (nonatomic, retain) NSNumber * renderingBackend;
 @property (nonatomic, retain) NSNumber * framePacingMode;
 
+// UI: 将串流画面上移并顶到更靠近屏幕顶部
+@property (nonatomic) BOOL snapScreenToTop;          // 是否开启
+@property (nonatomic, retain) NSNumber * snapScreenRatioMode; // 0: 16:9, 1: Full Screen
+
 - (id) initFromSettings:(Settings*)settings;
 
 @end

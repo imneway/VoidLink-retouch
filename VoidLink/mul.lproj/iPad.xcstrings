@@ -121,6 +121,30 @@
         }
       }
     },
+    "2Ew-vv-Io3.segmentTitles[0]" : {
+      "comment" : "Class = \"UISegmentedControl\"; 2Ew-vv-Io3.segmentTitles[0] = \"16:9\"; ObjectID = \"2Ew-vv-Io3\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "16:9"
+          }
+        }
+      }
+    },
+    "2Ew-vv-Io3.segmentTitles[1]" : {
+      "comment" : "Class = \"UISegmentedControl\"; 2Ew-vv-Io3.segmentTitles[1] = \"Full Screen\"; ObjectID = \"2Ew-vv-Io3\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Full Screen"
+          }
+        }
+      }
+    },
     "2w1-Vw-GVy.text" : {
       "comment" : "Class = \"UILabel\"; text = \"HDR\"; ObjectID = \"2w1-Vw-GVy\";",
       "extractionState" : "extracted_with_value",
@@ -1861,6 +1885,18 @@
         }
       }
     },
+    "hM4-Jv-lbl.text" : {
+      "comment" : "Class = \"UILabel\"; text = \"Snap screen to top\"; ObjectID = \"hM4-Jv-lbl\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Snap screen to top"
+          }
+        }
+      }
+    },
     "hq8-dy-8BF.text" : {
       "comment" : "Class = \"UILabel\"; text = \"Custom Resolution\"; ObjectID = \"hq8-dy-8BF\";",
       "extractionState" : "extracted_with_value",
@@ -3417,6 +3453,18 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "test"
+          }
+        }
+      }
+    },
+    "URP-B9-aZm.text" : {
+      "comment" : "Class = \"UILabel\"; text = \"Screen Ratio\"; ObjectID = \"URP-B9-aZm\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Screen Ratio"
           }
         }
       }

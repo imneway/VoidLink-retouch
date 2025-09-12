@@ -443,6 +443,7 @@
     [self->_streamView reloadOnScreenWidgetViews]; //reload keyboard buttons here. the keyboard widget view will be added to the streamframe view instead streamview, the highest layer, which saves a lot of reengineering
     [self reloadAirPlayConfig];
     [self mousePresenceChanged];
+    [self applySnapToTopIfNeeded];
     
     // Invalidate the old timer to prevent duplicates
     if (self->_statsUpdateTimer) {
@@ -490,6 +491,42 @@
 
     NSLog(@"frameview gestures: %d", (uint32_t)[self.view.gestureRecognizers count]);
     NSLog(@"streamview gestures: %d", (uint32_t)[_streamView.gestureRecognizers count]);
+}
+
+- (void)applySnapToTopIfNeeded {
+    BOOL isPad = [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad;
+    if (!isPad || !_settings.snapScreenToTop) {
+        // Restore to original position
+        CGRect f = _streamView.frame;
+        f.origin.y = 0;
+        _streamView.frame = f;
+        _streamView.originalFrame = f;
+        // Restore Metal view
+        [_streamView liftMetalVideoViewIfNeeded:0];
+        return;
+    }
+
+    CGFloat viewWidth = self.view.bounds.size.width;
+    CGFloat viewHeight = self.view.bounds.size.height;
+    // target aspect: 0 -> 16:9, 1 -> Full Screen (use actual stream aspect)
+    CGFloat targetAspect = (_settings.snapScreenRatioMode.integerValue == 0) ? (16.0f/9.0f) : ((CGFloat)_streamConfig.width / (CGFloat)_streamConfig.height);
+    if (targetAspect <= 0.0f) targetAspect = 16.0f/9.0f;
+    CGFloat videoHeight = viewWidth / targetAspect; // iPad: 按宽等比
+    CGFloat topBlackBar = (viewHeight - videoHeight) / 2.0f;
+    if (topBlackBar < 0) topBlackBar = 0;
+    // Portrait: use half of the offset (not full top-align)
+    if (viewHeight > viewWidth) {
+        topBlackBar = topBlackBar * 0.5f;
+    }
+
+    // Move the entire StreamView up
+    CGRect f = self.view.bounds;
+    f.origin.y = -topBlackBar;
+    _streamView.frame = f;
+    _streamView.originalFrame = f; // so keyboard lift restores correctly
+
+    // Move Metal video view by the same amount (if applicable)
+    [_streamView liftMetalVideoViewIfNeeded:topBlackBar];
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -789,6 +826,7 @@
     [self.view addSubview:_stageLabel];
     [self.view addSubview:_spinner];
     [self.view addSubview:_tipLabel];
+    [self applySnapToTopIfNeeded];
 
     if ([_settings.renderingBackend intValue] == RENDER_METAL) {
         // Metal view for video
@@ -1645,6 +1683,7 @@
     }
     dispatch_block_t block = dispatch_block_create(0, ^{
         [self handleViewResize];
+        [self applySnapToTopIfNeeded];
     });
     _delayedRemoveExtScreen = block;
     dispatch_time_t delayTime = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayInSeconds * NSEC_PER_SEC));

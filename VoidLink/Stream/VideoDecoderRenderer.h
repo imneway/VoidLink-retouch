@@ -43,6 +43,6 @@
                               frameType:(int)frameType
                         decodeStartTime:(CFTimeInterval)decodeStartTime;
 
-- (void)invalidateDecompressionSession;
+// Removed from implementation; keep header clean
 
 @end

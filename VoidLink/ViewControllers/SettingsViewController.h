@@ -125,6 +125,16 @@
 @property (strong, nonatomic) IBOutlet UIStackView *emulatedControllerTypeStack;
 @property (strong, nonatomic) IBOutlet UISegmentedControl *emulatedControllerTypeSelector;
 
+// Snap screen to top
+@property (strong, nonatomic) IBOutlet UIStackView *snapScreenToTopStack;
+@property (strong, nonatomic) IBOutlet UISwitch *snapScreenToTopSwitch;
+@property (strong, nonatomic) IBOutlet UIStackView *screenRatioStack;
+@property (strong, nonatomic) IBOutlet UISegmentedControl *screenRatioSelector;
+
+// IBAction for new controls
+- (IBAction)snapScreenToTopChanged:(UISwitch *)sender;
+- (IBAction)screenRatioChanged:(UISegmentedControl *)sender;
+
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunguarded-availability"

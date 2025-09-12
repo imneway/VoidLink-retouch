@@ -573,6 +573,14 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self addSetting:self.framePacingStack ofId:@"framePacingStack" withInfoTag:YES withDynamicLabel:NO to:videoSection];
     [self addSetting:self.frameQueueSizeStack ofId:@"frameQueueSizeStack" withInfoTag:NO withDynamicLabel:YES to:videoSection];
 
+    // Snap screen to top and screen ratio (optional if storyboard not bound yet)
+    if (self.snapScreenToTopStack) {
+        [self addSetting:self.snapScreenToTopStack ofId:@"snapScreenToTopStack" withInfoTag:NO withDynamicLabel:NO to:videoSection];
+    }
+    if (self.screenRatioStack) {
+        [self addSetting:self.screenRatioStack ofId:@"screenRatioStack" withInfoTag:NO withDynamicLabel:NO to:videoSection];
+    }
+
     [videoSection addToParentStack:_parentStack];
     [videoSection setExpanded:YES];
 
@@ -1541,6 +1549,22 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self.backgroundSessionTimerSlider addTarget:self action:@selector(backgroundSessionTimerSliderMoved:) forControlEvents:UIControlEventValueChanged];
     [self backgroundSessionTimerSliderMoved:self.backgroundSessionTimerSlider];
 
+    // Snap screen to top
+    BOOL snapEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:@"snapScreenToTop"];
+    NSInteger ratioMode = [[NSUserDefaults standardUserDefaults] integerForKey:@"snapScreenRatioMode"]; // 0:16:9 1:Full Screen
+    if (self.snapScreenToTopSwitch) {
+        [self.snapScreenToTopSwitch setOn:snapEnabled];
+        [self.snapScreenToTopSwitch addTarget:self action:@selector(snapScreenToTopChanged:) forControlEvents:UIControlEventValueChanged];
+    }
+    if (self.screenRatioSelector) {
+        [self.screenRatioSelector setSelectedSegmentIndex:ratioMode];
+        [self.screenRatioSelector addTarget:self action:@selector(screenRatioChanged:) forControlEvents:UIControlEventValueChanged];
+        [self.screenRatioStack setHidden:!snapEnabled];
+    }
+    if (videoSection) {
+        [videoSection updateViewForFoldState];
+    }
+
     // lift streamview setting
     [self.liftStreamViewForKeyboardSelector setSelectedSegmentIndex:currentSettings.liftStreamViewForKeyboard ? 1 : 0];// Load old setting
 
@@ -2308,6 +2332,24 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self findDynamicLabelFromStack:_graphOpacityStack].text = [LocalizationHelper localizedStringForKey:@"  %d%% opacity  ",(int)sender.value];
 }
 
+- (IBAction)snapScreenToTopChanged:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"snapScreenToTop"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    if (self.screenRatioStack) {
+        [self.screenRatioStack setHidden:!sender.isOn];
+    }
+    if (self->videoSection) {
+        [self->videoSection updateViewForFoldState];
+    }
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"ScreenChanged" object:self];
+}
+
+- (IBAction)screenRatioChanged:(UISegmentedControl *)sender {
+    [[NSUserDefaults standardUserDefaults] setInteger:sender.selectedSegmentIndex forKey:@"snapScreenRatioMode"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"ScreenChanged" object:self];
+}
+
 - (void) saveSettings {
 
     if(self.mainFrameViewController.settingsExpandedInStreamView){
@@ -2368,6 +2410,15 @@ BOOL isCustomResolution(int resolutionSelected) {
     NSInteger externalDisplayMode = [self.externalDisplayModeSelector selectedSegmentIndex];
     NSInteger localMousePointerMode = [self.localMousePointerModeSelector selectedSegmentIndex];
     NSInteger backgroundSessionTimer = self.backgroundSessionTimerSlider.value == self.backgroundSessionTimerSlider.maximumValue ? (uint32_t) INT16_MAX : (uint32_t)self.backgroundSessionTimerSlider.value;
+
+    // Persist snap-to-top immediately into NSUserDefaults
+    if (self.snapScreenToTopSwitch) {
+        [[NSUserDefaults standardUserDefaults] setBool:self.snapScreenToTopSwitch.isOn forKey:@"snapScreenToTop"];
+    }
+    if (self.screenRatioSelector) {
+        [[NSUserDefaults standardUserDefaults] setInteger:self.screenRatioSelector.selectedSegmentIndex forKey:@"snapScreenRatioMode"];
+    }
+    [[NSUserDefaults standardUserDefaults] synchronize];
     
     [dataMan saveSettingsWithBitrate:_bitrate
                            framerate:framerate

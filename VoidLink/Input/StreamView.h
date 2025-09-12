@@ -58,6 +58,9 @@
 - (CGPoint) adjustCoordinatesForVideoArea:(CGPoint)point;
 - (uint16_t)getRotationFromAzimuthAngle:(float)azimuthAngle;
 
+// Expose current visual top offset (iPad-only; 0 elsewhere)
+- (CGFloat) currentSnapOffset;
+
 - (OnScreenControlsLevel) getCurrentOscState;
 
 -(void)readyToBringUpSoftKeyboardByToolbox;

@@ -13,7 +13,6 @@
 #import "TemporarySettings.h"
 #import "VideoDecoderRenderer.h"
 #import "FrameQueue.h"
-#import "StreamView.h"
 #import "Plot.h"
 #import "PlatformThreads.h"
 #import "MetalViewController.h"
@@ -35,7 +34,7 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
 
 @implementation VideoDecoderRenderer {
     dispatch_queue_t _sq, _vtq;
-    StreamView* _view;
+    UIView* _view;
     id<ConnectionCallbacks> _callbacks;
     float _streamAspectRatio;
 
@@ -83,6 +82,9 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
             videoSize = CGSizeMake(_view.bounds.size.width, _view.bounds.size.width / _streamAspectRatio);
         }
     }
+
+    // Revert: AVSB keeps centered; container shift handles visuals
+    CGFloat snapOffset = 0.0f;
 
     [CATransaction begin];
     [CATransaction setDisableActions:YES];

@@ -78,6 +78,27 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     UIKeyModifierFlags comboKeyModifierFlags;
 }
 
+- (CGFloat)currentSnapOffset {
+    DataManager* dm = [[DataManager alloc] init];
+    TemporarySettings* s = [dm getSettings];
+    BOOL isPad = [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad;
+    if (!isPad) {
+        return 0.0f;
+    }
+    if (s.snapScreenToTop) {
+        // 只对“外部黑边”（设备 vs 实际串流宽高比）对齐，避免触点映射偏移
+        CGFloat viewWidth = self.bounds.size.width;
+        CGFloat viewHeight = self.bounds.size.height;
+        CGFloat frameAspect = self->streamAspectRatio; // 实际视频帧宽高比
+        if (frameAspect <= 0.0f) frameAspect = 16.0f/9.0f;
+        CGFloat frameHeight = viewWidth / frameAspect; // iPad：按宽等比
+        CGFloat topBlackBar = (viewHeight - frameHeight) / 2.0f;
+        if (topBlackBar < 0) topBlackBar = 0;
+        return topBlackBar;
+    }
+    return 0.0f;
+}
+
 - (void) setupStreamView:(ControllerSupport*)controllerSupport
      interactionDelegate:(id<UserInteractionDelegate>)interactionDelegate
                   config:(StreamConfiguration*)streamConfig
@@ -221,7 +242,12 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     // This is critical to ensure keyboard events are delivered to this
     // StreamView and not our parent UIView, especially on tvOS.
     [self becomeFirstResponder];
+
+    // Apply base snap offset for Metal renderer if needed at startup
+    [self liftMetalVideoViewIfNeeded:0];
+
 }
+
 
 - (void)refreshKeyboardToggleRecognizer:(uint8_t)numberOfTouches{
     [self->_streamFrameTopLayerView removeGestureRecognizer:keyboardToggleRecognizer];
@@ -278,6 +304,8 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     TemporarySettings* currentSettings = [dataMan getSettings];
     
     if ([currentSettings.renderingBackend intValue] == RENDER_METAL) {
+        CGFloat baseOffset = [self currentSnapOffset];
+        CGFloat finalLift = baseOffset + liftHeight;
         // Find the StreamFrameViewController that contains the MetalViewController
         UIViewController* parentVC = nil;
         UIResponder* responder = self.streamFrameTopLayerView;
@@ -297,9 +325,9 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
                     
                     if (metalView) {
                         CGRect metalFrame = metalView.frame;
-                        metalFrame.origin.y = liftHeight > 0 ? -liftHeight : 0;
+                        metalFrame.origin.y = -finalLift;
                         metalView.frame = metalFrame;
-                        NSLog(@"Lifted Metal video view by %f pixels", liftHeight);
+                        NSLog(@"Applied Metal video y-offset: %f (base %f + lift %f)", -finalLift, baseOffset, liftHeight);
                     }
                 }
             }
@@ -564,8 +592,10 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     
     // This logic mimics what iOS does with AVLayerVideoGravityResizeAspect
     CGSize videoSize = [self getVideoAreaSize];
+    // No visual offset is applied at mapping stage when the entire container is shifted
+    CGFloat snapOffset = 0.0f;
     CGPoint videoOrigin = CGPointMake(self.bounds.size.width / 2 - videoSize.width / 2,
-                                      self.bounds.size.height / 2 - videoSize.height / 2);
+                                      self.bounds.size.height / 2 - videoSize.height / 2 - snapOffset);
     
     // Confine the cursor to the video region. We don't just discard events outside
     // the region because we won't always get one exactly when the mouse leaves the region.
@@ -1036,8 +1066,11 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
             videoSize = CGSizeMake(self.bounds.size.width, self.bounds.size.width / streamAspectRatio);
         }
     }
+    // Remove unused variable from previous approach; not used in mapping now
+    // No extra offset here; container shift handles visuals
+    CGFloat snapOffset2 = 0.0f;
     videoOrigin = CGPointMake(self.bounds.size.width / 2 - videoSize.width / 2,
-                              self.bounds.size.height / 2 - videoSize.height / 2);
+                              self.bounds.size.height / 2 - videoSize.height / 2 - snapOffset2);
     
     // Move the cursor on the host if no buttons are pressed.
     // Motion with buttons pressed in handled in touchesMoved:
