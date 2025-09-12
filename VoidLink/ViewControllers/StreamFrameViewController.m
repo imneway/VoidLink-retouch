@@ -90,6 +90,8 @@
     LayoutOnScreenControlsViewController *_layoutOnScreenControlsVC;
     ToolboxViewController* toolBoxViewController;
     UIControl *_toolboxOverlay;
+#pragma mark Snap ratio button
+    UIButton *_snapRatioButton;
 #else
     UITapGestureRecognizer *_menuTapGestureRecognizer;
     UITapGestureRecognizer *_menuDoubleTapGestureRecognizer;
@@ -491,6 +493,8 @@
 
     NSLog(@"frameview gestures: %d", (uint32_t)[self.view.gestureRecognizers count]);
     NSLog(@"streamview gestures: %d", (uint32_t)[_streamView.gestureRecognizers count]);
+    // Ensure ratio button is created/updated after reconfig
+    [self updateSnapRatioButton];
 }
 
 - (void)applySnapToTopIfNeeded {
@@ -503,6 +507,8 @@
         _streamView.originalFrame = f;
         // Restore Metal view
         [_streamView liftMetalVideoViewIfNeeded:0];
+        // Hide button if not enabled
+        if (_snapRatioButton) _snapRatioButton.hidden = YES;
         return;
     }
 
@@ -527,6 +533,42 @@
 
     // Move Metal video view by the same amount (if applicable)
     [_streamView liftMetalVideoViewIfNeeded:topBlackBar];
+
+    // Show/update ratio button
+    [self updateSnapRatioButton];
+}
+
+- (void)updateSnapRatioButton {
+    if (!_snapRatioButton) {
+        _snapRatioButton = [UIButton buttonWithType:UIButtonTypeSystem];
+        _snapRatioButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+        [_snapRatioButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.64] forState:UIControlStateNormal];
+        _snapRatioButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
+        [_snapRatioButton addTarget:self action:@selector(toggleSnapRatio) forControlEvents:UIControlEventTouchUpInside];
+        [self.view addSubview:_snapRatioButton];
+    }
+    // Update title
+    NSString *title = _settings.snapScreenRatioMode.integerValue == 0 ? @"16:9" : @"Full Screen";
+    [_snapRatioButton setTitle:title forState:UIControlStateNormal];
+    _snapRatioButton.hidden = !_settings.snapScreenToTop;
+    if (_snapRatioButton.hidden) return;
+    // Layout at bottom-right (24pt trailing, 12pt bottom)
+    CGSize size = [_snapRatioButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
+    CGFloat x = self.view.bounds.size.width - 24 - size.width;
+    CGFloat y = self.view.bounds.size.height - 12 - size.height;
+    _snapRatioButton.frame = CGRectMake(x, y, size.width, size.height);
+}
+
+- (void)toggleSnapRatio {
+    // Toggle 0<->1
+    NSInteger mode = _settings.snapScreenRatioMode.integerValue == 0 ? 1 : 0;
+    // Persist to NSUserDefaults so侧栏也能读到
+    [[NSUserDefaults standardUserDefaults] setInteger:mode forKey:@"snapScreenRatioMode"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    // 立即更新内存 settings
+    _settings.snapScreenRatioMode = [NSNumber numberWithInteger:mode];
+    // 重新应用布局
+    [self applySnapToTopIfNeeded];
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -556,6 +598,7 @@
     }
 
     self->_streamView.originalFrame = self->_streamView.frame;
+    [self updateSnapRatioButton];
 
     // check to see if external screen is connected/disconnected
 
