@@ -1934,6 +1934,10 @@
         <image name="ChevronCompactUp" width="35" height="10"/>
         <image name="arrow.left.square.fill" catalog="system" width="128" height="114"/>
         <image name="arrow.uturn.backward" catalog="system" width="128" height="113"/>
+        <image name="arrowtriangle.down.fill" catalog="system" width="128" height="120"/>
+        <image name="arrowtriangle.left.fill" catalog="system" width="128" height="113"/>
+        <image name="arrowtriangle.right.fill" catalog="system" width="128" height="113"/>
+        <image name="arrowtriangle.up.fill" catalog="system" width="128" height="120"/>
         <image name="plus.rectangle.fill.on.rectangle.fill" catalog="system" width="128" height="102"/>
         <image name="plus.square.on.square" catalog="system" width="128" height="116"/>
         <image name="questionmark.circle" catalog="system" width="128" height="123"/>

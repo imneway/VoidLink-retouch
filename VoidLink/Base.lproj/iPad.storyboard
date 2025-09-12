@@ -1400,7 +1400,7 @@
                                 </constraints>
                             </view>
                             <stackView opaque="NO" contentMode="scaleToFill" ambiguous="YES" axis="vertical" spacing="8" translatesAutoresizingMaskIntoConstraints="NO" id="z5Q-bW-WQ8" userLabel="widgetPanelStack" customClass="WidgetPanelStackView">
-                                <rect key="frame" x="325" y="156" width="650" height="379.5"/>
+                                <rect key="frame" x="325" y="156" width="650" height="449.5"/>
                                 <subviews>
                                     <label opaque="NO" userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Profile:" textAlignment="center" lineBreakMode="tailTruncation" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="iel-xl-xd9">
                                         <rect key="frame" x="0.0" y="0.0" width="650" height="37"/>
@@ -1415,13 +1415,13 @@
                                         <nil key="highlightedColor"/>
                                     </label>
                                     <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Tap any widget to load configuration (per widget)" textAlignment="center" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="xfv-K0-1CO">
-                                        <rect key="frame" x="0.0" y="42" width="650" height="20.5"/>
+                                        <rect key="frame" x="0.0" y="45" width="650" height="20.5"/>
                                         <fontDescription key="fontDescription" type="system" pointSize="17"/>
                                         <color key="textColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                         <nil key="highlightedColor"/>
                                     </label>
                                     <stackView opaque="NO" contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="GOp-1e-oUF" userLabel="widgetSizeStack">
-                                        <rect key="frame" x="0.0" y="67.5" width="650" height="30"/>
+                                        <rect key="frame" x="0.0" y="73.5" width="650" height="30"/>
                                         <subviews>
                                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="test" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="ZuV-4A-0Zb" userLabel="widgetSizeLabel">
                                                 <rect key="frame" x="0.0" y="0.0" width="160" height="30"/>
@@ -1440,7 +1440,7 @@
                                         </subviews>
                                     </stackView>
                                     <stackView opaque="NO" contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="9Zz-kb-7Ej" userLabel="widgetHeightStack">
-                                        <rect key="frame" x="0.0" y="102.5" width="650" height="30"/>
+                                        <rect key="frame" x="0.0" y="111.5" width="650" height="30"/>
                                         <subviews>
                                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="test" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="sbd-0j-KWS" userLabel="widgetHeightLabel">
                                                 <rect key="frame" x="0.0" y="0.0" width="160" height="30"/>
@@ -1459,7 +1459,7 @@
                                         </subviews>
                                     </stackView>
                                     <stackView opaque="NO" contentMode="scaleToFill" spacing="5" translatesAutoresizingMaskIntoConstraints="NO" id="9ZS-28-txW" userLabel="borderWidthAlphaStack">
-                                        <rect key="frame" x="0.0" y="137.5" width="650" height="30"/>
+                                        <rect key="frame" x="0.0" y="149.5" width="650" height="30"/>
                                         <subviews>
                                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="test" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="Pwa-YK-6Q2" userLabel="widgetAlphaLabel">
                                                 <rect key="frame" x="0.0" y="0.0" width="160" height="30"/>
@@ -1495,7 +1495,7 @@
                                         </subviews>
                                     </stackView>
                                     <stackView contentMode="scaleToFill" spacing="5" translatesAutoresizingMaskIntoConstraints="NO" id="zfD-bd-GEN" userLabel="stickIndicatorOffsetStack">
-                                        <rect key="frame" x="0.0" y="172.5" width="650" height="30"/>
+                                        <rect key="frame" x="0.0" y="187.5" width="650" height="30"/>
                                         <subviews>
                                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="test" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="tG7-oX-P9b" userLabel="stickIndicatorOffsetLabel">
                                                 <rect key="frame" x="0.0" y="0.0" width="160" height="30"/>
@@ -1514,7 +1514,7 @@
                                         </subviews>
                                     </stackView>
                                     <stackView opaque="NO" contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="80D-qe-E5D" userLabel="sensitivityFactorXStack">
-                                        <rect key="frame" x="0.0" y="207.5" width="650" height="30"/>
+                                        <rect key="frame" x="0.0" y="225.5" width="650" height="30"/>
                                         <subviews>
                                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="test" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="vJs-pg-hHe" userLabel="sensitivityFactorLabel">
                                                 <rect key="frame" x="0.0" y="0.0" width="160" height="30"/>
@@ -1533,7 +1533,7 @@
                                         </subviews>
                                     </stackView>
                                     <stackView opaque="NO" contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="CT5-Ap-Gh0" userLabel="sensitivityFactorYStack">
-                                        <rect key="frame" x="0.0" y="242.5" width="650" height="30"/>
+                                        <rect key="frame" x="0.0" y="263.5" width="650" height="30"/>
                                         <subviews>
                                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="test" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="NZO-BM-nef" userLabel="sensitivityFactorYLabel">
                                                 <rect key="frame" x="0.0" y="0.0" width="160" height="30"/>
@@ -1552,7 +1552,7 @@
                                         </subviews>
                                     </stackView>
                                     <stackView opaque="NO" contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="KXB-uJ-onx" userLabel="decelerationRateStack">
-                                        <rect key="frame" x="0.0" y="277.5" width="650" height="30"/>
+                                        <rect key="frame" x="0.0" y="301.5" width="650" height="30"/>
                                         <subviews>
                                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="test" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="Pbt-Tw-dnV" userLabel="decelerationRateLabel">
                                                 <rect key="frame" x="0.0" y="0.0" width="160" height="30"/>
@@ -1571,7 +1571,7 @@
                                         </subviews>
                                     </stackView>
                                     <stackView opaque="NO" contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="GMQ-EQ-Hum" userLabel="mouseDownButtonStack">
-                                        <rect key="frame" x="0.0" y="312.5" width="650" height="31"/>
+                                        <rect key="frame" x="0.0" y="339.5" width="650" height="31"/>
                                         <subviews>
                                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Down Button" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="c1r-Hf-b7t" userLabel="mouseDownButtonLabel">
                                                 <rect key="frame" x="0.0" y="0.0" width="160" height="31"/>
@@ -1598,7 +1598,7 @@
                                         </subviews>
                                     </stackView>
                                     <stackView opaque="NO" contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="LGW-oJ-5Zf" userLabel="slidableStack">
-                                        <rect key="frame" x="0.0" y="348.5" width="650" height="31"/>
+                                        <rect key="frame" x="0.0" y="378.5" width="650" height="31"/>
                                         <subviews>
                                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Slide Activated" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="qNQ-fB-jhY" userLabel="uiLabel">
                                                 <rect key="frame" x="0.0" y="0.0" width="160" height="31"/>
@@ -1632,10 +1632,10 @@
                                         </subviews>
                                     </stackView>
                                     <stackView opaque="NO" contentMode="scaleToFill" spacing="8" translatesAutoresizingMaskIntoConstraints="NO" id="coordinate-control-stack-ipad" userLabel="coordinateControlStack">
-                                        <rect key="frame" x="0.0" y="386.5" width="650" height="32"/>
+                                        <rect key="frame" x="0.0" y="417.5" width="650" height="32"/>
                                         <subviews>
                                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="坐标：[0], [0]" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="coordinate-label-ipad" userLabel="coordinateLabel">
-                                                <rect key="frame" x="0.0" y="0.0" width="200" height="31"/>
+                                                <rect key="frame" x="0.0" y="0.0" width="490" height="32"/>
                                                 <constraints>
                                                     <constraint firstAttribute="width" constant="200" id="coordinate-label-width-ipad"/>
                                                 </constraints>
@@ -1644,14 +1644,14 @@
                                                 <nil key="highlightedColor"/>
                                             </label>
                                             <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="move-up-button-ipad" userLabel="moveUpButton">
-                                                <rect key="frame" x="200" y="0.0" width="24" height="24"/>
-                                                <constraints>
-                                                    <constraint firstAttribute="width" constant="32" id="move-up-width-ipad"/>
-                                                    <constraint firstAttribute="height" constant="32" id="move-up-height-ipad"/>
-                                                </constraints>
-                                                <state key="normal" image="arrowtriangle.up.fill" catalog="system"/>
-                                                <color key="tintColor" red="0.18823529410000001" green="0.69019607839999997" blue="0.78039215689999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <rect key="frame" x="498" y="0.0" width="32" height="32"/>
                                                 <color key="backgroundColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <constraints>
+                                                    <constraint firstAttribute="height" constant="32" id="move-up-height-ipad"/>
+                                                    <constraint firstAttribute="width" constant="32" id="move-up-width-ipad"/>
+                                                </constraints>
+                                                <color key="tintColor" red="0.18823529410000001" green="0.69019607839999997" blue="0.78039215689999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <state key="normal" image="arrowtriangle.up.fill" catalog="system"/>
                                                 <userDefinedRuntimeAttributes>
                                                     <userDefinedRuntimeAttribute type="number" keyPath="layer.cornerRadius">
                                                         <integer key="value" value="6"/>
@@ -1662,14 +1662,14 @@
                                                 </connections>
                                             </button>
                                             <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="move-down-button-ipad" userLabel="moveDownButton">
-                                                <rect key="frame" x="240" y="0.0" width="24" height="24"/>
-                                                <constraints>
-                                                    <constraint firstAttribute="width" constant="32" id="move-down-width-ipad"/>
-                                                    <constraint firstAttribute="height" constant="32" id="move-down-height-ipad"/>
-                                                </constraints>
-                                                <state key="normal" image="arrowtriangle.down.fill" catalog="system"/>
-                                                <color key="tintColor" red="0.18823529410000001" green="0.69019607839999997" blue="0.78039215689999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <rect key="frame" x="538" y="0.0" width="32" height="32"/>
                                                 <color key="backgroundColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <constraints>
+                                                    <constraint firstAttribute="height" constant="32" id="move-down-height-ipad"/>
+                                                    <constraint firstAttribute="width" constant="32" id="move-down-width-ipad"/>
+                                                </constraints>
+                                                <color key="tintColor" red="0.18823529410000001" green="0.69019607839999997" blue="0.78039215689999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <state key="normal" image="arrowtriangle.down.fill" catalog="system"/>
                                                 <userDefinedRuntimeAttributes>
                                                     <userDefinedRuntimeAttribute type="number" keyPath="layer.cornerRadius">
                                                         <integer key="value" value="6"/>
@@ -1680,14 +1680,14 @@
                                                 </connections>
                                             </button>
                                             <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="move-left-button-ipad" userLabel="moveLeftButton">
-                                                <rect key="frame" x="280" y="0.0" width="24" height="24"/>
-                                                <constraints>
-                                                    <constraint firstAttribute="width" constant="32" id="move-left-width-ipad"/>
-                                                    <constraint firstAttribute="height" constant="32" id="move-left-height-ipad"/>
-                                                </constraints>
-                                                <state key="normal" image="arrowtriangle.left.fill" catalog="system"/>
-                                                <color key="tintColor" red="0.18823529410000001" green="0.69019607839999997" blue="0.78039215689999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <rect key="frame" x="578" y="0.0" width="32" height="32"/>
                                                 <color key="backgroundColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <constraints>
+                                                    <constraint firstAttribute="height" constant="32" id="move-left-height-ipad"/>
+                                                    <constraint firstAttribute="width" constant="32" id="move-left-width-ipad"/>
+                                                </constraints>
+                                                <color key="tintColor" red="0.18823529410000001" green="0.69019607839999997" blue="0.78039215689999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <state key="normal" image="arrowtriangle.left.fill" catalog="system"/>
                                                 <userDefinedRuntimeAttributes>
                                                     <userDefinedRuntimeAttribute type="number" keyPath="layer.cornerRadius">
                                                         <integer key="value" value="6"/>
@@ -1698,14 +1698,14 @@
                                                 </connections>
                                             </button>
                                             <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="move-right-button-ipad" userLabel="moveRightButton">
-                                                <rect key="frame" x="320" y="0.0" width="24" height="24"/>
-                                                <constraints>
-                                                    <constraint firstAttribute="width" constant="32" id="move-right-width-ipad"/>
-                                                    <constraint firstAttribute="height" constant="32" id="move-right-height-ipad"/>
-                                                </constraints>
-                                                <state key="normal" image="arrowtriangle.right.fill" catalog="system"/>
-                                                <color key="tintColor" red="0.18823529410000001" green="0.69019607839999997" blue="0.78039215689999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <rect key="frame" x="618" y="0.0" width="32" height="32"/>
                                                 <color key="backgroundColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <constraints>
+                                                    <constraint firstAttribute="height" constant="32" id="move-right-height-ipad"/>
+                                                    <constraint firstAttribute="width" constant="32" id="move-right-width-ipad"/>
+                                                </constraints>
+                                                <color key="tintColor" red="0.18823529410000001" green="0.69019607839999997" blue="0.78039215689999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <state key="normal" image="arrowtriangle.right.fill" catalog="system"/>
                                                 <userDefinedRuntimeAttributes>
                                                     <userDefinedRuntimeAttribute type="number" keyPath="layer.cornerRadius">
                                                         <integer key="value" value="6"/>
@@ -1742,6 +1742,8 @@
                         <outlet property="borderWidthAlphaStack" destination="9ZS-28-txW" id="qxV-2E-g8m"/>
                         <outlet property="chevronImageView" destination="iVZ-Fd-dY7" id="403-Nj-wRx"/>
                         <outlet property="chevronView" destination="hKp-ds-86I" id="Og9-aT-zNH"/>
+                        <outlet property="coordinateControlStack" destination="coordinate-control-stack-ipad" id="coordinate-stack-outlet-ipad"/>
+                        <outlet property="coordinateLabel" destination="coordinate-label-ipad" id="coordinate-label-outlet-ipad"/>
                         <outlet property="currentProfileLabel" destination="iel-xl-xd9" id="PJ0-FX-z6w"/>
                         <outlet property="decelerationRateLabel" destination="Pbt-Tw-dnV" id="ypq-iA-NvQ"/>
                         <outlet property="decelerationRateSlider" destination="nzC-NF-fkv" id="BVc-jj-GzW"/>
@@ -1752,6 +1754,10 @@
                         <outlet property="loadConfigTipLabel" destination="xfv-K0-1CO" id="GeX-Qc-CLA"/>
                         <outlet property="mouseButtonDownSelector" destination="H8S-aI-EBo" id="em1-fK-Cpb"/>
                         <outlet property="mouseDownButtonStack" destination="GMQ-EQ-Hum" id="sxb-40-3NI"/>
+                        <outlet property="moveDownButton" destination="move-down-button-ipad" id="move-down-outlet-ipad"/>
+                        <outlet property="moveLeftButton" destination="move-left-button-ipad" id="move-left-outlet-ipad"/>
+                        <outlet property="moveRightButton" destination="move-right-button-ipad" id="move-right-outlet-ipad"/>
+                        <outlet property="moveUpButton" destination="move-up-button-ipad" id="move-up-outlet-ipad"/>
                         <outlet property="saveButton" destination="uda-zt-xrG" id="FyB-WY-rri"/>
                         <outlet property="sensitivityXLabel" destination="vJs-pg-hHe" id="RRw-Zq-LUa"/>
                         <outlet property="sensitivityXSlider" destination="DiG-XX-r8c" id="fz5-Et-1WV"/>
@@ -1780,12 +1786,6 @@
                         <outlet property="widgetSizeLabel" destination="ZuV-4A-0Zb" id="Nr8-Wg-POM"/>
                         <outlet property="widgetSizeSlider" destination="Xzq-VC-hP3" id="lW5-0R-s5U"/>
                         <outlet property="widgetSizeStack" destination="GOp-1e-oUF" id="v7q-w3-Tls"/>
-                        <outlet property="coordinateLabel" destination="coordinate-label-ipad" id="coordinate-label-outlet-ipad"/>
-                        <outlet property="moveUpButton" destination="move-up-button-ipad" id="move-up-outlet-ipad"/>
-                        <outlet property="moveDownButton" destination="move-down-button-ipad" id="move-down-outlet-ipad"/>
-                        <outlet property="moveLeftButton" destination="move-left-button-ipad" id="move-left-outlet-ipad"/>
-                        <outlet property="moveRightButton" destination="move-right-button-ipad" id="move-right-outlet-ipad"/>
-                        <outlet property="coordinateControlStack" destination="coordinate-control-stack-ipad" id="coordinate-stack-outlet-ipad"/>
                     </connections>
                 </viewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="dev-Ck-vTF" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
@@ -1900,6 +1900,10 @@
         <image name="ChevronCompactUp" width="35" height="10"/>
         <image name="arrow.left.square.fill" catalog="system" width="128" height="114"/>
         <image name="arrow.uturn.backward" width="19.06089973449707" height="18.594499588012695"/>
+        <image name="arrowtriangle.down.fill" catalog="system" width="128" height="120"/>
+        <image name="arrowtriangle.left.fill" catalog="system" width="128" height="113"/>
+        <image name="arrowtriangle.right.fill" catalog="system" width="128" height="113"/>
+        <image name="arrowtriangle.up.fill" catalog="system" width="128" height="120"/>
         <image name="plus.rectangle.fill.on.rectangle.fill" catalog="system" width="128" height="102"/>
         <image name="plus.square.on.square" catalog="system" width="128" height="116"/>
         <image name="questionmark.circle" catalog="system" width="128" height="123"/>
@@ -1913,7 +1917,7 @@
         <image name="video.and.waveform" catalog="system" width="128" height="94"/>
         <image name="xmark" catalog="system" width="128" height="113"/>
         <systemColor name="linkColor">
-            <color red="0.0" green="0.47843137254901963" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+            <color red="0.0" green="0.47843137250000001" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
         </systemColor>
         <systemColor name="secondarySystemGroupedBackgroundColor">
             <color white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
@@ -1922,13 +1926,13 @@
             <color white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
         </systemColor>
         <systemColor name="systemBrownColor">
-            <color red="0.63529411764705879" green="0.51764705882352946" blue="0.36862745098039218" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+            <color red="0.63529411759999999" green="0.51764705879999995" blue="0.36862745099999999" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
         </systemColor>
         <systemColor name="systemGray3Color">
-            <color red="0.7803921568627451" green="0.7803921568627451" blue="0.80000000000000004" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+            <color red="0.78039215689999997" green="0.78039215689999997" blue="0.80000000000000004" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
         </systemColor>
         <systemColor name="systemTealColor">
-            <color red="0.18823529411764706" green="0.69019607843137254" blue="0.7803921568627451" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+            <color red="0.18823529410000001" green="0.69019607839999997" blue="0.78039215689999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
         </systemColor>
     </resources>
 </document>
