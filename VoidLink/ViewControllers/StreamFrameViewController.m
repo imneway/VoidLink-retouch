@@ -1277,6 +1277,9 @@
         [nc postNotificationName:@"ScreenChanged" object:self];
     }
     [self reConfigStreamViewRealtime];
+    
+    // Update time and battery display layout after resize
+    [self updateTimeBatteryDisplay];
 }
 
 
@@ -1842,6 +1845,8 @@
     dispatch_block_t block = dispatch_block_create(0, ^{
         [self handleViewResize];
         [self applySnapToTopIfNeeded];
+        // Update time and battery display layout after rotation
+        [self updateTimeBatteryDisplay];
     });
     _delayedRemoveExtScreen = block;
     dispatch_time_t delayTime = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayInSeconds * NSEC_PER_SEC));
