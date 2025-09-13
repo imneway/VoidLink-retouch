@@ -37,7 +37,11 @@
             @"Save": @"保存",
             @"Cancel": @"取消",
             @"CurrentLayoutShort": @"当前布局",
-            @"SelectLayoutToPair:%@": @"选择要绑定的%@布局"
+            @"SelectLayoutToPair:%@": @"选择要绑定的%@布局",
+            @"LockToCurrentOrientation": @"锁定为当前方向布局",
+            @"UnlockOrientation": @"解除锁定",
+            @"LockOrientationHelpTitle": @"方向锁定说明",
+            @"LockOrientationHelpMessage": @"点击后会把此布局锁定到当前屏幕方向。横屏和竖屏可各自锁定不同布局，旋转时系统会自动切换。"
         };
         enDict = @{
             @"PairingHelpTitle": @"Pairing Help",
@@ -54,7 +58,11 @@
             @"Save": @"Save",
             @"Cancel": @"Cancel",
             @"CurrentLayoutShort": @"Current",
-            @"SelectLayoutToPair:%@": @"Select layout to pair: %@"
+            @"SelectLayoutToPair:%@": @"Select layout to pair: %@",
+            @"LockToCurrentOrientation": @"Lock to Current Orientation",
+            @"UnlockOrientation": @"Unlock Orientation",
+            @"LockOrientationHelpTitle": @"Orientation Lock Help",
+            @"LockOrientationHelpMessage": @"Tapping will lock this layout to the current screen orientation. You can lock different layouts for Landscape and Portrait. The system will auto switch when rotating."
         };
     });
     return [prefix isEqualToString:@"zh"] ? zhDict : enDict;

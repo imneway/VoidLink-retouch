@@ -30,6 +30,10 @@ const double NAV_BAR_HEIGHT = 50;
     NSString *storedNavTitle;
 }
 
+// 新增：按方向锁定相关的持久化 Key
+static NSString * const kOSCLockedPortraitProfileName = @"OSCLockedPortraitProfileName";
+static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapeProfileName";
+
 @synthesize tableView;
 
 - (UIInterfaceOrientationMask)getCurrentOrientation{
@@ -179,6 +183,13 @@ const double NAV_BAR_HEIGHT = 50;
     if (self.systemBottomToolbar) {
         [self updateSystemToolbarItems];
     }
+    // 进入时应用当前方向锁定，并滚动到选中项
+    [self osc_applyLockForCurrentOrientation];
+    NSInteger idx = [profilesManager getIndexOfSelectedProfile];
+    if (idx >= 0 && idx < [[profilesManager getAllProfiles] count]) {
+        NSIndexPath *ip = [NSIndexPath indexPathForRow:idx inSection:0];
+        [self.tableView scrollToRowAtIndexPath:ip atScrollPosition:UITableViewScrollPositionMiddle animated:YES];
+    }
 }
 
 
@@ -270,6 +281,71 @@ const double NAV_BAR_HEIGHT = 50;
         self.needToUpdateOscLayoutTVC();
     }
     [[NSNotificationCenter defaultCenter] postNotificationName:@"OscLayoutProfileSelctedInTableView" object:self]; // notify other view that oscLayoutManager is closing
+}
+
+// MARK: - 方向锁定 辅助方法
+
+// 当前是否横屏（以视图 bounds 判断更稳妥）
+- (BOOL)osc_isCurrentLandscapeInViewBounds {
+    return self.view.bounds.size.width > self.view.bounds.size.height;
+}
+
+// 获取当前方向对应的锁定名 Key
+- (NSString *)osc_lockKeyForLandscape:(BOOL)isLandscape {
+    return isLandscape ? kOSCLockedLandscapeProfileName : kOSCLockedPortraitProfileName;
+}
+
+// 读取某方向锁定的布局名
+- (NSString *)osc_lockedProfileNameForLandscape:(BOOL)isLandscape {
+    NSString *key = [self osc_lockKeyForLandscape:isLandscape];
+    return [[NSUserDefaults standardUserDefaults] stringForKey:key];
+}
+
+// 设置某方向锁定的布局名（nil 表示解除锁定）
+- (void)osc_setLockedProfileName:(NSString *)profileName forLandscape:(BOOL)isLandscape {
+    NSString *key = [self osc_lockKeyForLandscape:isLandscape];
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    if (profileName) {
+        [ud setObject:profileName forKey:key];
+    } else {
+        [ud removeObjectForKey:key];
+    }
+    [ud synchronize];
+}
+
+// 当前方向是否已锁定
+- (BOOL)osc_isLockedForCurrentOrientation {
+    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
+    NSString *locked = [self osc_lockedProfileNameForLandscape:isLandscape];
+    return (locked.length > 0);
+}
+
+// 应用当前方向的锁定：若存在锁定，则强制切换到被锁定的布局
+- (void)osc_applyLockForCurrentOrientation {
+    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
+    NSString *lockedName = [self osc_lockedProfileNameForLandscape:isLandscape];
+    if (lockedName.length == 0) {
+        return;
+    }
+    // 若锁定的布局不存在或为模板，忽略（自动解除）
+    NSMutableArray *all = [profilesManager getAllProfiles];
+    OSCProfile *found = nil;
+    for (OSCProfile *p in all) {
+        if ([p.name isEqualToString:lockedName]) { found = p; break; }
+    }
+    if (!found) {
+        [self osc_setLockedProfileName:nil forLandscape:isLandscape];
+        return;
+    }
+    if ([profilesManager isTemplateProfile:found.name]) {
+        [self osc_setLockedProfileName:nil forLandscape:isLandscape];
+        return;
+    }
+    if (![[[profilesManager getSelectedProfile] name] isEqualToString:found.name]) {
+        [profilesManager setProfileToSelected:found.name];
+        // 使用统一刷新：包含表格刷新、工具栏状态同步与外部视图通知
+        [self profileViewRefresh];
+    }
 }
 
 - (IBAction) deleteTapped:(id)sender {
@@ -431,13 +507,16 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
         return cell;
     }
     
-    // 名称 + 可选“横屏/竖屏”胶囊
+    // 名称 + 可选“横屏/竖屏”胶囊 + 锁定标识
     NSString *baseName = profile.name ?: @"未命名配置";  // 防止name为nil
 
     // 模板布局不再添加 emoji
 
-    // 配对模式下的可选性与配色
+    // 配对模式下的可选性与配色 + 锁定态置灰
     BOOL canSelect = [self canSelectProfileForPairing:profile];
+    BOOL isLandscapeNow = [self osc_isCurrentLandscapeInViewBounds];
+    NSString *lockedNameNow = [self osc_lockedProfileNameForLandscape:isLandscapeNow];
+    BOOL lockedActive = lockedNameNow.length > 0;
     BOOL isCurrentSelectedProfileRow = [[[profilesManager getSelectedProfile] name] isEqualToString:profile.name];
     BOOL isPairSelectionRow = (self.isPairingMode && self.selectedProfileForPairing && [self.selectedProfileForPairing isEqualToString:profile.name]);
     UIColor *nameColor = [UIColor blackColor];
@@ -463,9 +542,17 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
             cell.contentView.alpha = 1.0;
         }
     } else {
-        nameColor = isCurrentSelectedProfileRow ? [UIColor systemTealColor] : [UIColor blackColor];
-        cell.userInteractionEnabled = YES;
-        cell.contentView.alpha = 1.0;
+        if (lockedActive) {
+            // 锁定中：仅锁定的布局可交互，其他置灰
+            BOOL isLockedRow = [profile.name isEqualToString:lockedNameNow];
+            nameColor = isLockedRow ? [UIColor systemTealColor] : [[UIColor blackColor] colorWithAlphaComponent:0.3];
+            cell.userInteractionEnabled = isLockedRow;
+            cell.contentView.alpha = isLockedRow ? 1.0 : 0.7;
+        } else {
+            nameColor = isCurrentSelectedProfileRow ? [UIColor systemTealColor] : [UIColor blackColor];
+            cell.userInteractionEnabled = YES;
+            cell.contentView.alpha = 1.0;
+        }
     }
 
     UIFont *nameFont = [UIFont systemFontOfSize:20 weight:UIFontWeightMedium];
@@ -485,6 +572,33 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
              att.image = pill;
              att.bounds = CGRectMake(0, -2, pill.size.width, pill.size.height);
              [line appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
+         }
+     }
+
+     // 锁定场景：在标题右侧追加 lock.fill 图标（iOS13+），否则回退“🔒”
+     if (lockedActive && [profile.name isEqualToString:lockedNameNow]) {
+         NSAttributedString *space2 = [[NSAttributedString alloc] initWithString:@" " attributes:@{NSKernAttributeName:@(4)}];
+         [line appendAttributedString:space2];
+         BOOL appended = NO;
+         #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 130000
+         if (@available(iOS 13.0, *)) {
+             UIImage *sys = [UIImage systemImageNamed:@"lock.fill"];
+             if (sys) {
+                 UIImage *tinted = [sys imageWithTintColor:[UIColor systemTealColor]];
+                 if (tinted) {
+                     NSTextAttachment *lockAtt = [[NSTextAttachment alloc] init];
+                     CGFloat s = 16.0;
+                     lockAtt.image = tinted;
+                     lockAtt.bounds = CGRectMake(0, -2, s, s);
+                     [line appendAttributedString:[NSAttributedString attributedStringWithAttachment:lockAtt]];
+                     appended = YES;
+                 }
+             }
+         }
+         #endif
+         if (!appended) {
+             NSAttributedString *fallback = [[NSAttributedString alloc] initWithString:@"🔒" attributes:@{NSForegroundColorAttributeName:[UIColor systemTealColor]}];
+             [line appendAttributedString:fallback];
          }
      }
      
@@ -527,16 +641,9 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     }
     
     // Configure the checkmark accessory
-    if (self.isPairingMode) {
-        // 配对模式：隐藏当前使用布局的小勾；仅对选中的配对目标显示小勾
-        cell.accessoryType = UITableViewCellAccessoryNone;
-    } else {
-        if (isCurrentSelectedProfileRow) {
-            cell.accessoryType = UITableViewCellAccessoryCheckmark;
-        } else {
-            cell.accessoryType = UITableViewCellAccessoryNone;
-        }
-    }
+    // 统一取消 accessoryView/Type，避免系统小勾遗留或样式干扰
+    cell.accessoryView = nil;
+    cell.accessoryType = UITableViewCellAccessoryNone;
     
     // Remove existing custom separators to avoid duplicates
     UIView *existingSeparator = [cell viewWithTag:100];
@@ -736,33 +843,37 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
         return;
     }
     
+    // 锁定生效：当前方向锁定时，禁止切换到其它布局
+    BOOL isLandscapeNow = [self osc_isCurrentLandscapeInViewBounds];
+    NSString *lockedNameNow = [self osc_lockedProfileNameForLandscape:isLandscapeNow];
+    if (lockedNameNow.length > 0) {
+        // 强制保持当前选中为锁定布局
+        [self osc_applyLockForCurrentOrientation];
+        [tableView deselectRowAtIndexPath:indexPath animated:YES];
+        return;
+    }
+
     // 普通模式：选择布局逻辑
     NSIndexPath *selectedIndexPath = [NSIndexPath indexPathForRow:indexPath.row inSection:0];
     NSIndexPath *lastSelectedIndexPath = [NSIndexPath indexPathForRow:[profilesManager getIndexOfSelectedProfile] inSection:0];
 
     if (selectedIndexPath != lastSelectedIndexPath) {
-        // 如果选择的是已配对的布局，需要检查是否应该切换到对应方向的布局
-        if (profile.isPaired) {
-            BOOL isCurrentLandscape = [profilesManager isCurrentOrientationLandscape];
-            OSCProfile *targetProfile = [profilesManager getProfileForCurrentOrientation:profile.name isLandscape:isCurrentLandscape];
-            if (targetProfile && ![targetProfile.name isEqualToString:profile.name]) {
-                // 切换到对应方向的布局
-                profile = targetProfile;
-                indexPath = [NSIndexPath indexPathForRow:[[profilesManager getAllProfiles] indexOfObject:targetProfile] inSection:0];
-                selectedIndexPath = indexPath;
-            }
-        }
+        // 旧配对逻辑暂时禁用，避免与锁定冲突
+        // if (profile.isPaired) {
+        //     BOOL isCurrentLandscape = [profilesManager isCurrentOrientationLandscape];
+        //     OSCProfile *targetProfile = [profilesManager getProfileForCurrentOrientation:profile.name isLandscape:isCurrentLandscape];
+        //     if (targetProfile && ![targetProfile.name isEqualToString:profile.name]) {
+        //         profile = targetProfile;
+        //         indexPath = [NSIndexPath indexPathForRow:[[profilesManager getAllProfiles] indexOfObject:targetProfile] inSection:0];
+        //         selectedIndexPath = indexPath;
+        //     }
+        // }
         
-        /* Place checkmark on selected cell and set profile associated with cell as selected profile */
-        UITableViewCell *selectedCell = [tableView cellForRowAtIndexPath: selectedIndexPath];
-        selectedCell.accessoryType = UITableViewCellAccessoryCheckmark;
-        // 选中时的勾颜色统一为青色
-        selectedCell.accessoryView.tintColor = [UIColor systemTealColor];
+        /* 仅更新选中，不再使用系统 accessory 勾号，避免残留 */
         [profilesManager setProfileToSelected: profile.name];   // set the profile associated with this cell's 'isSelected' property to YES
         
-        /* Remove checkmark on the previously selected cell  */
-        UITableViewCell *lastSelectedCell = [tableView cellForRowAtIndexPath: lastSelectedIndexPath];
-        lastSelectedCell.accessoryType = UITableViewCellAccessoryNone; 
+        /* 刷新可见行，统一由 cellForRow 绘制 */
+        [tableView reloadRowsAtIndexPaths:@[selectedIndexPath, lastSelectedIndexPath] withRowAnimation:UITableViewRowAnimationNone];
         [tableView deselectRowAtIndexPath:lastSelectedIndexPath animated:YES];
         
         // 更新工具栏按钮
@@ -840,34 +951,17 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     }
     
     OSCProfile *selectedProfile = [profilesManager getSelectedProfile];
-    BOOL isCurrentProfilePaired = selectedProfile ? selectedProfile.isPaired : NO;
-    BOOL isLandscape = [profilesManager isCurrentOrientationLandscape];
-    
-    if (self.isPairingMode) {
-        // 配对模式：显示保存和取消按钮
-        [self createPairingModeButtons];
-    } else {
-        // 普通模式：检查是否为模板布局
-        if (selectedProfile && [profilesManager isTemplateProfile:selectedProfile.name]) {
-            // 模板布局不显示配对相关按钮
-            return;
-        }
-        
-        // 普通模式：显示配对/解除配对按钮
-        NSString *buttonTitle;
-        SEL buttonAction;
-        
-        if (isCurrentProfilePaired) {
-            buttonTitle = @"解除配对";
-            buttonAction = @selector(unpairTapped:);
-        } else {
-            NSString *oppositeOrientation = isLandscape ? @"竖屏" : @"横屏";
-            buttonTitle = [NSString stringWithFormat:@"添加%@布局", oppositeOrientation];
-            buttonAction = @selector(startPairingTapped:);
-        }
-        
-        [self createNormalModeButtonWithTitle:buttonTitle action:buttonAction];
+    if (selectedProfile && [profilesManager isTemplateProfile:selectedProfile.name]) {
+        return;
     }
+
+    // 新逻辑：方向锁定按钮
+    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
+    NSString *lockedName = [self osc_lockedProfileNameForLandscape:isLandscape];
+    BOOL isLocked = (lockedName.length > 0);
+    NSString *title = isLocked ? @"解除锁定" : @"锁定为当前方向布局";
+    SEL action = isLocked ? @selector(osc_unlockCurrentOrientationTapped:) : @selector(osc_lockCurrentOrientationTapped:);
+    [self createNormalModeButtonWithTitle:title action:action];
 }
 
 #pragma mark - System UIToolbar Support
@@ -879,50 +973,21 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 
     OSCProfile *selectedProfile = [profilesManager getSelectedProfile];
     BOOL isTemplate = selectedProfile && [profilesManager isTemplateProfile:selectedProfile.name];
-    BOOL isCurrentProfilePaired = selectedProfile ? selectedProfile.isPaired : NO;
-    BOOL isLandscape = [profilesManager isCurrentOrientationLandscape];
+    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
 
-    if (self.isPairingMode) {
-        // 配对模式：主按钮=保存；右侧问号=取消
-        self.pairRotationalToolbarItem.title = [LocalizationHelper localizedStringForKey:@"Save"];
-        self.pairRotationalToolbarItem.enabled = (self.selectedProfileForPairing != nil);
-        self.pairRotationalToolbarItem.target = self;
-        self.pairRotationalToolbarItem.action = @selector(savePairingTapped:);
-        if (self.helpToolbarItem) {
-            self.helpToolbarItem.title = [LocalizationHelper localizedStringForKey:@"Cancel"];
-            self.helpToolbarItem.image = nil;
-            self.helpToolbarItem.target = self;
-            self.helpToolbarItem.action = @selector(cancelPairingTapped:);
-            self.helpToolbarItem.enabled = YES;
-        }
-        // 强制保持 items 排列：flexibleSpace + pair + help
-        UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-        if (self.helpToolbarItem) {
-            [self.systemBottomToolbar setItems:@[flex, self.pairRotationalToolbarItem, self.helpToolbarItem] animated:NO];
-        }
-        return;
-    }
-
-    // 普通模式
+    // 新逻辑：系统 UIToolbar 的主按钮作为“锁定/解除锁定”
     self.pairRotationalToolbarItem.enabled = !isTemplate;
     self.pairRotationalToolbarItem.target = self;
-    self.pairRotationalToolbarItem.action = @selector(pairRotationalToolbarTapped:);
-
-    if (isTemplate) {
-        NSString *opposite = isLandscape ? [LocalizationHelper localizedStringForKey:@"PortraitShort"] : [LocalizationHelper localizedStringForKey:@"LandscapeShort"];
-        self.pairRotationalToolbarItem.title = [LocalizationHelper localizedStringForKey:@"BindOrientationLayout:%@", opposite];
-        self.pairRotationalToolbarItem.enabled = NO;
-    } else if (isCurrentProfilePaired) {
-        self.pairRotationalToolbarItem.title = [LocalizationHelper localizedStringForKey:@"Unpair"];
-    } else {
-        NSString *opposite = isLandscape ? [LocalizationHelper localizedStringForKey:@"PortraitShort"] : [LocalizationHelper localizedStringForKey:@"LandscapeShort"];
-        self.pairRotationalToolbarItem.title = [LocalizationHelper localizedStringForKey:@"BindOrientationLayout:%@", opposite];
-    }
+    NSString *lockedName = [self osc_lockedProfileNameForLandscape:isLandscape];
+    BOOL isLocked = (lockedName.length > 0);
+    self.pairRotationalToolbarItem.action = isLocked ? @selector(osc_unlockCurrentOrientationTapped:) : @selector(osc_lockCurrentOrientationTapped:);
+    // 英文不加空格；同时支持中文本地化键
+    self.pairRotationalToolbarItem.title = isLocked ? [LocalizationHelper localizedStringForKey:@"UnlockOrientation"] : [LocalizationHelper localizedStringForKey:@"LockToCurrentOrientation"];
 
     if (self.helpToolbarItem) {
-        // 正常模式：问号作为“帮助”，点击弹出说明
+        // 问号作为“帮助”，点击弹出说明
         self.helpToolbarItem.title = nil; // 保持问号图标
-        // 退出配对模式后恢复问号图标
+        // 恢复问号图标
         #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 130000
         if (@available(iOS 13.0, *)) {
             self.helpToolbarItem.image = [UIImage systemImageNamed:@"questionmark.circle"];
@@ -941,27 +1006,20 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 }
 
 - (IBAction)pairRotationalToolbarTapped:(id)sender {
-    if (self.isPairingMode) {
-        if (self.selectedProfileForPairing) {
-            [self savePairingTapped:sender];
-        } else {
-            [self cancelPairingTapped:sender];
-        }
-        return;
-    }
-
-    OSCProfile *selectedProfile = [profilesManager getSelectedProfile];
-    if (selectedProfile && selectedProfile.isPaired) {
-        [self unpairTapped:sender];
-    } else {
-        [self startPairingTapped:sender];
-    }
-    [self updateSystemToolbarItems];
+    // 旧配对入口不再使用，改由系统 item 直接绑定为锁定/解除锁定动作
 }
 
 - (IBAction)helpToolbarTapped:(id)sender {
-    NSString *message = [LocalizationHelper localizedStringForKey:@"PairingHelpMessage"];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"PairingHelpTitle"] message:message preferredStyle:UIAlertControllerStyleAlert];
+    // 更新为锁定功能的帮助
+    NSString *message = [LocalizationHelper localizedStringForKey:@"LockOrientationHelpMessage"];
+    if (!message || message.length == 0 || [message isEqualToString:@"LockOrientationHelpMessage"]) {
+        message = @"点击后会把此布局锁定到当前屏幕方向。横屏和竖屏可各自锁定不同布局，旋转时系统会自动切换.\n\nTapping will lock this layout to the current screen orientation. You can lock different layouts for Landscape and Portrait. The system will auto switch when rotating.";
+    }
+    NSString *title = [LocalizationHelper localizedStringForKey:@"LockOrientationHelpTitle"];
+    if (!title || title.length == 0 || [title isEqualToString:@"LockOrientationHelpTitle"]) {
+        title = @"方向锁定 / Orientation Lock";
+    }
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"OK"] style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
@@ -1013,6 +1071,40 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     ]];
     
     NSLog(@"普通模式按钮创建成功：%@", title);
+}
+
+- (IBAction)osc_lockCurrentOrientationTapped:(id)sender {
+    OSCProfile *current = [profilesManager getSelectedProfile];
+    if (!current || [profilesManager isTemplateProfile:current.name]) {
+        return;
+    }
+    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
+    [self osc_setLockedProfileName:current.name forLandscape:isLandscape];
+    // 锁定后立即应用（可避免闪烁）
+    [self osc_applyLockForCurrentOrientation];
+    [self updateToolbarButtons];
+    if (self.systemBottomToolbar) {
+        [self updateSystemToolbarItems];
+    }
+    // 锁定后，立即刷新列表以更新置灰、锁图标等状态
+    [self.tableView reloadData];
+    // 滚动到选中项，确保可见
+    NSInteger idx = [profilesManager getIndexOfSelectedProfile];
+    if (idx >= 0 && idx < [[profilesManager getAllProfiles] count]) {
+        NSIndexPath *ip = [NSIndexPath indexPathForRow:idx inSection:0];
+        [self.tableView scrollToRowAtIndexPath:ip atScrollPosition:UITableViewScrollPositionMiddle animated:YES];
+    }
+}
+
+- (IBAction)osc_unlockCurrentOrientationTapped:(id)sender {
+    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
+    [self osc_setLockedProfileName:nil forLandscape:isLandscape];
+    [self updateToolbarButtons];
+    if (self.systemBottomToolbar) {
+        [self updateSystemToolbarItems];
+    }
+    // 解除锁定后，立即刷新列表以更新置灰与锁图标
+    [self.tableView reloadData];
 }
 
 - (IBAction)startPairingTapped:(id)sender {
@@ -1143,7 +1235,22 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     
     // 延迟一小段时间，让旋转完成后再检测方向
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self performPairedLayoutSwitchingForTableView];
+        // 优先应用方向锁定，并统一刷新
+        [self osc_applyLockForCurrentOrientation];
+        // 无论是否切换了选中布局，强制刷新列表与工具栏，确保UI同步
+        [self.tableView reloadData];
+        [self updateToolbarButtons];
+        if (self.systemBottomToolbar) {
+            [self updateSystemToolbarItems];
+        }
+        // 旋转后滚动到选中项，保持 UI 同步
+        NSInteger idx = [self->profilesManager getIndexOfSelectedProfile];
+        if (idx >= 0 && idx < [[self->profilesManager getAllProfiles] count]) {
+            NSIndexPath *ip = [NSIndexPath indexPathForRow:idx inSection:0];
+            [self.tableView scrollToRowAtIndexPath:ip atScrollPosition:UITableViewScrollPositionMiddle animated:YES];
+        }
+        // 旧配对自动切换暂时禁用，避免与锁定冲突
+        // [self performPairedLayoutSwitchingForTableView];
         // 简化：处理完成后立即重置标志
         self.isProcessingOrientationChange = NO;
     });

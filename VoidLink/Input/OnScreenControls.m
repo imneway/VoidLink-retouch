@@ -411,6 +411,13 @@ static float L3_Y;
     // belows are orginal codes:
     switch (self._level) {
         case OnScreenControlsLevelOff:
+            // 统一清理所有可能存在的旧图层，避免叠加
+            [self hideButtons];
+            [self hideStartSelect];
+            [self hideBumpers];
+            [self hideTriggers];
+            [self hideSticks];
+            [self hideL3R3];
             [self hideButtons];
             [self hideBumpers];
             [self hideTriggers];

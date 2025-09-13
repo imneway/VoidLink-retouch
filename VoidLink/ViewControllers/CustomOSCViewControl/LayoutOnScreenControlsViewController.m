@@ -41,6 +41,47 @@
     UIImpactFeedbackGenerator *vibrationGenerator;
 }
 
+// MARK: - 方向锁定 持久化Key（与列表页一致）
+static NSString * const kOSCLockedPortraitProfileName = @"OSCLockedPortraitProfileName";
+static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapeProfileName";
+
+// 根据当前视图 bounds 判断是否横屏
+- (BOOL)osc_isCurrentLandscapeInViewBounds {
+    return self.view.bounds.size.width > self.view.bounds.size.height;
+}
+
+// 获取锁定名
+- (NSString *)osc_lockedProfileNameForLandscape:(BOOL)isLandscape {
+    NSString *key = isLandscape ? kOSCLockedLandscapeProfileName : kOSCLockedPortraitProfileName;
+    return [[NSUserDefaults standardUserDefaults] stringForKey:key];
+}
+
+// 应用锁定并在需要时重载 UI
+- (void)osc_applyLockForCurrentOrientationAndReloadIfNeeded {
+    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
+    NSString *lockedName = [self osc_lockedProfileNameForLandscape:isLandscape];
+    if (lockedName.length == 0) {
+        return;
+    }
+    NSMutableArray *all = [profilesManager getAllProfiles];
+    OSCProfile *found = nil;
+    for (OSCProfile *p in all) {
+        if ([p.name isEqualToString:lockedName]) { found = p; break; }
+    }
+    if (!found) {
+        return;
+    }
+    if ([profilesManager isTemplateProfile:found.name]) {
+        return;
+    }
+    if (![[[profilesManager getSelectedProfile] name] isEqualToString:found.name]) {
+        [profilesManager setProfileToSelected:found.name];
+        // 在编辑界面需要重载两套控件
+        [self reloadLegacyOnScreenControls];
+        [self reloadOnScreenWidgetViews];
+    }
+}
+
 @synthesize trashCanButton;
 @synthesize undoButton;
 @synthesize OSCSegmentSelected;
@@ -228,6 +269,8 @@
     selectedWidgetView = nil;
     widgetPanelStoredCenter = self.widgetPanelStack.center;
     [super viewDidAppear:animated];
+    // 进入编辑界面时按当前方向应用锁定
+    [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
 }
 
 - (void)viewWillAppear:(BOOL)animated{
@@ -321,6 +364,10 @@
     NSLog(@"✅ 设置 viewWillBeResized = true");
     [self hideStickIndicators];
     if(!_quickSwitchEnabled) [self saveTapped:nil];
+    // 旋转开始时，先行应用方向锁定（下一个runloop再刷新全局UI）
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
+    });
 }
 
 - (void)deviceOrientationDidChange{
@@ -338,8 +385,8 @@
         return;
     }
     
-    // 在串流界面中，直接处理配对布局切换，不需要等待viewWillBeResized标志
-    [self handlePairedLayoutSwitching];
+    // 在串流界面中，优先应用“方向锁定”；旧配对逻辑暂时禁用避免冲突
+    [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
 }
 
 - (void)handlePairedLayoutSwitching {
@@ -398,8 +445,10 @@
         return;
     }
     
-    // 处理配对布局切换
-    [self handlePairedLayoutSwitching];
+    // 优先应用方向锁定（编辑界面）
+    [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
+    // 旧配对逻辑暂时禁用，避免与锁定冲突
+    // [self handlePairedLayoutSwitching];
     
     [self setupWidgetPanel];
     [self updateViewBounds];
@@ -1287,6 +1336,8 @@
 
 - (void)handleProfileTablViewDismiss{
     [self profileRefresh];
+    // 关闭列表后，按当前方向应用锁定
+    [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
     if(_quickSwitchEnabled) [self dismissViewControllerAnimated:NO completion:nil];
 }
 

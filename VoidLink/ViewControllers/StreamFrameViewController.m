@@ -104,6 +104,51 @@
 
 }
 
+// MARK: - 方向锁定 持久化Key（与其它页面一致）
+static NSString * const kOSCLockedPortraitProfileName = @"OSCLockedPortraitProfileName";
+static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapeProfileName";
+
+// 根据当前视图 bounds 判断是否横屏
+- (BOOL)osc_isCurrentLandscapeInViewBounds {
+    return self.view.bounds.size.width > self.view.bounds.size.height;
+}
+
+// 读取锁定的布局名
+- (NSString *)osc_lockedProfileNameForLandscape:(BOOL)isLandscape {
+    NSString *key = isLandscape ? kOSCLockedLandscapeProfileName : kOSCLockedPortraitProfileName;
+    return [[NSUserDefaults standardUserDefaults] stringForKey:key];
+}
+
+// 在串流界面应用锁定：切换选中布局并刷新OSC与Widget
+- (void)osc_applyLockForCurrentOrientationInStreamingIfNeeded {
+    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
+    NSString *lockedName = [self osc_lockedProfileNameForLandscape:isLandscape];
+    if (lockedName.length == 0) {
+        return;
+    }
+    OSCProfilesManager *pm = [OSCProfilesManager sharedManager:self.view.bounds];
+    NSMutableArray *all = [pm getAllProfiles];
+    OSCProfile *found = nil;
+    for (OSCProfile *p in all) {
+        if ([p.name isEqualToString:lockedName]) { found = p; break; }
+    }
+    if (!found) {
+        return;
+    }
+    if ([pm isTemplateProfile:found.name]) {
+        return;
+    }
+    if (![[[pm getSelectedProfile] name] isEqualToString:found.name]) {
+        [pm setProfileToSelected:found.name];
+        // 刷新串流界面上的 OSC 与键盘控件
+        if (self->_controllerSupport && self->_streamConfig) {
+            [self->_streamView reloadOnScreenControlsRealtimeWith:(ControllerSupport*)self->_controllerSupport
+                                                         andConfig:(StreamConfiguration*)self->_streamConfig];
+        }
+        [self->_streamView reloadOnScreenWidgetViews];
+    }
+}
+
 - (void)pictureInPictureControllerWillStartPictureInPicture:(AVPictureInPictureController *)pictureInPictureController {
     _streamView.hidden = YES;
     if (self.imguiView) {
@@ -1203,6 +1248,8 @@
              }
              NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
              [nc postNotificationName:@"ScreenChanged" object:self];
+             // 外接屏切换后，按方向应用锁定
+             [self osc_applyLockForCurrentOrientationInStreamingIfNeeded];
         } else {
              Log(LOG_W, @"_streamVideoRenderView is nil when external screen connected.");
         }
@@ -1225,6 +1272,8 @@
         }
         NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
         [nc postNotificationName:@"ScreenChanged" object:self]; // Your existing notification
+        // 外接屏断开后，按方向应用锁定
+        [self osc_applyLockForCurrentOrientationInStreamingIfNeeded];
     }
 }
 
@@ -1275,6 +1324,8 @@
         // Handle resize for AVSB renderer
         NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
         [nc postNotificationName:@"ScreenChanged" object:self];
+        // 尺寸改变时应用锁定
+        [self osc_applyLockForCurrentOrientationInStreamingIfNeeded];
     }
     [self reConfigStreamViewRealtime];
     
@@ -1847,6 +1898,9 @@
         [self applySnapToTopIfNeeded];
         // Update time and battery display layout after rotation
         [self updateTimeBatteryDisplay];
+        // 通知编辑界面优先应用方向锁定（其内部会重载UI）
+        NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
+        [nc postNotificationName:@"ScreenChanged" object:self];
     });
     _delayedRemoveExtScreen = block;
     dispatch_time_t delayTime = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayInSeconds * NSEC_PER_SEC));
