@@ -394,7 +394,7 @@ static float L3_Y;
                 if(_rightStickOpacity == 0) _rightStickOpacity = DEFAULT_STICK_OPACITY; // dealing with invalid sizefactor
             }
             if([buttonState.name isEqualToString:@"upButton"]){
-                _dPadSizeFactor = buttonState.oscLayerSizeFactor / 0.982759;
+                _dPadSizeFactor = buttonState.oscLayerSizeFactor;
                 if(_dPadSizeFactor == 0) _dPadSizeFactor = 1.0; // dealing with invalid sizefactor
             }
         }
@@ -1773,7 +1773,8 @@ static float L3_Y;
     if([layer.name isEqualToString:@"dPad"]){
         for(CALayer* subLayer in layer.sublayers){
             if([subLayer.name isEqualToString:@"upButton"]){
-                sizeFactor = subLayer.bounds.size.height / standardUpDownButtonBounds.size.height;
+                // Use Left/Right button's long side as the single source of truth for dPad scaling
+                sizeFactor = subLayer.bounds.size.height / standardLeftRightButtonBounds.size.width;
                 break;
             }
         }
@@ -1782,12 +1783,14 @@ static float L3_Y;
     // sub controller layers embedded in super layers
     if([layer.name isEqualToString:@"upButton"] ||
        [layer.name isEqualToString:@"downButton"]){
-        sizeFactor = layer.bounds.size.height / standardUpDownButtonBounds.size.height;
+        // Up/Down height equals the long side derived from Left/Right button asset width
+        sizeFactor = layer.bounds.size.height / standardLeftRightButtonBounds.size.width;
     }
     
     if([layer.name isEqualToString:@"leftButton"] ||
        [layer.name isEqualToString:@"rightButton"]){
-        sizeFactor = layer.bounds.size.width / standardUpDownButtonBounds.size.height; // left & right buttons are just 90 rotations of up & down buttons
+        // Left/Right width equals the long side, match the same LR asset long side
+        sizeFactor = layer.bounds.size.width / standardLeftRightButtonBounds.size.width;
     }
     
     if([layer.name isEqualToString:@"leftStick"] ||
