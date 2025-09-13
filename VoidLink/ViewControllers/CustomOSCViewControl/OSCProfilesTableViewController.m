@@ -25,9 +25,6 @@ const double NAV_BAR_HEIGHT = 50;
 
 @implementation OSCProfilesTableViewController {
     OSCProfilesManager *profilesManager;
-    NSArray *storedLeftBarItems;
-    NSArray *storedRightBarItems;
-    NSString *storedNavTitle;
 }
 
 // 新增：按方向锁定相关的持久化 Key
@@ -132,9 +129,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     bgTap.delegate = self;
     [self.view addGestureRecognizer:bgTap];
     
-    // 初始化配对状态
-    self.isPairingMode = NO;
-    self.selectedProfileForPairing = nil;
+    // 初始化状态
     self.isProcessingOrientationChange = NO;
     
     // 设置底部工具栏（自定义bar 与 系统UIToolbar 二选一，系统UIToolbar优先）
@@ -512,68 +507,29 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 
     // 模板布局不再添加 emoji
 
-    // 配对模式下的可选性与配色 + 锁定态置灰
-    BOOL canSelect = [self canSelectProfileForPairing:profile];
+    // 方向锁定状态下的可选性与配色
     BOOL isLandscapeNow = [self osc_isCurrentLandscapeInViewBounds];
     NSString *lockedNameNow = [self osc_lockedProfileNameForLandscape:isLandscapeNow];
     BOOL lockedActive = lockedNameNow.length > 0;
     BOOL isCurrentSelectedProfileRow = [[[profilesManager getSelectedProfile] name] isEqualToString:profile.name];
-    BOOL isPairSelectionRow = (self.isPairingMode && self.selectedProfileForPairing && [self.selectedProfileForPairing isEqualToString:profile.name]);
+    
+    // 在锁定状态下，只有锁定的布局可选，其他布局置灰
+    BOOL canSelect = !lockedActive || [profile.name isEqualToString:lockedNameNow];
     UIColor *nameColor = [UIColor blackColor];
-    if (self.isPairingMode) {
-        if (isPairSelectionRow) {
-            // 选中的配对目标：teal
-            nameColor = [UIColor systemTealColor];
-            cell.userInteractionEnabled = YES;
-            cell.contentView.alpha = 1.0;
-        } else if (isCurrentSelectedProfileRow) {
-            // 当前正在使用的布局：文字 teal，整体不降透明度
-            nameColor = [UIColor systemTealColor];
-            cell.userInteractionEnabled = NO;
-            cell.contentView.alpha = 1.0;
-        } else if (!canSelect) {
-            // 其它不可选：灰
-            nameColor = [UIColor colorWithWhite:0 alpha:0.3];
-            cell.userInteractionEnabled = NO;
-            cell.contentView.alpha = 0.7; // 整体降低 30% 透明度
-        } else {
-            nameColor = [UIColor blackColor];
-            cell.userInteractionEnabled = YES;
-            cell.contentView.alpha = 1.0;
-        }
+    if (!canSelect) {
+        // 其它不可选：灰
+        nameColor = [UIColor colorWithWhite:0 alpha:0.3];
+        cell.userInteractionEnabled = NO;
+        cell.contentView.alpha = 0.7; // 整体降低 30% 透明度
     } else {
-        if (lockedActive) {
-            // 锁定中：仅锁定的布局可交互，其他置灰
-            BOOL isLockedRow = [profile.name isEqualToString:lockedNameNow];
-            nameColor = isLockedRow ? [UIColor systemTealColor] : [[UIColor blackColor] colorWithAlphaComponent:0.3];
-            cell.userInteractionEnabled = isLockedRow;
-            cell.contentView.alpha = isLockedRow ? 1.0 : 0.7;
-        } else {
-            nameColor = isCurrentSelectedProfileRow ? [UIColor systemTealColor] : [UIColor blackColor];
-            cell.userInteractionEnabled = YES;
-            cell.contentView.alpha = 1.0;
-        }
+        nameColor = [UIColor blackColor];
+        cell.userInteractionEnabled = YES;
+        cell.contentView.alpha = 1.0;
     }
 
     UIFont *nameFont = [UIFont systemFontOfSize:20 weight:UIFontWeightMedium];
     NSMutableAttributedString *line = [[NSMutableAttributedString alloc] initWithString:baseName attributes:@{NSFontAttributeName:nameFont, NSForegroundColorAttributeName:nameColor}];
      
-     if (profile.isPaired) {
-         // 4pt 间距
-         NSAttributedString *space = [[NSAttributedString alloc] initWithString:@" " attributes:@{NSKernAttributeName:@(4)}];
-         [line appendAttributedString:space];
-         
-         NSString *pillText = profile.isLandscapeLayout ? @"横屏" : @"竖屏";
-         BOOL pillDisabled = (self.isPairingMode && (!canSelect || isCurrentSelectedProfileRow));
-         BOOL pillSelected = self.isPairingMode ? isPairSelectionRow : isCurrentSelectedProfileRow;
-         UIImage *pill = [self osc_makeOrientationPill:pillText selected:pillSelected disabled:pillDisabled];
-         if (pill) {
-             NSTextAttachment *att = [[NSTextAttachment alloc] init];
-             att.image = pill;
-             att.bounds = CGRectMake(0, -2, pill.size.width, pill.size.height);
-             [line appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
-         }
-     }
 
      // 锁定场景：在标题右侧追加 lock.fill 图标（iOS13+），否则回退“🔒”
      if (lockedActive && [profile.name isEqualToString:lockedNameNow]) {
@@ -611,34 +567,8 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
      cell.name.shadowOffset = CGSizeZero;
 
     // Set cell and contentView background colors
-    BOOL isCurrentRowInPairingMode = (self.isPairingMode && isCurrentSelectedProfileRow);
-    cell.backgroundColor = isCurrentRowInPairingMode ? [[UIColor systemTealColor] colorWithAlphaComponent:0.08] : [UIColor clearColor];
+    cell.backgroundColor = [UIColor clearColor];
     cell.contentView.backgroundColor = [UIColor clearColor];
-
-    // 在配对模式下为“当前布局”行右侧添加 14pt 小字
-    UILabel *currentBadge = (UILabel *)[cell viewWithTag:201];
-    if (isCurrentRowInPairingMode) {
-        if (!currentBadge) {
-            currentBadge = [[UILabel alloc] init];
-            currentBadge.tag = 201;
-            currentBadge.font = [UIFont systemFontOfSize:14 weight:UIFontWeightRegular];
-            currentBadge.textColor = [[UIColor blackColor] colorWithAlphaComponent:0.3];
-            currentBadge.textAlignment = NSTextAlignmentRight;
-            currentBadge.backgroundColor = [UIColor clearColor];
-            currentBadge.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-            [cell addSubview:currentBadge];
-        }
-        currentBadge.hidden = NO;
-        currentBadge.text = [LocalizationHelper localizedStringForKey:@"CurrentLayoutShort"];
-        currentBadge.textColor = [[UIColor systemTealColor] colorWithAlphaComponent:0.9];
-        CGSize txt = [currentBadge.text sizeWithAttributes:@{NSFontAttributeName: currentBadge.font}];
-        CGFloat paddingRight = 16.0;
-        CGFloat x = cell.bounds.size.width - paddingRight - txt.width;
-        CGFloat y = floor((cell.bounds.size.height - txt.height) * 0.5);
-        currentBadge.frame = CGRectMake(x, y, txt.width, txt.height);
-    } else if (currentBadge) {
-        currentBadge.hidden = YES;
-    }
     
     // Configure the checkmark accessory
     // 统一取消 accessoryView/Type，避免系统小勾遗留或样式干扰
@@ -667,32 +597,16 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 
 
     // Replace the default checkmark with a UILabel displaying a checkmark character
-    if (self.isPairingMode) {
-        if (isPairSelectionRow) {
-            UILabel *checkmarkLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 20, 20)];
-            checkmarkLabel.text = @"✓";
-            checkmarkLabel.font = [UIFont systemFontOfSize:25];
-            checkmarkLabel.textAlignment = NSTextAlignmentCenter;
-            checkmarkLabel.textColor = [UIColor systemTealColor];
-            cell.accessoryView = checkmarkLabel;
-            checkmarkLabel.layer.zPosition = 0;
-        } else {
-            cell.accessoryView = nil;
-        }
-        // 当前布局：强制隐藏系统默认 accessoryType
-        cell.accessoryType = UITableViewCellAccessoryNone;
+    if (isCurrentSelectedProfileRow) {
+        UILabel *checkmarkLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 20, 20)];
+        checkmarkLabel.text = @"✓";
+        checkmarkLabel.font = [UIFont systemFontOfSize:25];
+        checkmarkLabel.textAlignment = NSTextAlignmentCenter;
+        checkmarkLabel.textColor = [UIColor systemTealColor];
+        cell.accessoryView = checkmarkLabel;
+        checkmarkLabel.layer.zPosition = 0;
     } else {
-        if (isCurrentSelectedProfileRow) {
-            UILabel *checkmarkLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 20, 20)];
-            checkmarkLabel.text = @"✓";
-            checkmarkLabel.font = [UIFont systemFontOfSize:25];
-            checkmarkLabel.textAlignment = NSTextAlignmentCenter;
-            checkmarkLabel.textColor = [UIColor systemTealColor];
-            cell.accessoryView = checkmarkLabel;
-            checkmarkLabel.layer.zPosition = 0;
-        } else {
-            cell.accessoryView = nil;
-        }
+        cell.accessoryView = nil;
     }
     [cell.contentView bringSubviewToFront:separatorView];
     separatorView.layer.zPosition = 1; // Bring separator to the top layer
@@ -778,10 +692,6 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
         }
     }
     
-    // 如果要删除的布局是配对布局，解除配对关系
-    if (profileToDelete.isPaired) {
-        [profilesManager unpairProfile:profileToDelete.name];
-    }
     
     [profiles removeObjectAtIndex:indexPath.row];
     
@@ -822,26 +732,6 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
         return;
     }
     
-    if (self.isPairingMode) {
-        // 配对模式：选择要配对的布局
-        if ([self canSelectProfileForPairing:profile]) {
-            self.selectedProfileForPairing = profile.name;
-            [self updateToolbarButtons];  // 更新保存按钮状态
-            if (self.systemBottomToolbar) {
-                [self updateSystemToolbarItems];
-            }
-            // 刷新整表以更新：
-            // 1) 选中配对目标行（小勾 + teal）
-            // 2) 当前使用的布局行（隐藏小勾 + 30% 黑）
-            // 3) 不可选项（变灰）
-            [self.tableView reloadData];
-            // 滚动确保选中项可见
-            NSIndexPath *visible = [NSIndexPath indexPathForRow:indexPath.row inSection:0];
-            [self.tableView scrollToRowAtIndexPath:visible atScrollPosition:UITableViewScrollPositionMiddle animated:YES];
-        }
-        [tableView deselectRowAtIndexPath:indexPath animated:YES];
-        return;
-    }
     
     // 锁定生效：当前方向锁定时，禁止切换到其它布局
     BOOL isLandscapeNow = [self osc_isCurrentLandscapeInViewBounds];
@@ -858,16 +748,6 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     NSIndexPath *lastSelectedIndexPath = [NSIndexPath indexPathForRow:[profilesManager getIndexOfSelectedProfile] inSection:0];
 
     if (selectedIndexPath != lastSelectedIndexPath) {
-        // 旧配对逻辑暂时禁用，避免与锁定冲突
-        // if (profile.isPaired) {
-        //     BOOL isCurrentLandscape = [profilesManager isCurrentOrientationLandscape];
-        //     OSCProfile *targetProfile = [profilesManager getProfileForCurrentOrientation:profile.name isLandscape:isCurrentLandscape];
-        //     if (targetProfile && ![targetProfile.name isEqualToString:profile.name]) {
-        //         profile = targetProfile;
-        //         indexPath = [NSIndexPath indexPathForRow:[[profilesManager getAllProfiles] indexOfObject:targetProfile] inSection:0];
-        //         selectedIndexPath = indexPath;
-        //     }
-        // }
         
         /* 仅更新选中，不再使用系统 accessory 勾号，避免残留 */
         [profilesManager setProfileToSelected: profile.name];   // set the profile associated with this cell's 'isSelected' property to YES
@@ -882,7 +762,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     [self profileViewRefresh]; // update OSC layout when table view option is changed
 }
 
-#pragma mark - Pairing Management
+#pragma mark - Toolbar Management
 
 - (void)setupBottomToolbar {
     NSLog(@"开始设置底部工具栏");
@@ -998,7 +878,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
         self.helpToolbarItem.enabled = !isTemplate; // 模板布局置灰
     }
 
-    // 强制保持 items 排列：flexibleSpace + pair + help
+    // 强制保持 items 排列：flexibleSpace + lock + help
     UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
     if (self.helpToolbarItem) {
         [self.systemBottomToolbar setItems:@[flex, self.pairRotationalToolbarItem, self.helpToolbarItem] animated:NO];
@@ -1006,7 +886,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 }
 
 - (IBAction)pairRotationalToolbarTapped:(id)sender {
-    // 旧配对入口不再使用，改由系统 item 直接绑定为锁定/解除锁定动作
+    // 此方法保留用于兼容性，实际功能已由系统 item 直接绑定
 }
 
 - (IBAction)helpToolbarTapped:(id)sender {
@@ -1024,50 +904,20 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-- (void)createPairingModeButtons {
-    // 创建取消按钮
-    self.cancelButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.cancelButton setTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] forState:UIControlStateNormal];
-    [self.cancelButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    [self.cancelButton addTarget:self action:@selector(cancelPairingTapped:) forControlEvents:UIControlEventTouchUpInside];
-    self.cancelButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.bottomToolbarView addSubview:self.cancelButton];
-    
-    // 创建保存按钮
-    self.saveButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.saveButton setTitle:[LocalizationHelper localizedStringForKey:@"Save"] forState:UIControlStateNormal];
-    [self.saveButton setTitleColor:[UIColor systemBlueColor] forState:UIControlStateNormal];
-    [self.saveButton setTitleColor:[UIColor grayColor] forState:UIControlStateDisabled];
-    [self.saveButton addTarget:self action:@selector(savePairingTapped:) forControlEvents:UIControlEventTouchUpInside];
-    self.saveButton.enabled = (self.selectedProfileForPairing != nil);
-    self.saveButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.bottomToolbarView addSubview:self.saveButton];
-    
-    // 设置约束
-    [NSLayoutConstraint activateConstraints:@[
-        [self.cancelButton.leadingAnchor constraintEqualToAnchor:self.bottomToolbarView.leadingAnchor constant:16],
-        [self.cancelButton.centerYAnchor constraintEqualToAnchor:self.bottomToolbarView.centerYAnchor],
-        
-        [self.saveButton.trailingAnchor constraintEqualToAnchor:self.bottomToolbarView.trailingAnchor constant:-16],
-        [self.saveButton.centerYAnchor constraintEqualToAnchor:self.bottomToolbarView.centerYAnchor]
-    ]];
-    
-    NSLog(@"配对模式按钮创建成功");
-}
 
 - (void)createNormalModeButtonWithTitle:(NSString *)title action:(SEL)action {
     // 创建主按钮
-    self.pairingButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.pairingButton setTitle:title forState:UIControlStateNormal];
-    [self.pairingButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    [self.pairingButton addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
-    self.pairingButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.bottomToolbarView addSubview:self.pairingButton];
+    UIButton *mainButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [mainButton setTitle:title forState:UIControlStateNormal];
+    [mainButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [mainButton addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    mainButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.bottomToolbarView addSubview:mainButton];
     
     // 设置约束 - 居中显示
     [NSLayoutConstraint activateConstraints:@[
-        [self.pairingButton.centerXAnchor constraintEqualToAnchor:self.bottomToolbarView.centerXAnchor],
-        [self.pairingButton.centerYAnchor constraintEqualToAnchor:self.bottomToolbarView.centerYAnchor]
+        [mainButton.centerXAnchor constraintEqualToAnchor:self.bottomToolbarView.centerXAnchor],
+        [mainButton.centerYAnchor constraintEqualToAnchor:self.bottomToolbarView.centerYAnchor]
     ]];
     
     NSLog(@"普通模式按钮创建成功：%@", title);
@@ -1107,124 +957,16 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     [self.tableView reloadData];
 }
 
-- (IBAction)startPairingTapped:(id)sender {
-    self.isPairingMode = YES;
-    self.selectedProfileForPairing = nil;
-    [self updateToolbarButtons];
-    if (self.systemBottomToolbar) {
-        [self updateSystemToolbarItems];
-    }
-    // 隐藏顶部导航按钮并设置标题
-    UINavigationItem *navItem = self.navigationController ? self.navigationController.navigationBar.topItem : self.profileTableViewNavigationBar.topItem;
-    if (navItem) {
-        storedLeftBarItems = navItem.leftBarButtonItems;
-        storedRightBarItems = navItem.rightBarButtonItems;
-        storedNavTitle = navItem.title;
-        navItem.leftBarButtonItems = @[];
-        navItem.rightBarButtonItems = @[];
-        BOOL isLandscape = [profilesManager isCurrentOrientationLandscape];
-        NSString *dir = isLandscape ? [LocalizationHelper localizedStringForKey:@"LandscapeShort"] : [LocalizationHelper localizedStringForKey:@"PortraitShort"];
-        navItem.title = [LocalizationHelper localizedStringForKey:@"SelectLayoutToPair:%@", dir];
-    }
-    [self.tableView reloadData];
-}
 
-- (IBAction)unpairTapped:(id)sender {
-    OSCProfile *selectedProfile = [profilesManager getSelectedProfile];
-    if (selectedProfile && selectedProfile.isPaired) {
-        [profilesManager unpairProfile:selectedProfile.name];
-        [self updateToolbarButtons];
-        if (self.systemBottomToolbar) {
-            [self updateSystemToolbarItems];
-        }
-        [self.tableView reloadData];
-    }
-}
 
-- (IBAction)savePairingTapped:(id)sender {
-    if (self.selectedProfileForPairing) {
-        OSCProfile *currentProfile = [profilesManager getSelectedProfile];
-        if (currentProfile == nil || currentProfile.name == nil) {
-            NSLog(@"错误：当前选中的配置文件无效，无法进行配对");
-            return;
-        }
-        
-        BOOL isCurrentLandscape = [profilesManager isCurrentOrientationLandscape];
-        
-        BOOL success = [profilesManager pairProfile:currentProfile.name 
-                                        withProfile:self.selectedProfileForPairing 
-                                   isProfile1Landscape:isCurrentLandscape];
-        
-        if (success) {
-            self.isPairingMode = NO;
-            self.selectedProfileForPairing = nil;
-            [self updateToolbarButtons];
-            if (self.systemBottomToolbar) {
-                [self updateSystemToolbarItems];
-            }
-            // 恢复导航按钮和标题
-            UINavigationItem *navItem = self.navigationController ? self.navigationController.navigationBar.topItem : self.profileTableViewNavigationBar.topItem;
-            if (navItem) {
-                navItem.leftBarButtonItems = storedLeftBarItems;
-                navItem.rightBarButtonItems = storedRightBarItems;
-                navItem.title = storedNavTitle;
-            }
-            [self.tableView reloadData];
-        } else {
-            NSLog(@"配对失败");
-        }
-    }
-}
 
-- (IBAction)cancelPairingTapped:(id)sender {
-    self.isPairingMode = NO;
-    self.selectedProfileForPairing = nil;
-    [self updateToolbarButtons];
-    if (self.systemBottomToolbar) {
-        [self updateSystemToolbarItems];
-    }
-    // 恢复导航按钮和标题
-    UINavigationItem *navItem = self.navigationController ? self.navigationController.navigationBar.topItem : self.profileTableViewNavigationBar.topItem;
-    if (navItem) {
-        navItem.leftBarButtonItems = storedLeftBarItems;
-        navItem.rightBarButtonItems = storedRightBarItems;
-        navItem.title = storedNavTitle;
-    }
-    [self.tableView reloadData];
-}
 
 - (NSString *)getOrientationDisplayText:(BOOL)isLandscape {
     return isLandscape ? @"[横]" : @"[竖]";
 }
 
-- (BOOL)canSelectProfileForPairing:(OSCProfile *)profile {
-    if (!self.isPairingMode) return YES;
-    
-    OSCProfile *currentProfile = [profilesManager getSelectedProfile];
-    
-    // 不能选择当前使用的布局
-    if ([profile.name isEqualToString:currentProfile.name]) {
-        return NO;
-    }
-    
-    // 不能选择已配对的布局
-    if (profile.isPaired) {
-        return NO;
-    }
-    
-    // 不能选择模板布局
-    if ([profilesManager isTemplateProfile:profile.name]) {
-        return NO;
-    }
-    
-    return YES;
-}
 
 - (void)deviceOrientationDidChange:(NSNotification *)notification {
-    // 如果正在配对模式，不处理自动切换
-    if (self.isPairingMode) {
-        return;
-    }
     
     // 如果正在处理方向变化，跳过重复处理
     if (self.isProcessingOrientationChange) {
@@ -1249,40 +991,11 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
             NSIndexPath *ip = [NSIndexPath indexPathForRow:idx inSection:0];
             [self.tableView scrollToRowAtIndexPath:ip atScrollPosition:UITableViewScrollPositionMiddle animated:YES];
         }
-        // 旧配对自动切换暂时禁用，避免与锁定冲突
-        // [self performPairedLayoutSwitchingForTableView];
         // 简化：处理完成后立即重置标志
         self.isProcessingOrientationChange = NO;
     });
 }
 
-- (void)performPairedLayoutSwitchingForTableView {
-    OSCProfile *currentProfile = [profilesManager getSelectedProfile];
-    if (!currentProfile || !currentProfile.isPaired) {
-        return;
-    }
-    
-    // 使用当前视图的bounds来检测方向，而不是依赖OSCProfilesManager的方法
-    BOOL isCurrentLandscape = self.view.bounds.size.width > self.view.bounds.size.height;
-    
-    OSCProfile *targetProfile = [profilesManager getProfileForCurrentOrientation:currentProfile.name isLandscape:isCurrentLandscape];
-    
-    if (targetProfile && ![targetProfile.name isEqualToString:currentProfile.name]) {
-        // 切换到目标布局
-        [profilesManager setProfileToSelected:targetProfile.name];
-        
-        // 更新UI - 这是关键，确保绿色小勾更新到新选中的布局
-        [self.tableView reloadData];
-        [self updateToolbarButtons];
-        
-        // 滚动到新选中的布局
-        NSInteger selectedIndex = [profilesManager getIndexOfSelectedProfile];
-        if (selectedIndex >= 0 && selectedIndex < [[profilesManager getAllProfiles] count]) {
-            NSIndexPath *indexPath = [NSIndexPath indexPathForRow:selectedIndex inSection:0];
-            [self.tableView scrollToRowAtIndexPath:indexPath atScrollPosition:UITableViewScrollPositionMiddle animated:YES];
-        }
-    }
-}
 
 - (void)dealloc {
     // 移除通知监听

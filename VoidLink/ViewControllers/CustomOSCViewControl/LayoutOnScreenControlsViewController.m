@@ -373,53 +373,10 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     
     // 只有在非布局编辑模式下才处理（即在串流界面中）
     
-    // 在串流界面中，优先应用“方向锁定”；旧配对逻辑暂时禁用避免冲突
+    // 应用方向锁定
     [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
 }
 
-- (void)handlePairedLayoutSwitching {
-    NSLog(@"=== 配对布局切换处理开始 ===");
-    
-    
-    // 检查当前布局是否已配对，如果是则切换到配对布局
-    OSCProfile *currentProfile = [profilesManager getSelectedProfile];
-    NSLog(@"当前选中布局: %@", currentProfile ? currentProfile.name : @"无");
-    
-    if (currentProfile) {
-        NSLog(@"当前布局是否已配对: %@", currentProfile.isPaired ? @"是" : @"否");
-        NSLog(@"当前布局方向标记: %@ (isLandscapeLayout=%@)", 
-              currentProfile.isLandscapeLayout ? @"横屏" : @"竖屏",
-              currentProfile.isLandscapeLayout ? @"YES" : @"NO");
-        NSLog(@"配对的布局名称: %@", currentProfile.pairedProfileName ?: @"无");
-        
-        if (currentProfile.isPaired) {
-            BOOL isCurrentLandscape = [profilesManager isCurrentOrientationLandscape];
-            NSLog(@"当前实际屏幕方向: %@", isCurrentLandscape ? @"横屏" : @"竖屏");
-            
-            OSCProfile *targetProfile = [profilesManager getProfileForCurrentOrientation:currentProfile.name isLandscape:isCurrentLandscape];
-            NSLog(@"目标布局: %@", targetProfile ? targetProfile.name : @"无");
-            
-            if (targetProfile && ![targetProfile.name isEqualToString:currentProfile.name]) {
-                // 切换到配对的布局
-                NSLog(@"🔄 执行布局切换：从 %@ 切换到 %@", currentProfile.name, targetProfile.name);
-                [profilesManager setProfileToSelected:targetProfile.name];
-                NSLog(@"✅ 布局切换完成");
-                
-                // 重新加载布局
-                [self reloadLegacyOnScreenControls];
-                [self reloadOnScreenWidgetViews];
-            } else {
-                NSLog(@"❌ 不需要切换布局 - 目标布局与当前布局相同或目标布局为空");
-            }
-        } else {
-            NSLog(@"ℹ️ 当前布局未配对，使用自适应逻辑");
-        }
-    } else {
-        NSLog(@"❌ 没有选中的布局");
-    }
-    
-    NSLog(@"=== 配对布局切换处理结束 ===");
-}
 
 - (void)handleOrientationChangeForOnScreenWidgets{
     NSLog(@"🔄 handleOrientationChangeForOnScreenWidgets 被调用，viewWillBeResized = %@", viewWillBeResized ? @"YES" : @"NO");
@@ -428,10 +385,8 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         return;
     }
     
-    // 优先应用方向锁定（编辑界面）
+    // 应用方向锁定（编辑界面）
     [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
-    // 旧配对逻辑暂时禁用，避免与锁定冲突
-    // [self handlePairedLayoutSwitching];
     
     [self setupWidgetPanel];
     [self updateViewBounds];

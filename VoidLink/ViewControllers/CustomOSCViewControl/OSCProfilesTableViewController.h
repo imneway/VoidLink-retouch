@@ -35,18 +35,12 @@ typedef NS_ENUM(NSUInteger, FileOperation) {
 
 // 系统底部工具栏（Storyboard中新加的 UIToolbar）
 @property (weak, nonatomic) IBOutlet UIToolbar *systemBottomToolbar;
-@property (weak, nonatomic) IBOutlet UIBarButtonItem *pairRotationalToolbarItem; // “添加竖屏布局/解除配对”切换按钮
+@property (weak, nonatomic) IBOutlet UIBarButtonItem *pairRotationalToolbarItem; // "锁定为当前方向布局/解除锁定"切换按钮
 @property (weak, nonatomic) IBOutlet UIBarButtonItem *helpToolbarItem;            // 右侧问号按钮（可选）
 
-// 配对相关UI组件
+// 自定义底部工具栏（兼容旧版）
 @property (strong, nonatomic) UIView *bottomToolbarView;
-@property (strong, nonatomic) UIButton *pairingButton;
-@property (strong, nonatomic) UIButton *saveButton;
-@property (strong, nonatomic) UIButton *cancelButton;
 
-// 配对状态
-@property (nonatomic, assign) BOOL isPairingMode;
-@property (nonatomic, strong) NSString *selectedProfileForPairing;
 @property (nonatomic, assign) BOOL isProcessingOrientationChange;
 
 @end

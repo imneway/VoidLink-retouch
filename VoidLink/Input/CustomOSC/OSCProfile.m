@@ -18,11 +18,6 @@
         self.name = name;
         self.buttonStates = buttonStates;
         self.isSelected = isSelected;
-        
-        // 初始化配对相关属性
-        self.pairedProfileName = nil;
-        self.isLandscapeLayout = NO;
-        self.isPaired = NO;
     }
     
     return self;
@@ -36,11 +31,6 @@
     [encoder encodeObject:self.name forKey:@"name"];
     [encoder encodeObject:self.buttonStates forKey:@"buttonStates"];
     [encoder encodeBool:self.isSelected forKey:@"isSelected"];
-    
-    // 编码配对相关属性
-    [encoder encodeObject:self.pairedProfileName forKey:@"pairedProfileName"];
-    [encoder encodeBool:self.isLandscapeLayout forKey:@"isLandscapeLayout"];
-    [encoder encodeBool:self.isPaired forKey:@"isPaired"];
 }
 
 - (id) initWithCoder:(NSCoder*)decoder {
@@ -48,11 +38,6 @@
         self.name = [decoder decodeObjectForKey:@"name"];
         self.buttonStates = [decoder decodeObjectForKey:@"buttonStates"];
         self.isSelected = [decoder decodeBoolForKey:@"isSelected"];
-        
-        // 解码配对相关属性，提供默认值以保持向后兼容性
-        self.pairedProfileName = [decoder decodeObjectForKey:@"pairedProfileName"];
-        self.isLandscapeLayout = [decoder decodeBoolForKey:@"isLandscapeLayout"];
-        self.isPaired = [decoder decodeBoolForKey:@"isPaired"];
         
         // 验证必要的数据是否有效
         if (self.name == nil) {
