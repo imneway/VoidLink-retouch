@@ -93,7 +93,7 @@ import UIKit
     private var altPointerLayer = CALayer()
     private var altBackgroundLayer = CALayer()
     @objc public var altIndicatorSize: CGFloat = 160
-    private let altIndicatorMaxScale: CGFloat = 1.1
+    private let altIndicatorMaxScale: CGFloat = 1.05
     private var touchBeganPosInSuperLayer: CGPoint = .zero
 
     // this is for all stick pads and mouse Pad
