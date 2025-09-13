@@ -30,7 +30,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) NSMutableSet* onScreenWidgetViews;
 
 @property int OSCSegmentSelected;
-@property (nonatomic, assign) bool quickSwitchEnabled;
 
 @property (weak, nonatomic) IBOutlet UIButton *trashCanButton;
 @property (weak, nonatomic) IBOutlet UIButton *undoButton;

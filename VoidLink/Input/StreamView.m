@@ -499,46 +499,6 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 
 - (void) reloadOnScreenWidgetViews{
     
-    // 在编辑模式（包括仅打开布局列表的快速切换模式）下，不清理也不重建，避免临时消失
-    if (OnScreenWidgetView.editMode) {
-        // 仅根据当前配置重新定位与调整已存在的 widget，避免位置错乱
-        OSCProfilesManager* profilesManager = [OSCProfilesManager sharedManager: self.bounds];
-        OSCProfile *oscProfile = [profilesManager getSelectedProfile];
-        // 构建 name -> state 映射
-        NSMutableDictionary *stateByName = [NSMutableDictionary dictionary];
-        for (NSData *buttonStateEncoded in oscProfile.buttonStates) {
-            OnScreenButtonState* st = [profilesManager unarchiveButtonStateEncoded:buttonStateEncoded];
-            if (st.buttonType == CustomOnScreenWidget && st.name) {
-                stateByName[st.name] = st;
-            }
-        }
-        for (UIView *subview in self->streamFrameTopLayerView.subviews) {
-            if ([subview isKindOfClass:[OnScreenWidgetView class]]) {
-                OnScreenWidgetView *widget = (OnScreenWidgetView *)subview;
-                OnScreenButtonState *st = stateByName[widget.cmdString];
-                if (!st) continue;
-                CGPoint pos = [self denormalizeWidgetPosition:st.position];
-                widget.translatesAutoresizingMaskIntoConstraints = NO;
-                widget.widthFactor = st.widthFactor;
-                widget.heightFactor = st.heightFactor;
-                widget.borderWidth = st.borderWidth;
-                [widget setVibrationWithStyle:st.vibrationStyle];
-                widget.mouseButtonAction = st.mouseButtonAction;
-                widget.sensitivityFactorX = st.sensitivityFactorX;
-                widget.sensitivityFactorY = st.sensitivityFactorY;
-                widget.trackballDecelerationRate = st.decelerationRate;
-                widget.stickIndicatorOffset = st.stickIndicatorOffset;
-                widget.minStickOffset = st.minStickOffset;
-                widget.slideMode = st.slideMode;
-                [widget setLocationWithPosition:pos];
-                [widget resizeWidgetView];
-                [widget adjustTransparencyWithAlpha:st.backgroundAlpha];
-                [widget adjustBorderWithWidth:st.borderWidth];
-            }
-        }
-        return;
-    }
-    
     // NSLog(@"reload on screen keyboard buttons here");
 
     // remove all keyboard widget views first

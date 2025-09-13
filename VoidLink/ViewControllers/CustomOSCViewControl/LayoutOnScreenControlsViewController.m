@@ -184,7 +184,6 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     [OSCProfilesManager setOnScreenWidgetViewsSet:self.onScreenWidgetViews];   // pass the keyboard button dict to profiles manager
     
     //isToolbarHidden = NO;   // keeps track if the toolbar is hidden up above the screen so that we know whether to hide or show it when the user taps the toolbar's hide/show button
-    _quickSwitchEnabled = false;
     viewWillBeResized = false;
     
     /* add curve to bottom of chevron tab view */
@@ -357,7 +356,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     viewWillBeResized = true;
     NSLog(@"✅ 设置 viewWillBeResized = true");
     [self hideStickIndicators];
-    if(!_quickSwitchEnabled) [self saveTapped:nil];
+    [self saveTapped:nil];
     // 旋转开始时，先行应用方向锁定（下一个runloop再刷新全局UI）
     dispatch_async(dispatch_get_main_queue(), ^{
         [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
@@ -373,11 +372,6 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     NSLog(@"📺 handleScreenChanged 被调用 - 来自StreamFrameViewController");
     
     // 只有在非布局编辑模式下才处理（即在串流界面中）
-    // 如果quickSwitchEnabled为true，说明是在布局列表页，应该跳过
-    if (self.quickSwitchEnabled) {
-        NSLog(@"⚠️ 布局编辑模式中，跳过handleScreenChanged");
-        return;
-    }
     
     // 在串流界面中，优先应用“方向锁定”；旧配对逻辑暂时禁用避免冲突
     [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
@@ -386,11 +380,6 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 - (void)handlePairedLayoutSwitching {
     NSLog(@"=== 配对布局切换处理开始 ===");
     
-    // 如果是快速切换模式（布局列表页），跳过自动切换
-    if (self.quickSwitchEnabled) {
-        NSLog(@"⚠️ 快速切换模式中，跳过配对布局自动切换");
-        return;
-    }
     
     // 检查当前布局是否已配对，如果是则切换到配对布局
     OSCProfile *currentProfile = [profilesManager getSelectedProfile];
@@ -1154,7 +1143,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 
 
 - (void)setupWidgetPanel{
-    self.widgetPanelStack.hidden = _quickSwitchEnabled;
+    self.widgetPanelStack.hidden = NO;
     self.loadConfigTipLabel.hidden = NO;
     
     // 初始隐藏坐标控件
@@ -1332,7 +1321,6 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     [self profileRefresh];
     // 关闭列表后，按当前方向应用锁定
     [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
-    if(_quickSwitchEnabled) [self dismissViewControllerAnimated:NO completion:nil];
 }
 
 /* Basically the same method as loadTapped, without parameter*/

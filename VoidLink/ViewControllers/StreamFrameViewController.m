@@ -148,6 +148,11 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     }
 }
 
+// 应用当前屏幕方向的方向锁定
+- (void)osc_applyLockForCurrentOrientation {
+    [self osc_applyLockForCurrentOrientationInStreamingIfNeeded];
+}
+
 - (void)pictureInPictureControllerWillStartPictureInPicture:(AVPictureInPictureController *)pictureInPictureController {
     _streamView.hidden = YES;
     if (self.imguiView) {
@@ -884,6 +889,10 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     _streamVideoRenderView.userInteractionEnabled = false;
     
     //[_streamView setupStreamView:_controllerSupport interactionDelegate:self config:self.streamConfig];
+    
+    // 在初始化OSC之前先应用方向锁定，避免显示旧布局
+    [self osc_applyLockForCurrentOrientation];
+    
     [self reConfigStreamViewRealtime]; // call this method again to make sure all gestures are configured & added to the superview(self.view), including the gestures added from inside the streamview.
     
     if([self isFirstStreaming]) [self popFirstStreamingTip];
@@ -1015,23 +1024,11 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     _streamView.widgetToolOpened = true;
     [self->_streamView disableOnScreenControls];
     [self->_streamView clearOnScreenWidgets]; // clear all onScreenKeyboardButtons before entering edit mode
-    _layoutOnScreenControlsVC.quickSwitchEnabled = false;
     _layoutOnScreenControlsVC.toolbarStackView.hidden = false;
     _layoutOnScreenControlsVC.toolbarRootView.hidden = false;
     [self presentViewController:_layoutOnScreenControlsVC animated:YES completion:nil];
 }
 
-- (void)switchWidgetProfile{
-    _streamView.widgetToolOpened = true;
-    [self->_streamView disableOnScreenControls];
-    [self->_streamView clearOnScreenWidgets]; // clear all onScreenKeyboardButtons before entering edit mode
-    _layoutOnScreenControlsVC.quickSwitchEnabled = true;
-    _layoutOnScreenControlsVC.toolbarStackView.hidden = true;
-    _layoutOnScreenControlsVC.toolbarRootView.hidden = true;
-    [self presentViewController:_layoutOnScreenControlsVC animated:NO completion:^{
-        [self->_layoutOnScreenControlsVC presentProfilesTableView];
-    }];
-}
 
 - (void)bringUpSoftKeyboard{
     [self->_streamView readyToBringUpSoftKeyboardByToolbox];
@@ -1451,6 +1448,9 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         }
         
         [self->_streamView showOnScreenControls];
+        
+        // 串流连接建立后，应用当前屏幕方向的方向锁定
+        [self osc_applyLockForCurrentOrientation];
         
         [self->_controllerSupport connectionEstablished];
         
