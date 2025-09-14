@@ -154,7 +154,7 @@ import UIKit
     
     // border & visual effect
     private var minimumBorderAlpha: CGFloat = 0.19
-    private var defaultBorderColor: CGColor = UIColor(white: 0.27, alpha: 0.3).cgColor
+    private var defaultBorderColor: CGColor = UIColor(white: 0.2, alpha: 0.3).cgColor
 //    private let voidlinkPurple: CGColor = UIColor(red: 0.5, green: 0.5, blue: 1.0, alpha: 0.86).cgColor
     private let voidlinkPurple: CGColor = UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.4).cgColor //Overwrite the purple border color
     
@@ -483,7 +483,7 @@ import UIKit
     private func tweakAlpha(){
         // setup default border from self.backgroundAlpha
         let realBackgroundAlpha = self.backgroundAlpha - 0.18 // offset to be consistent with legacy onScreen controller layer opacity
-        self.backgroundColor = UIColor(white: 0.27, alpha: realBackgroundAlpha) // offset to be consistent with legacy onScreen controller layer opacity
+        self.backgroundColor = UIColor(white: 0.2, alpha: realBackgroundAlpha) // offset to be consistent with legacy onScreen controller layer opacity
         var borderAlpha = realBackgroundAlpha * 1.01
         if widgetType == WidgetTypeEnum.touchPad {
            minimumBorderAlpha = 0.0
@@ -491,12 +491,12 @@ import UIKit
         if borderAlpha < minimumBorderAlpha {
             borderAlpha = minimumBorderAlpha
         }
-        defaultBorderColor = UIColor(white: 0.27, alpha: borderAlpha).cgColor
+        defaultBorderColor = UIColor(white: 0.2, alpha: borderAlpha).cgColor
         self.layer.borderColor = defaultBorderColor
 
         if widgetType == WidgetTypeEnum.touchPad {
             self.backgroundColor = UIColor.clear // make touchPad transparent
-            self.layer.borderColor = UIColor(white: 0.27, alpha: borderAlpha - 0.15).cgColor // reduced border alpha for touchPad
+            self.layer.borderColor = UIColor(white: 0.2, alpha: borderAlpha - 0.15).cgColor // reduced border alpha for touchPad
         }
     }
     
@@ -566,7 +566,7 @@ import UIKit
         label.adjustsFontSizeToFitWidth = true
         label.minimumScaleFactor = 0.1  // Adjust the scale factor as needed
         
-        label.textColor = UIColor(white: 1.0, alpha: 0.82)
+        label.textColor = UIColor(white: 1.0, alpha: 0.64)
         label.textAlignment = .center
         label.shadowColor = nil
         label.shadowOffset = .zero
@@ -665,7 +665,7 @@ import UIKit
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: UIColor.clear,
-            .strokeColor: UIColor(white: 0.0, alpha: 0.32),
+            .strokeColor: UIColor(white: 0.0, alpha: 0.2),
             .strokeWidth: strokeWidthPercent
         ]
         outlineLabel.attributedText = NSAttributedString(string: text, attributes: attributes)
