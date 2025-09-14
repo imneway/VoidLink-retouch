@@ -128,6 +128,9 @@ import UIKit
     // OnScreenControls instance
     private var onScreenControls: OnScreenControls
     
+    // 存储原始透明度值
+    private var originalOpacityValues: [String: Float] = [:]
+    
     // key / button label
     private let label: UILabel
     private let outlineLabel: UILabel
@@ -344,6 +347,106 @@ import UIKit
         // self.layer.borderWidth = borderWidth
         // if CommandManager.touchPadCmds.contains(self.keyString) && width == 0 {self.layer.borderWidth = 1}
         setupView()
+    }
+    
+    // 降低指定控件的透明度
+    private func dimControlsForAltPad() {
+        guard let superview = self.superview else { return }
+        
+        // 根据不同的 Alt Pad 类型确定需要降低透明度的控件
+        let controlNames: [String]
+        let widgetControlNames: [String] // OnScreenWidgetView 创建的控件代号
+        
+        if self.touchPadString == "LSPADALT" {
+            controlNames = ["upButton", "downButton", "leftButton", "rightButton", "selectButton", "l3Button", "leftStick"]
+            widgetControlNames = ["L3", "LS", "OSCL3"] // 用户通过布局编辑界面创建的控件代号
+        } else if self.touchPadString == "RSPADALT" {
+            controlNames = ["aButton", "bButton", "xButton", "yButton", "startButton", "r3Button", "l3Button"]
+            widgetControlNames = ["A", "B", "X", "Y", "Start", "R3", "RS", "OSCR3"] // 用户通过布局编辑界面创建的控件代号
+        } else {
+            return
+        }
+        
+        // 首先处理 OnScreenWidgetView 创建的控件（包括用户自定义的 L3、LS、R3、RS 等）
+        for subview in superview.subviews {
+            if let widgetView = subview as? OnScreenWidgetView {
+                // 检查是否是目标控件
+                let shouldDim = controlNames.contains(where: { controlName in
+                    widgetView.buttonString == controlName || 
+                    widgetView.touchPadString == controlName ||
+                    widgetView.cmdString == controlName
+                }) || widgetControlNames.contains(where: { widgetName in
+                    widgetView.cmdString == widgetName ||
+                    widgetView.buttonString == widgetName ||
+                    widgetView.touchPadString == widgetName
+                })
+                
+                if shouldDim {
+                    // 存储原始透明度
+                    if originalOpacityValues[widgetView.cmdString] == nil {
+                        originalOpacityValues[widgetView.cmdString] = Float(widgetView.alpha)
+                    }
+                    
+                    // 添加动画效果
+                    UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut], animations: {
+                        widgetView.alpha = 0.15
+                    })
+                }
+            }
+        }
+        
+        // 然后处理 OnScreenControls 创建的控件
+        if let oscButtonLayers = onScreenControls.value(forKey: "OSCButtonLayers") as? [CALayer] {
+            for layer in oscButtonLayers {
+                if let layerName = layer.name, controlNames.contains(layerName) {
+                    // 存储原始透明度
+                    if originalOpacityValues[layerName] == nil {
+                        originalOpacityValues[layerName] = layer.opacity
+                    }
+                    
+                    // 添加动画效果
+                    CATransaction.begin()
+                    CATransaction.setAnimationDuration(0.2)
+                    CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
+                    layer.opacity = 0.15
+                    CATransaction.commit()
+                }
+            }
+        }
+    }
+    
+    // 恢复所有控件的透明度
+    private func restoreControlsOpacity() {
+        guard let superview = self.superview else { return }
+        
+        // 首先恢复 OnScreenWidgetView 创建的控件
+        for subview in superview.subviews {
+            if let widgetView = subview as? OnScreenWidgetView {
+                if let originalOpacity = originalOpacityValues[widgetView.cmdString] {
+                    // 添加动画效果
+                    UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut], animations: {
+                        widgetView.alpha = CGFloat(originalOpacity)
+                    })
+                }
+            }
+        }
+        
+        // 然后恢复 OnScreenControls 创建的控件
+        if let oscButtonLayers = onScreenControls.value(forKey: "OSCButtonLayers") as? [CALayer] {
+            for layer in oscButtonLayers {
+                if let layerName = layer.name, let originalOpacity = originalOpacityValues[layerName] {
+                    // 添加动画效果
+                    CATransaction.begin()
+                    CATransaction.setAnimationDuration(0.2)
+                    CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
+                    layer.opacity = originalOpacity
+                    CATransaction.commit()
+                }
+            }
+        }
+        
+        // 清空存储的透明度值
+        originalOpacityValues.removeAll()
     }
     
     @objc public func resizeWidgetView(){
@@ -1362,11 +1465,19 @@ import UIKit
                     if quickDoubleTapDetected {
                         self.showl3r3Indicator()
                         self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)}
+                    // 对于 Alt 版本，降低相关控件透明度
+                    if self.touchPadString == "LSPADALT" {
+                        self.dimControlsForAltPad()
+                    }
                 case "RSPAD", "RSPADALT":
                     self.showStickIndicator()
                     if quickDoubleTapDetected {
                         self.showl3r3Indicator()
                         self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)}
+                    // 对于 Alt 版本，降低相关控件透明度
+                    if self.touchPadString == "RSPADALT" {
+                        self.dimControlsForAltPad()
+                    }
                 case "LSVPAD":
                     if quickDoubleTapDetected {
                         self.showl3r3Indicator()
@@ -1695,9 +1806,17 @@ import UIKit
             case "LSPAD", "LSPADALT":
                 self.onScreenControls.clearLeftStickTouchPadFlag()
                 if widgetType == WidgetTypeEnum.touchPad {self.resetStickBallPositionAndHideIndicator()}
+                // 对于 Alt 版本，恢复相关控件透明度
+                if self.touchPadString == "LSPADALT" {
+                    self.restoreControlsOpacity()
+                }
             case "RSPAD", "RSPADALT":
                 self.onScreenControls.clearRightStickTouchPadFlag()
                 if widgetType == WidgetTypeEnum.touchPad {self.resetStickBallPositionAndHideIndicator()}
+                // 对于 Alt 版本，恢复相关控件透明度
+                if self.touchPadString == "RSPADALT" {
+                    self.restoreControlsOpacity()
+                }
             case "LSVPAD":
                 self.onScreenControls.clearLeftStickTouchPadFlag()
             case "RSVPAD":
