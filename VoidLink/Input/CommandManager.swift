@@ -141,6 +141,13 @@ import UIKit
         "F10": 0x79,         // VK_F10
         "F11": 0x7A,         // VK_F11
         "F12": 0x7B,         // VK_F12
+        "F13": 0x7C,         // VK_F13
+        "F14": 0x7D,         // VK_F14
+        "F15": 0x7E,         // VK_F15
+        "F16": 0x80,         // VK_F16
+        "F17": 0x81,         // VK_F17
+        "F18": 0x82,         // VK_F18
+        "F19": 0x83,         // VK_F19
         "A": 0x41,           // 'A' key
         "B": 0x42,           // 'B' key
         "C": 0x43,           // 'C' key
