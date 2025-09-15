@@ -37,6 +37,8 @@ import UIKit
         "toggleStatsOverlay":SwiftLocalizationHelper.localizedString(forKey: "[ Toggle stats overlay & graphs ]"),
         "disconnectAndQuitApp":SwiftLocalizationHelper.localizedString(forKey: "[ Disconnect & quit app ]")
     ]
+    // Only show whitelisted special entries without deleting others, so they can be restored later
+    private let allowedSpecialEntries: Set<String> = ["toggleStatsOverlay"]
     
     private var viewPinned: Bool = false
     @objc public var isPinned: Bool { return viewPinned }
@@ -51,6 +53,7 @@ import UIKit
         
         setupViews()
         updateEditingMode()
+        enforceSpecialEntriesVisibility()
         
         tableView.dataSource = self
         tableView.delegate = self
@@ -70,6 +73,7 @@ import UIKit
     
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        enforceSpecialEntriesVisibility()
 
         //setupConstraints()
     }
@@ -294,6 +298,7 @@ import UIKit
     }
     
     @objc public func reloadTableView() {
+        enforceSpecialEntriesVisibility()
         tableView.layoutIfNeeded()
         tableView.reloadData()
         
@@ -305,6 +310,19 @@ import UIKit
                 tableView.selectRow(at: indexPath, animated: true, scrollPosition: .middle) // keep the entry of previous index selected.
             }
         } */
+    }
+
+    private func enforceSpecialEntriesVisibility() {
+        // Filter to only keep allowed special entries, do not delete underlying definitions
+        let filtered = NSMutableArray()
+        for item in specialEntries {
+            if let key = item as? String, allowedSpecialEntries.contains(key) {
+                filtered.add(key)
+            }
+        }
+        if !filtered.isEqual(to: specialEntries as! [Any]) {
+            specialEntries = filtered
+        }
     }
     
     // UITableViewDataSource
