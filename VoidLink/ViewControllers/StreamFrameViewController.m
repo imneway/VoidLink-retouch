@@ -1400,17 +1400,40 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         return;
     }
     OnScreenControlsLevel current = [self->_streamView getCurrentOscState];
+    BOOL obscured = [self->_streamView isOscObscuredByAlpha];
     if (current == OnScreenControlsLevelOff) {
-        // Restore OSC & widgets per current settings
+        // Recreate OSC then show
         [self->_streamView reloadOnScreenControlsRealtimeWith:(ControllerSupport*)self->_controllerSupport
                                                     andConfig:(StreamConfiguration*)self->_streamConfig];
-        [self->_streamView reloadOnScreenWidgetViews];
+        [self->_streamView setOscObscuredByAlpha:NO];
+        [self setWidgetsHidden:NO];
+        return;
     }
-    else {
-        // Hide OSC & widgets
-        [self->_streamView disableOnScreenControls];
-        [self->_streamView clearOnScreenWidgets];
+    if (obscured) {
+        // Currently hidden by alpha -> show
+        [self->_streamView setOscObscuredByAlpha:NO];
+        [self setWidgetsHidden:NO];
+    } else {
+        // Currently shown -> hide by alpha
+        [self->_streamView setOscObscuredByAlpha:YES];
+        [self setWidgetsHidden:YES];
     }
+}
+
+// Make on-screen widgets visually transparent but still interactive
+- (void)setWidgetsHidden:(BOOL)hidden {
+    // Use a near-zero alpha to keep hit-testing enabled (UIKit ignores alpha < 0.01)
+    CGFloat targetAlpha = hidden ? 0.02f : 1.0f;
+    [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
+        for (UIView *widgetView in self.view.subviews) {
+            if ([widgetView isKindOfClass:[OnScreenWidgetView class]]) {
+                widgetView.alpha = targetAlpha;
+                widgetView.userInteractionEnabled = YES;
+            }
+        }
+    } completion:nil];
+    // Inform Swift side (OnScreenWidgetView) to enable per-button highlight when obscured
+    [OnScreenWidgetView setObscuredByAlpha:hidden];
 }
 
 - (void)disconnectRemoteSession {

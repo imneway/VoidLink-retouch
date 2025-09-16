@@ -54,6 +54,10 @@
 - (void) clearOnScreenWidgets;
 - (void) reloadOnScreenWidgetViews;
 
+// Obscure OSC layers by alpha while keeping them interactive
+- (void)setOscObscuredByAlpha:(BOOL)enabled;
+- (BOOL)isOscObscuredByAlpha;
+
 - (CGSize) getVideoAreaSize;
 - (CGPoint) adjustCoordinatesForVideoArea:(CGPoint)point;
 - (uint16_t)getRotationFromAzimuthAngle:(float)azimuthAngle;

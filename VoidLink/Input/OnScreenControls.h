@@ -111,6 +111,12 @@ typedef NS_ENUM(NSInteger, OnScreenControlsLevel) {
 
 
 
+// Obscure OSC layers by alpha while keeping them interactive
+- (void)setObscuredByAlpha:(BOOL)enabled;
+- (BOOL)isObscuredByAlpha;
+
+
+
 + (NSMutableSet* )touchAddrsCapturedByOnScreenControls;
 - (void) sendRightStickTouchPadEvent:(CGFloat) stickX : (CGFloat) stickY;
 - (void) clearRightStickTouchPadFlag;

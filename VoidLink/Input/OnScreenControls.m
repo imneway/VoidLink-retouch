@@ -78,6 +78,7 @@ static NSSet *validPositionButtonNames;
     OSCProfilesManager *profilesManager;
     NSMutableDictionary *_activeCustomOscButtonPositionDict;
     NSMutableDictionary *_originalControllerLayerOpacityDict;
+    BOOL _obscuredByAlpha;
 }
 
 @synthesize D_PAD_CENTER_X;
@@ -126,6 +127,7 @@ static float LS_CENTER_Y;
 static float RS_CENTER_X;
 static float RS_CENTER_Y;
 static const float DEFAULT_STICK_OPACITY = 0.63;
+static const float OBSCURED_ALPHA = 0.02f; // keep interactive while visually hidden
 
 static float START_X;
 static float START_Y;
@@ -1250,43 +1252,44 @@ static float L3_Y;
             [_controllerSupport setButtonFlag:_controller flags:A_FLAG];
             _aTouch = touch;
             [self oscButtonTouchDownFeedback:_aButton];
+            if (_obscuredByAlpha) { _aButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-            // NSLog(@"Captured OSC A");
         } else if ([_bButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:B_FLAG];
             _bTouch = touch;
             [self oscButtonTouchDownFeedback:_bButton];
+            if (_obscuredByAlpha) { _bButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-            // NSLog(@"Captured OSC B");
         } else if ([_xButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:X_FLAG];
             _xTouch = touch;
             [self oscButtonTouchDownFeedback:_xButton];
+            if (_obscuredByAlpha) { _xButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-            // NSLog(@"Captured OSC X");
         } else if ([_yButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:Y_FLAG];
             _yTouch = touch;
             [self oscButtonTouchDownFeedback:_yButton];
+            if (_obscuredByAlpha) { _yButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-            // NSLog(@"Captured OSC Y");
         } else if ([_upButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:UP_FLAG];
             _dpadTouch = touch;
             _upTouch = touch;
             [self oscButtonTouchDownFeedback:_upButton];
+            if (_obscuredByAlpha) { _upButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-            // NSLog(@"Captured OSC UP");
         } else if ([_downButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:DOWN_FLAG];
             _dpadTouch = touch;
             _downTouch = touch;
             [self oscButtonTouchDownFeedback:_downButton];
+            if (_obscuredByAlpha) { _downButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
         } else if ([_leftButton.presentationLayer hitTest:touchLocation]) {
@@ -1294,68 +1297,66 @@ static float L3_Y;
             _dpadTouch = touch;
             _leftTouch = touch;
             [self oscButtonTouchDownFeedback:_leftButton];
+            if (_obscuredByAlpha) { _leftButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-            // NSLog(@"Captured OSC LEFT");
         } else if ([_rightButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:RIGHT_FLAG];
             _dpadTouch = touch;
             _rightTouch = touch;
             [self oscButtonTouchDownFeedback:_rightButton];
+            if (_obscuredByAlpha) { _rightButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-            // NSLog(@"Captured OSC RIGHT");
         } else if ([_startButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:PLAY_FLAG];
             _startTouch = touch;
             [self oscButtonTouchDownFeedback:_startButton];
+            if (_obscuredByAlpha) { _startButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-            // NSLog(@"Captured OSC PLAY");
         } else if ([_selectButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:BACK_FLAG];
             _selectTouch = touch;
             [self oscButtonTouchDownFeedback:_selectButton];
+            if (_obscuredByAlpha) { _selectButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-            // NSLog(@"Captured OSC BACK");
         } else if ([_l1Button.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:LB_FLAG];
             _l1Touch = touch;
             [self oscButtonTouchDownFeedback:_l1Button];
+            if (_obscuredByAlpha) { _l1Button.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-            // NSLog(@"Captured OSC LB");
         } else if ([_r1Button.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:RB_FLAG];
             _r1Touch = touch;
             [self oscButtonTouchDownFeedback:_r1Button];
+            if (_obscuredByAlpha) { _r1Button.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-            // NSLog(@"Captured OSC RB");
         } else if ([_l2Button.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport updateLeftTrigger:_controller left:0xFF];
             _l2Touch = touch;
             [self oscButtonTouchDownFeedback:_l2Button];
+            if (_obscuredByAlpha) { _l2Button.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-            // NSLog(@"Captured OSC LeftTrigger");
         } else if ([_r2Button.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport updateRightTrigger:_controller right:0xFF];
             _r2Touch = touch;
             [self oscButtonTouchDownFeedback:_r2Button];
+            if (_obscuredByAlpha) { _r2Button.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-            // NSLog(@"Captured OSC RightTrigger");
         } else if ([_l3Button.presentationLayer hitTest:touchLocation]) {
             if (l3Set) {
                 [_controllerSupport clearButtonFlag:_controller flags:LS_CLK_FLAG];
                 _l3Button.borderWidth = 0.0f;
-                // NSLog(@"Captured OSC LS_CLK");
             } else {
                 [_controllerSupport setButtonFlag:_controller flags:LS_CLK_FLAG];
                 _l3Button.borderWidth = 2.0f;
-                // NSLog(@"Captured OSC LS_CLK2");
             }
             l3Set = !l3Set;
             _l3Touch = touch;
@@ -1365,11 +1366,9 @@ static float L3_Y;
             if (r3Set) {
                 [_controllerSupport clearButtonFlag:_controller flags:RS_CLK_FLAG];
                 _r3Button.borderWidth = 0.0f;
-                // NSLog(@"Captured OSC RS_CLK");
             } else {
                 [_controllerSupport setButtonFlag:_controller flags:RS_CLK_FLAG];
                 _r3Button.borderWidth = 2.0f;
-                // NSLog(@"Captured OSC RS_CLK2");
             }
             r3Set = !r3Set;
             _r3Touch = touch;
@@ -1378,16 +1377,12 @@ static float L3_Y;
         } else if ([_leftStick.presentationLayer hitTest:touchLocation]) {
             _leftStick.opacity = 1.0; // make stick opaque while being moved
             if (l3TouchStart != nil) {
-                // Find elapsed time and convert to milliseconds
-                // Use (-) modifier to conversion since receiver is earlier than now
                 double l3TouchTime = [l3TouchStart timeIntervalSinceNow] * -1000.0;
                 if (l3TouchTime < STICK_CLICK_RATE) {
                     [_controllerSupport setButtonFlag:_controller flags:LS_CLK_FLAG];
                     [self oscButtonTouchDownFeedback:_leftStick];
                     updated = true;
                     touchEventCapturedByOsc = true;
-                    // NSLog(@"Captured OSC LS_CLK3");
-
                 }
             }
             _lsTouch = touch;
@@ -1396,15 +1391,12 @@ static float L3_Y;
         } else if ([_rightStick.presentationLayer hitTest:touchLocation]) {
             _rightStick.opacity = 1.0; // make stick opaque while being moved
             if (r3TouchStart != nil) {
-                // Find elapsed time and convert to milliseconds
-                // Use (-) modifier to conversion since receiver is earlier than now
                 double r3TouchTime = [r3TouchStart timeIntervalSinceNow] * -1000.0;
                 if (r3TouchTime < STICK_CLICK_RATE) {
                     [_controllerSupport setButtonFlag:_controller flags:RS_CLK_FLAG];
                     [self oscButtonTouchDownFeedback:_rightStick];
                     updated = true;
                     touchEventCapturedByOsc = true;
-                    // NSLog(@"Captured OSC LS_CLK4");
                 }
             }
             _rsTouch = touch;
@@ -1416,23 +1408,18 @@ static float L3_Y;
             updated = true;
             touchEventCapturedByOsc = true;
         }
-        // additionally, populate the touchesCapturedByOSButton set, for native/relative touch handler to deal with.
         if(touchEventCapturedByOsc) [touchAddrsCapturedByOnScreenControls addObject:@((uintptr_t)touch)];
     }
     if (updated) {
         [_controllerSupport updateFinished:_controller];
     }
-    // NSLog(@"captured by OSB touches, OSC Class: %d", (uint32_t)[touchAddrsCapturedByOnScreenControls count]);
-
     
     bool oscTouched = updated || stickTouch;
     if(oscTouched){
-        for (UIGestureRecognizer *gesture in _view.gestureRecognizers) { // we'll iterate the streamFrameTopLayerView, which was passed here as _view, where all the custom gestures are added) instead of the streamview, to check if that the osc buttons are pressed
+        for (UIGestureRecognizer *gesture in _view.gestureRecognizers) {
             if ([gesture isKindOfClass:[CustomTapGestureRecognizer class]]) {
-                // This is a CustomTapGestureRecognizer
                 CustomTapGestureRecognizer *tapGesture = (CustomTapGestureRecognizer *)gesture;
                 tapGesture.isOnScreenControllerBeingPressed = true;
-                // Perform actions with tapGesture
             }
         }
     }
@@ -1445,87 +1432,86 @@ static float L3_Y;
     BOOL touched = false;
     for (UITouch* touch in touches) {
         
-        // remove the touch obj from touchesCapturedByOnScreenButtons
         if([touchAddrsCapturedByOnScreenControls containsObject:@((uintptr_t)touch)]) [touchAddrsCapturedByOnScreenControls removeObject:@((uintptr_t)touch)];
         
         if (touch == _aTouch) {
             [_controllerSupport clearButtonFlag:_controller flags:A_FLAG];
             _aTouch = nil;
-            _aButton.opacity = [_originalControllerLayerOpacityDict[_aButton.name] floatValue];
-            _aButton.shadowOpacity = 0.0; // reset button shadow & background color
+            _aButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_aButton.name] floatValue];
+            _aButton.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _bTouch) {
             [_controllerSupport clearButtonFlag:_controller flags:B_FLAG];
             _bTouch = nil;
-            _bButton.opacity = [_originalControllerLayerOpacityDict[_bButton.name] floatValue];
+            _bButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_bButton.name] floatValue];
             _bButton.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _xTouch) {
             [_controllerSupport clearButtonFlag:_controller flags:X_FLAG];
             _xTouch = nil;
-            _xButton.opacity = [_originalControllerLayerOpacityDict[_xButton.name] floatValue];
+            _xButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_xButton.name] floatValue];
             _xButton.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _yTouch) {
             [_controllerSupport clearButtonFlag:_controller flags:Y_FLAG];
             _yTouch = nil;
-            _yButton.opacity = [_originalControllerLayerOpacityDict[_yButton.name] floatValue];
+            _yButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_yButton.name] floatValue];
             _yButton.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _dpadTouch) {
             [_controllerSupport clearButtonFlag:_controller
                                           flags:UP_FLAG | DOWN_FLAG | LEFT_FLAG | RIGHT_FLAG];
             _dpadTouch = nil;
-            _upButton.opacity = [_originalControllerLayerOpacityDict[_upButton.name] floatValue];
+            _upButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_upButton.name] floatValue];
             _upButton.shadowOpacity = 0.0;
-            _leftButton.opacity = [_originalControllerLayerOpacityDict[_leftButton.name] floatValue];
+            _leftButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_leftButton.name] floatValue];
             _leftButton.shadowOpacity = 0.0;
-            _rightButton.opacity = [_originalControllerLayerOpacityDict[_rightButton.name] floatValue];
+            _rightButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_rightButton.name] floatValue];
             _rightButton.shadowOpacity = 0.0;
-            _downButton.opacity = [_originalControllerLayerOpacityDict[_downButton.name] floatValue];
+            _downButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_downButton.name] floatValue];
             _downButton.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _startTouch) {
             [_controllerSupport clearButtonFlag:_controller flags:PLAY_FLAG];
             _startTouch = nil;
-            _startButton.opacity = [_originalControllerLayerOpacityDict[_startButton.name] floatValue];
+            _startButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_startButton.name] floatValue];
             _startButton.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _selectTouch) {
             [_controllerSupport clearButtonFlag:_controller flags:BACK_FLAG];
             _selectTouch = nil;
-            _selectButton.opacity = [_originalControllerLayerOpacityDict[_selectButton.name] floatValue];
+            _selectButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_selectButton.name] floatValue];
             _selectButton.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _l1Touch) {
             [_controllerSupport clearButtonFlag:_controller flags:LB_FLAG];
             _l1Touch = nil;
-            _l1Button.opacity = [_originalControllerLayerOpacityDict[_l1Button.name] floatValue];
+            _l1Button.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_l1Button.name] floatValue];
             _l1Button.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _r1Touch) {
             [_controllerSupport clearButtonFlag:_controller flags:RB_FLAG];
             _r1Touch = nil;
-            _r1Button.opacity = [_originalControllerLayerOpacityDict[_r1Button.name] floatValue];
+            _r1Button.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_r1Button.name] floatValue];
             _r1Button.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _l2Touch) {
             [_controllerSupport updateLeftTrigger:_controller left:0];
-            _l2Button.opacity = [_originalControllerLayerOpacityDict[_l2Button.name] floatValue];
+            _l2Button.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_l2Button.name] floatValue];
             _l2Touch = nil;
             _l2Button.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _r2Touch) {
             [_controllerSupport updateRightTrigger:_controller right:0];
-            _r2Button.opacity = [_originalControllerLayerOpacityDict[_r2Button.name] floatValue];
+            _r2Button.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_r2Button.name] floatValue];
             _r2Touch = nil;
             _r2Button.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _lsTouch) {
             _leftStick.frame = CGRectMake(LS_CENTER_X - LEFT_STICK_INNER_SIZE / 2, LS_CENTER_Y - LEFT_STICK_INNER_SIZE / 2, LEFT_STICK_INNER_SIZE, LEFT_STICK_INNER_SIZE);
-            _leftStick.opacity = [_originalControllerLayerOpacityDict[_leftStick.name] floatValue];
+            _leftStick.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_leftStick.name] floatValue];
             _leftStick.shadowOpacity = 0.0;
-            _leftStick.opacity = _leftStickOpacity; // reset stick to half transparent
+            _leftStick.opacity = _leftStickOpacity; // keep idle opacity rule
             [_controllerSupport updateLeftStick:_controller x:0 y:0];
             [_controllerSupport clearButtonFlag:_controller flags:LS_CLK_FLAG];
             l3TouchStart = [NSDate date];
@@ -1533,7 +1519,7 @@ static float L3_Y;
             updated = true;
         } else if (touch == _rsTouch) {
             _rightStick.frame = CGRectMake(RS_CENTER_X - RIGHT_STICK_INNER_SIZE / 2, RS_CENTER_Y - RIGHT_STICK_INNER_SIZE / 2, RIGHT_STICK_INNER_SIZE, RIGHT_STICK_INNER_SIZE);
-            _rightStick.opacity = [_originalControllerLayerOpacityDict[_rightStick.name] floatValue];
+            _rightStick.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_rightStick.name] floatValue];
             _rightStick.shadowOpacity = 0.0;
             _rightStick.opacity = _rightStickOpacity;
             [_controllerSupport updateRightStick:_controller x:0 y:0];
@@ -1990,5 +1976,27 @@ static float L3_Y;
     return dict;
 }
 
+#pragma mark - Obscure by alpha
+
+- (BOOL)isObscuredByAlpha {
+    return _obscuredByAlpha;
+}
+
+- (void)setObscuredByAlpha:(BOOL)enabled {
+    _obscuredByAlpha = enabled;
+    [CATransaction begin];
+    [CATransaction setAnimationDuration:0.2];
+    [CATransaction setAnimationTimingFunction:[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut]];
+    for (CALayer* layer in self.OSCButtonLayers) {
+        if (layer == self._leftStickBackground || layer == self._rightStickBackground) {
+            layer.opacity = enabled ? OBSCURED_ALPHA : 1.0f;
+        } else if (layer == self._leftStick || layer == self._rightStick) {
+            layer.opacity = enabled ? OBSCURED_ALPHA : DEFAULT_STICK_OPACITY;
+        } else {
+            layer.opacity = enabled ? OBSCURED_ALPHA : 5.0f/6.0f;
+        }
+    }
+    [CATransaction commit];
+}
 
 @end

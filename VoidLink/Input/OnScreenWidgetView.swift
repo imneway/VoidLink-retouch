@@ -32,6 +32,7 @@ import UIKit
     }
     
     @objc public var widgetType: WidgetTypeEnum = WidgetTypeEnum.uninitialized
+    @objc static public var obscuredByAlpha: Bool = false
     
     @objc static public var editMode: Bool = false
     @objc public var buttonLabel: String
@@ -43,6 +44,7 @@ import UIKit
     private var comboKeyTimeIntervalMs: UInt32 = 0
 
     @objc public var pressed: Bool
+    private var restoreAlphaAfterRelease: Bool = false
     @objc public var widthFactor: CGFloat = 1.0
     @objc public var heightFactor: CGFloat = 1.0
     @objc public var slideMode: Int = 0
@@ -1457,6 +1459,12 @@ import UIKit
         
         self.pressed = true
 
+        // When widgets are globally obscured by alpha, highlight the pressed widget
+        if OnScreenWidgetView.obscuredByAlpha || self.alpha < 0.05 {
+            self.restoreAlphaAfterRelease = true
+            self.alpha = 1.0
+        }
+
         if !OnScreenWidgetView.editMode {
             if self.widgetType == WidgetTypeEnum.touchPad && touches.count == 1{ // don't use event?.allTouches?.count here, it will counts all touches including the ones captured by other UIViews
                 switch self.touchPadString {
@@ -1466,7 +1474,7 @@ import UIKit
                         self.showl3r3Indicator()
                         self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)}
                     // 对于 Alt 版本，降低相关控件透明度
-                    if self.touchPadString == "LSPADALT" {
+                    if self.touchPadString == "LSPADALT" && !OnScreenWidgetView.obscuredByAlpha {
                         self.dimControlsForAltPad()
                     }
                 case "RSPAD", "RSPADALT":
@@ -1475,7 +1483,7 @@ import UIKit
                         self.showl3r3Indicator()
                         self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)}
                     // 对于 Alt 版本，降低相关控件透明度
-                    if self.touchPadString == "RSPADALT" {
+                    if self.touchPadString == "RSPADALT" && !OnScreenWidgetView.obscuredByAlpha {
                         self.dimControlsForAltPad()
                     }
                 case "LSVPAD":
@@ -1807,14 +1815,14 @@ import UIKit
                 self.onScreenControls.clearLeftStickTouchPadFlag()
                 if widgetType == WidgetTypeEnum.touchPad {self.resetStickBallPositionAndHideIndicator()}
                 // 对于 Alt 版本，恢复相关控件透明度
-                if self.touchPadString == "LSPADALT" {
+                if self.touchPadString == "LSPADALT" && !OnScreenWidgetView.obscuredByAlpha {
                     self.restoreControlsOpacity()
                 }
             case "RSPAD", "RSPADALT":
                 self.onScreenControls.clearRightStickTouchPadFlag()
                 if widgetType == WidgetTypeEnum.touchPad {self.resetStickBallPositionAndHideIndicator()}
                 // 对于 Alt 版本，恢复相关控件透明度
-                if self.touchPadString == "RSPADALT" {
+                if self.touchPadString == "RSPADALT" && !OnScreenWidgetView.obscuredByAlpha {
                     self.restoreControlsOpacity()
                 }
             case "LSVPAD":
@@ -1912,6 +1920,11 @@ import UIKit
         }
         
         self.handlebuttonUp()
+        // Restore alpha if we highlighted in touchesBegan
+        if restoreAlphaAfterRelease && (OnScreenWidgetView.obscuredByAlpha || self.superview?.alpha ?? 1.0 < 0.05) {
+            self.alpha = 0.02
+            restoreAlphaAfterRelease = false
+        }
     }
     
 }

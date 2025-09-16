@@ -455,6 +455,23 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     else [self disableOnScreenControls];
 }
 
+// Obscure OSC layers by alpha while keeping them interactive
+- (void)setOscObscuredByAlpha:(BOOL)enabled {
+#if !TARGET_OS_TV
+    if (onScreenControls) {
+        [onScreenControls setObscuredByAlpha:enabled];
+    }
+#endif
+}
+
+- (BOOL)isOscObscuredByAlpha {
+#if !TARGET_OS_TV
+    return onScreenControls ? [onScreenControls isObscuredByAlpha] : NO;
+#else
+    return NO;
+#endif
+}
+
 
 - (void) reloadOnScreenControlsWith:(ControllerSupport*)controllerSupport
                          andConfig:(StreamConfiguration*)streamConfig {
