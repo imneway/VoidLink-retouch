@@ -95,6 +95,7 @@
     UIControl *_toolboxOverlay;
 #pragma mark Snap ratio button
     UIButton *_snapRatioButton;
+    UIButton *_oscToggleButton;
 #else
     UITapGestureRecognizer *_menuTapGestureRecognizer;
     UITapGestureRecognizer *_menuDoubleTapGestureRecognizer;
@@ -611,16 +612,46 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         [_snapRatioButton addTarget:self action:@selector(toggleSnapRatio) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:_snapRatioButton];
     }
-    // Update title
-    NSString *title = _settings.snapScreenRatioMode.integerValue == 0 ? @"16:9" : @"Full Screen";
-    [_snapRatioButton setTitle:title forState:UIControlStateNormal];
+    
+    // Create OSC toggle button if not exists
+    if (!_oscToggleButton) {
+        _oscToggleButton = [UIButton buttonWithType:UIButtonTypeSystem];
+        _oscToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+        [_oscToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.64] forState:UIControlStateNormal];
+        _oscToggleButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
+        [_oscToggleButton addTarget:self action:@selector(toggleOscOnOff) forControlEvents:UIControlEventTouchUpInside];
+        [self.view addSubview:_oscToggleButton];
+    }
+    
+    // Update titles
+    NSString *snapTitle = _settings.snapScreenRatioMode.integerValue == 0 ? @"16:9" : @"Full Screen";
+    [_snapRatioButton setTitle:snapTitle forState:UIControlStateNormal];
+    
+    // Update OSC button title based ONLY on ON/OFF state, not transparency state
+    OnScreenControlsLevel currentLevel = [_streamView getCurrentOscState];
+    NSString *oscTitle = (currentLevel == OnScreenControlsLevelOff) ? @"OSC OFF" : @"OSC ON";
+    [_oscToggleButton setTitle:oscTitle forState:UIControlStateNormal];
+    
+    // Hide both buttons if snap screen is not enabled
     _snapRatioButton.hidden = !_settings.snapScreenToTop;
+    _oscToggleButton.hidden = !_settings.snapScreenToTop;
+    
     if (_snapRatioButton.hidden) return;
-    // Layout at bottom-right (24pt trailing, 12pt bottom)
-    CGSize size = [_snapRatioButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
-    CGFloat x = self.view.bounds.size.width - 24 - size.width;
-    CGFloat y = self.view.bounds.size.height - 12 - size.height;
-    _snapRatioButton.frame = CGRectMake(x, y, size.width, size.height);
+    
+    // Layout both buttons at bottom-right
+    // First calculate sizes
+    CGSize snapSize = [_snapRatioButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
+    CGSize oscSize = [_oscToggleButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
+    
+    // Position snap ratio button (rightmost)
+    CGFloat snapX = self.view.bounds.size.width - 24 - snapSize.width;
+    CGFloat snapY = self.view.bounds.size.height - 12 - snapSize.height;
+    _snapRatioButton.frame = CGRectMake(snapX, snapY, snapSize.width, snapSize.height);
+    
+    // Position OSC button (left of snap ratio button with 8pt spacing)
+    CGFloat oscX = snapX - 8 - oscSize.width;
+    CGFloat oscY = self.view.bounds.size.height - 12 - oscSize.height;
+    _oscToggleButton.frame = CGRectMake(oscX, oscY, oscSize.width, oscSize.height);
 }
 
 - (void)createTimeBatteryDisplay {
@@ -683,6 +714,32 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     _settings.snapScreenRatioMode = [NSNumber numberWithInteger:mode];
     // 重新应用布局
     [self applySnapToTopIfNeeded];
+}
+
+- (void)toggleOscOnOff {
+    // Avoid interference when widget layout tool is open
+    if (self->_streamView.widgetToolOpened) {
+        return;
+    }
+
+    OnScreenControlsLevel currentLevel = [self->_streamView getCurrentOscState];
+    BOOL isOscObscured = [self->_streamView isOscObscuredByAlpha];
+
+    if (currentLevel == OnScreenControlsLevelOff || isOscObscured) {
+        // If OSC is off or obscured, turn it on
+        [self->_streamView reloadOnScreenControlsRealtimeWith:(ControllerSupport*)self->_controllerSupport
+                                                    andConfig:(StreamConfiguration*)self->_streamConfig];
+        [self->_streamView reloadOnScreenWidgetViews]; // Reload widgets to ensure they are recreated
+        [self->_streamView setOscObscuredByAlpha:NO]; // Restore OSC layers to normal opacity
+        [self setWidgetsHidden:NO]; // Restore widgets to normal opacity
+    } else {
+        // If OSC is on, turn it off completely
+        [self->_streamView disableOnScreenControls]; // Disable OSC completely
+        [self->_streamView clearOnScreenWidgets]; // Remove all onscreen widgets completely
+    }
+    
+    // Update button title
+    [self updateSnapRatioButton];
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -1295,6 +1352,9 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     
     // Update time and battery display layout after resize
     [self updateTimeBatteryDisplay];
+    
+    // Update button layout after resize
+    [self updateSnapRatioButton];
 }
 
 
@@ -1401,14 +1461,14 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     }
     OnScreenControlsLevel current = [self->_streamView getCurrentOscState];
     BOOL obscured = [self->_streamView isOscObscuredByAlpha];
+    
+    // If OSC is completely off, right swipe should do nothing
+    // Only ON/OFF button can turn it back on
     if (current == OnScreenControlsLevelOff) {
-        // Recreate OSC then show
-        [self->_streamView reloadOnScreenControlsRealtimeWith:(ControllerSupport*)self->_controllerSupport
-                                                    andConfig:(StreamConfiguration*)self->_streamConfig];
-        [self->_streamView setOscObscuredByAlpha:NO];
-        [self setWidgetsHidden:NO];
         return;
     }
+    
+    // Only handle transparency changes when OSC is actually enabled
     if (obscured) {
         // Currently hidden by alpha -> show
         [self->_streamView setOscObscuredByAlpha:NO];
@@ -1418,6 +1478,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         [self->_streamView setOscObscuredByAlpha:YES];
         [self setWidgetsHidden:YES];
     }
+    // Do NOT update button title - right swipe should not affect ON/OFF button state
 }
 
 // Make on-screen widgets visually transparent but still interactive
