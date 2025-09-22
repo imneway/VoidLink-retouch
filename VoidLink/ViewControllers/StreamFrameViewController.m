@@ -27,6 +27,10 @@
 #import "VoidLink-Swift.h"
 #import "OSCProfilesManager.h"
 #import "ThemeManager.h"
+#import "HttpManager.h"
+#import "ServerInfoResponse.h"
+#import "HttpRequest.h"
+#include <errno.h>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -75,6 +79,15 @@
     PlotMetrics _frameQueueMetrics;
     UIWindow *_extWindow;
     UIView *_streamVideoRenderView;
+    // Main-like toast UI (reuse from Main page style)
+    UIView *_autoEnterToast;
+    UILabel *_autoEnterLabel;
+    UIButton *_autoEnterCancelButton;
+    // Self-heal reconnect guard
+    NSTimer *_reconnectTimer;
+    double _reconnectElapsedSeconds;
+    NSInteger _reconnectProbeTick;
+    BOOL _hasConnectionStarted;
     /*
      * View architecture of this viewController:
      * self.view (named `streamFrameTopLayerView` in StreamView.m, where slide & tap gestures, and onScreenControls & OnScreenWidgetView buttons are registered)
@@ -927,6 +940,10 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     
     _controllerSupport = [[ControllerSupport alloc] initWithConfig:self.streamConfig delegate:self];
     _inactivityTimer = nil;
+    _hasConnectionStarted = NO;
+    _reconnectTimer = nil;
+    _reconnectElapsedSeconds = 0;
+    _reconnectProbeTick = 0;
     
     _streamView = [[StreamView alloc] initWithFrame:self.view.frame];
     
@@ -991,11 +1008,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     _tipLabel.textAlignment = NSTextAlignmentCenter;
     _tipLabel.center = CGPointMake(self.view.frame.size.width / 2, self.view.frame.size.height * 0.9);
     
-    _streamMan = [[StreamManager alloc] initWithConfig:self.streamConfig
-                                            renderView:_streamVideoRenderView
-                                   connectionCallbacks:self];
-    NSOperationQueue* opQueue = [[NSOperationQueue alloc] init];
-    [opQueue addOperation:_streamMan];
+    [self startStreamOrEnterSelfHealIfOffline];
     
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(applicationWillResignActive:)
@@ -1061,6 +1074,138 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         // Insert Metal view at the bottom of the view hierarchy
         [self.view insertSubview:self.metalViewController.view atIndex:0];
         [self.metalViewController didMoveToParentViewController:self];
+    }
+}
+
+#pragma mark - Self-Heal Reconnect Guard
+
+- (void)startStreamOrEnterSelfHealIfOffline {
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        HttpManager* hMan = [[HttpManager alloc] initWithAddress:weakSelf.streamConfig.host httpsPort:weakSelf.streamConfig.httpsPort serverCert:weakSelf.streamConfig.serverCert];
+        ServerInfoResponse* serverInfoResp = [[ServerInfoResponse alloc] init];
+        [hMan executeRequestSynchronously:[HttpRequest requestForResponse:serverInfoResp withUrlRequest:[hMan newServerInfoRequest:false]
+                                                        fallbackError:401 fallbackRequest:[hMan newHttpServerInfoRequest]]];
+        BOOL online = [serverInfoResp isStatusOk];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!online) {
+                [self beginSelfHealReconnectLoopWithOverlay:YES];
+            } else {
+                [self startStreamManager];
+            }
+        });
+    });
+}
+
+- (void)startStreamManager {
+    if (_streamMan != nil) return;
+    _hasConnectionStarted = NO;
+    _streamMan = [[StreamManager alloc] initWithConfig:self.streamConfig
+                                            renderView:_streamVideoRenderView
+                                   connectionCallbacks:self];
+    NSOperationQueue* opQueue = [[NSOperationQueue alloc] init];
+    [opQueue addOperation:_streamMan];
+}
+
+- (void)beginSelfHealReconnectLoopWithOverlay:(BOOL)showOverlay {
+    if (_reconnectTimer != nil) return;
+    if (showOverlay) {
+        [self showAutoEnterToastLikeMainWithText:[LocalizationHelper localizedStringForKey:@"Host offline. Retrying..."]];
+    }
+    _reconnectElapsedSeconds = 0;
+    _reconnectProbeTick = 0;
+    __weak typeof(self) weakSelf2 = self;
+    _reconnectTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer * _Nonnull timer) {
+        typeof(self) selfRef = weakSelf2;
+        if (!selfRef) { [timer invalidate]; return; }
+        selfRef->_reconnectElapsedSeconds += 1.0;
+        selfRef->_reconnectProbeTick++;
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            HttpManager* hMan = [[HttpManager alloc] initWithAddress:selfRef.streamConfig.host httpsPort:selfRef.streamConfig.httpsPort serverCert:selfRef.streamConfig.serverCert];
+            ServerInfoResponse* resp = [[ServerInfoResponse alloc] init];
+            [hMan executeRequestSynchronously:[HttpRequest requestForResponse:resp withUrlRequest:[hMan newServerInfoRequest:false]
+                                                                fallbackError:401 fallbackRequest:[hMan newHttpServerInfoRequest]]];
+            BOOL online = [resp isStatusOk];
+            if (online) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [selfRef stopSelfHealReconnectLoop];
+                    [selfRef updateAutoEnterToastLabel:[LocalizationHelper localizedStringForKey:@"Connecting..."]];
+                    [selfRef startStreamManager];
+                });
+            }
+        });
+    }];
+}
+
+- (void)stopSelfHealReconnectLoop {
+    [_reconnectTimer invalidate];
+    _reconnectTimer = nil;
+    _reconnectElapsedSeconds = 0;
+    _reconnectProbeTick = 0;
+    [self hideAutoEnterToastLikeMain];
+}
+
+- (void)cancelSelfHealAndReturnToMain {
+    [self stopSelfHealReconnectLoop];
+    [self returnToMainFrame];
+}
+
+#pragma mark - Main-like AutoEnter Toast in Stream VC
+
+- (void)showAutoEnterToastLikeMainWithText:(NSString *)text {
+    if (_autoEnterToast != nil) return;
+    _autoEnterToast = [[UIView alloc] init];
+    _autoEnterToast.translatesAutoresizingMaskIntoConstraints = NO;
+    _autoEnterToast.backgroundColor = [UIColor whiteColor];
+    _autoEnterToast.layer.cornerRadius = 12.0;
+    _autoEnterToast.layer.shadowColor = [UIColor blackColor].CGColor;
+    _autoEnterToast.layer.shadowOpacity = 0.15;
+    _autoEnterToast.layer.shadowRadius = 8.0;
+    _autoEnterToast.layer.shadowOffset = CGSizeMake(0, 2);
+
+    _autoEnterLabel = [[UILabel alloc] init];
+    _autoEnterLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    _autoEnterLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightRegular];
+    _autoEnterLabel.textColor = [UIColor blackColor];
+    _autoEnterLabel.text = text ?: @"";
+
+    _autoEnterCancelButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    _autoEnterCancelButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [_autoEnterCancelButton setTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] forState:UIControlStateNormal];
+    _autoEnterCancelButton.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
+    [_autoEnterCancelButton addTarget:self action:@selector(cancelSelfHealAndReturnToMain) forControlEvents:UIControlEventTouchUpInside];
+
+    [_autoEnterToast addSubview:_autoEnterLabel];
+    [_autoEnterToast addSubview:_autoEnterCancelButton];
+    [self.view addSubview:_autoEnterToast];
+
+    UILayoutGuide *guide;
+    if (@available(iOS 11.0, *)) { guide = self.view.safeAreaLayoutGuide; }
+
+    [NSLayoutConstraint activateConstraints:@[
+        [_autoEnterToast.leadingAnchor constraintEqualToAnchor:guide.leadingAnchor constant:24],
+        [_autoEnterToast.trailingAnchor constraintEqualToAnchor:guide.trailingAnchor constant:-24],
+        [_autoEnterToast.bottomAnchor constraintEqualToAnchor:guide.bottomAnchor constant:-20],
+
+        [_autoEnterLabel.topAnchor constraintEqualToAnchor:_autoEnterToast.topAnchor constant:12],
+        [_autoEnterLabel.leadingAnchor constraintEqualToAnchor:_autoEnterToast.leadingAnchor constant:16],
+        [_autoEnterLabel.bottomAnchor constraintEqualToAnchor:_autoEnterToast.bottomAnchor constant:-12],
+
+        [_autoEnterCancelButton.centerYAnchor constraintEqualToAnchor:_autoEnterLabel.centerYAnchor],
+        [_autoEnterCancelButton.trailingAnchor constraintEqualToAnchor:_autoEnterToast.trailingAnchor constant:-16]
+    ]];
+}
+
+- (void)hideAutoEnterToastLikeMain {
+    [_autoEnterToast removeFromSuperview];
+    _autoEnterToast = nil;
+    _autoEnterLabel = nil;
+    _autoEnterCancelButton = nil;
+}
+
+- (void)updateAutoEnterToastLabel:(NSString *)text {
+    if (_autoEnterLabel) {
+        _autoEnterLabel.text = text ?: @"";
     }
 }
 
@@ -1249,6 +1394,9 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     [_timeBatteryUpdateTimer invalidate];
     _timeBatteryUpdateTimer = nil;
     
+    // Mark one-shot suppression to avoid immediate auto-enter after manual exit
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"AutoEnterSuppressOnce"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
     [self.navigationController popToRootViewControllerAnimated:NO];
     
     _extWindow = nil;
@@ -1516,6 +1664,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 - (void) connectionStarted {
     Log(LOG_I, @"Connection started");
     dispatch_async(dispatch_get_main_queue(), ^{
+        self->_hasConnectionStarted = YES;
         // Leave the spinner spinning until it's obscured by
         // the first frame of video.
         self->_stageLabel.hidden = YES;
@@ -1623,14 +1772,20 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
             }
         }
         
-        UIAlertController* conTermAlert = [UIAlertController alertControllerWithTitle:title
-                                                                              message:message
-                                                                       preferredStyle:UIAlertControllerStyleAlert];
-        [Utils addHelpOptionToDialog:conTermAlert];
-        [conTermAlert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:^(UIAlertAction* action){
-            [self returnToMainFrame];
-        }]];
-        [self presentViewController:conTermAlert animated:YES completion:nil];
+        // For offline/network class errors, self-heal instead of blocking
+        if (portFlags != 0 || errorCode == ETIMEDOUT || errorCode == ECONNREFUSED) {
+            [self updateOverlayText:[LocalizationHelper localizedStringForKey:@"Host offline. Retrying..."]];
+            [self beginSelfHealReconnectLoopWithOverlay:NO];
+        } else {
+            UIAlertController* conTermAlert = [UIAlertController alertControllerWithTitle:title
+                                                                                  message:message
+                                                                           preferredStyle:UIAlertControllerStyleAlert];
+            [Utils addHelpOptionToDialog:conTermAlert];
+            [conTermAlert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:^(UIAlertAction* action){
+                [self returnToMainFrame];
+            }]];
+            [self presentViewController:conTermAlert animated:YES completion:nil];
+        }
     });
 
     [_streamMan stopStream];
@@ -1670,14 +1825,20 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
             message = [message stringByAppendingString:[LocalizationHelper localizedStringForKey:@"!ML_TEST_RESULT_INCONCLUSIVE"]];
         }
         
-        UIAlertController* alert = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Connection Failed"]
-                                                                       message:message
-                                                                preferredStyle:UIAlertControllerStyleAlert];
-        [Utils addHelpOptionToDialog:alert];
-        [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:^(UIAlertAction* action){
-            [self returnToMainFrame];
-        }]];
-        [self presentViewController:alert animated:YES completion:nil];
+        // For offline/network/timeout-like failures, enter self-heal instead of blocking with alert
+        if (portTestFlags != 0 || errorCode == ETIMEDOUT || errorCode == ECONNREFUSED) {
+            [self updateOverlayText:[LocalizationHelper localizedStringForKey:@"Host offline. Retrying..."]];
+            [self beginSelfHealReconnectLoopWithOverlay:NO];
+        } else {
+            UIAlertController* alert = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Connection Failed"]
+                                                                           message:message
+                                                                    preferredStyle:UIAlertControllerStyleAlert];
+            [Utils addHelpOptionToDialog:alert];
+            [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:^(UIAlertAction* action){
+                [self returnToMainFrame];
+            }]];
+            [self presentViewController:alert animated:YES completion:nil];
+        }
     });
     
     [_streamMan stopStream];

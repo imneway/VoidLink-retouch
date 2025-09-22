@@ -16,6 +16,8 @@
 // Darwin notification callback to bridge App Intent events while app is running
 static void AutoEnterDarwinCallback(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"AutoEnterTriggered"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
         NSString *host = [[NSUserDefaults standardUserDefaults] stringForKey:@"AutoEnterDesktopHostName"];
         if (host.length > 0) {
             [[NSNotificationCenter defaultCenter] postNotificationName:@"VoidLinkAutoEnterRequested" object:nil userInfo:@{ @"host": host }];
@@ -117,6 +119,7 @@ static NSString* DB_NAME = @"Limelight_iOS.sqlite";
         if ([[components.host lowercaseString] isEqualToString:@"auto-enter"] && hostParam.length > 0) {
             self.autoEnterHostName = hostParam;
             [[NSUserDefaults standardUserDefaults] setObject:hostParam forKey:@"AutoEnterDesktopHostName"];
+            [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"AutoEnterTriggered"];
             [[NSUserDefaults standardUserDefaults] synchronize];
             // Notify running app instance if present
             [[NSNotificationCenter defaultCenter] postNotificationName:@"VoidLinkAutoEnterRequested" object:nil userInfo:@{ @"host": hostParam }];

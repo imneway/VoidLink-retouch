@@ -62,6 +62,8 @@ static UIWindow *_externalSceneWindow = nil;
                     [[NSUserDefaults standardUserDefaults] setObject:hostParam forKey:@"AutoEnterDesktopHostName"];
                     [[NSUserDefaults standardUserDefaults] synchronize];
                 }
+                [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"AutoEnterTriggered"];
+                [[NSUserDefaults standardUserDefaults] synchronize];
             }
         }
     }

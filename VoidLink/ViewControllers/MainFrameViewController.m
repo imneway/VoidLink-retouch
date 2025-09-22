@@ -1307,15 +1307,22 @@ static NSMutableSet* hostList;
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
+// Stop auto-enter retry loop but keep the pending flag in UserDefaults for future attempts
+- (void)pauseAutoEnterPreservingPendingFlag {
+    _autoEnterActive = NO;
+    [_autoEnterTimer invalidate];
+    _autoEnterTimer = nil;
+    [self hideAutoEnterToast];
+    _autoEnterTargetHost = nil;
+    _autoEnterTargetHostName = nil;
+}
+
 - (void)tryLaunchIfReady:(TemporaryHost *)host {
     if (host.state == StateOnline && host.pairState == PairStatePaired && host.appList.count > 0) {
         [self hideAutoEnterToast];
         _autoEnterActive = NO;
         [_autoEnterTimer invalidate];
         _autoEnterTimer = nil;
-        // Clear pending markers to avoid re-entry after exit
-        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterDesktopHostName"];
-        [[NSUserDefaults standardUserDefaults] synchronize];
         [self launchButtonTappedForHost:host];
     }
 }
@@ -1340,6 +1347,17 @@ static NSMutableSet* hostList;
     if (hostName == nil || hostName.length == 0) return;
     // If already streaming or already active, ignore to avoid duplicates
     if (self.revealViewController.isStreaming || _autoEnterActive) return;
+    // If user explicitly suppressed auto-enter once (manual sidebar exit), skip
+    BOOL triggered = [[NSUserDefaults standardUserDefaults] boolForKey:@"AutoEnterTriggered"];
+    BOOL suppressed = [[NSUserDefaults standardUserDefaults] boolForKey:@"AutoEnterSuppressOnce"];
+    if (!triggered && suppressed) {
+        return;
+    }
+    // If explicitly triggered, clear suppression and continue
+    if (triggered && suppressed) {
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterSuppressOnce"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    }
     _autoEnterTargetHostName = hostName;
     _autoEnterTargetHost = [self findHostByName:hostName];
     _autoEnterElapsedSeconds = 0;
@@ -1405,7 +1423,7 @@ static NSMutableSet* hostList;
 - (void)setAutoEnterInactiveIfStreamingStarted
 {
     if (self.revealViewController.isStreaming && _autoEnterActive) {
-        [self cancelAutoEnter];
+        [self pauseAutoEnterPreservingPendingFlag];
     }
 }
 
@@ -1981,6 +1999,8 @@ static NSMutableSet* hostList;
     
     // Check for a pending shortcut action when returning to foreground
     [self handlePendingShortcutAction];
+    // Also consume pending auto-enter requests when returning to foreground
+    [self consumePendingAutoEnter];
 }
 
 - (void)handleRuntimeAutoEnterNotification:(NSNotification *)notification
@@ -1991,8 +2011,6 @@ static NSMutableSet* hostList;
     } else {
         NSString *pendingHost = [[NSUserDefaults standardUserDefaults] stringForKey:@"AutoEnterDesktopHostName"];
         if (pendingHost.length > 0) {
-            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterDesktopHostName"];
-            [[NSUserDefaults standardUserDefaults] synchronize];
             [self beginAutoEnterForHostName:pendingHost];
         }
     }
@@ -2069,15 +2087,25 @@ static NSMutableSet* hostList;
         pendingHost = delegate.autoEnterHostName;
         delegate.autoEnterHostName = nil;
     }
+    BOOL triggered = [[NSUserDefaults standardUserDefaults] boolForKey:@"AutoEnterTriggered"];
+    // Respect one-shot suppression only if NOT explicitly triggered by Shortcut/URL
+    if (!triggered && [[NSUserDefaults standardUserDefaults] boolForKey:@"AutoEnterSuppressOnce"]) {
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterSuppressOnce"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        return;
+    } else if (triggered && [[NSUserDefaults standardUserDefaults] boolForKey:@"AutoEnterSuppressOnce"]) {
+        // If triggered explicitly, cancel suppression and proceed
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterSuppressOnce"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    }
     if (pendingHost == nil || pendingHost.length == 0) {
         pendingHost = [[NSUserDefaults standardUserDefaults] stringForKey:@"AutoEnterDesktopHostName"];
-        if (pendingHost != nil && pendingHost.length > 0) {
-            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterDesktopHostName"];
-            [[NSUserDefaults standardUserDefaults] synchronize];
-        }
     }
-    if (pendingHost.length > 0) {
+    if (triggered && pendingHost.length > 0) {
         [self beginAutoEnterForHostName:pendingHost];
+        // consume trigger flag for this session
+        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"AutoEnterTriggered"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
     }
 }
 
