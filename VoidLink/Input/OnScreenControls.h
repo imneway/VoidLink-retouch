@@ -126,6 +126,7 @@ typedef NS_ENUM(NSInteger, OnScreenControlsLevel) {
 - (void) releaseControllerButton: (int)flag;
 - (void) updateLeftTrigger:(unsigned char)input;
 - (void) updateRightTrigger:(unsigned char)input;
+- (void) cancelAllActiveTouches;
 
 - (id) initWithView:(UIView*)view controllerSup:(ControllerSupport*)controllerSupport streamConfig:(StreamConfiguration*)streamConfig;
 - (BOOL) handleTouchDownEvent:(NSSet*)touches;

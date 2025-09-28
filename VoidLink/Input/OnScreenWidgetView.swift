@@ -9,6 +9,26 @@
 import UIKit
 
 @objc class OnScreenWidgetView: UIView, InstanceProviderDelegate {
+    private static let activeInstances = NSHashTable<OnScreenWidgetView>.weakObjects()
+    private static var gesturesSuppressed = false
+
+    @objc static func beginGestureSuppression() {
+        if OnScreenWidgetView.gesturesSuppressed { return }
+        OnScreenWidgetView.gesturesSuppressed = true
+        DispatchQueue.main.async {
+            for case let widget as OnScreenWidgetView in OnScreenWidgetView.activeInstances.allObjects {
+                widget.cancelActiveTouchesDueToGestureSuppression()
+            }
+        }
+    }
+
+    @objc static func endGestureSuppression() {
+        guard OnScreenWidgetView.gesturesSuppressed else { return }
+        DispatchQueue.main.async {
+            OnScreenWidgetView.gesturesSuppressed = false
+        }
+    }
+
     // receiving the OnScreenControls instance from delegate
     @objc func getOnScreenControlsInstance(_ sender: Any) {
         if let controls = sender as? OnScreenControls {
@@ -269,6 +289,7 @@ import UIKit
         }
         self.activePointerIds = []
         super.init(frame: .zero)
+        OnScreenWidgetView.activeInstances.add(self)
         if self.touchPadString == "LSPADALT" || self.touchPadString == "RSPADALT" { self.stickIndicatorOffset = 0; self.hasStickIndicator = false }
         
         upIndicator = createLrudDirectionLayer()
@@ -286,6 +307,10 @@ import UIKit
     
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        OnScreenWidgetView.activeInstances.remove(self)
     }
     
     // ======================================================================================================
@@ -1422,6 +1447,10 @@ import UIKit
 //==============================================================================
     // Touch event handling
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if OnScreenWidgetView.gesturesSuppressed {
+            super.touchesBegan(touches, with: event)
+            return
+        }
         self.touchBegan = true
         self.firstTouchMoved = false
         super.touchesBegan(touches, with: event)
@@ -1653,6 +1682,10 @@ import UIKit
     }
     
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if OnScreenWidgetView.gesturesSuppressed {
+            super.touchesMoved(touches, with: event)
+            return
+        }
         super.touchesMoved(touches, with: event)
         if !OnScreenWidgetView.editMode {
             
@@ -1752,8 +1785,72 @@ import UIKit
             self.handleControllerTouchesMove(touches: touches)
         }
     }
-    
+
+    @objc private func cancelActiveTouchesDueToGestureSuppression() {
+        if Thread.isMainThread == false {
+            DispatchQueue.main.async { self.cancelActiveTouchesDueToGestureSuppression() }
+            return
+        }
+
+        if pressed && widgetType == WidgetTypeEnum.button {
+            handlebuttonUp()
+        }
+
+        if widgetType == WidgetTypeEnum.touchPad {
+            if !comboButtonStrings.isEmpty {
+                sendComboButtonsUpEvent(comboStrings: comboButtonStrings)
+            }
+
+            switch touchPadString {
+            case "LSPAD", "LSPADALT":
+                onScreenControls.clearLeftStickTouchPadFlag()
+                resetStickBallPositionAndHideIndicator()
+            case "RSPAD", "RSPADALT":
+                onScreenControls.clearRightStickTouchPadFlag()
+                resetStickBallPositionAndHideIndicator()
+            case "LSVPAD":
+                onScreenControls.clearLeftStickTouchPadFlag()
+            case "RSVPAD":
+                onScreenControls.clearRightStickTouchPadFlag()
+            case "MOUSEPAD":
+                switch mouseButtonAction {
+                case .leftButtonDown:
+                    LiSendMouseButtonEvent(CChar(BUTTON_ACTION_RELEASE), BUTTON_LEFT)
+                case .middleButtonDown:
+                    LiSendMouseButtonEvent(CChar(BUTTON_ACTION_RELEASE), BUTTON_MIDDLE)
+                case .rightButtonDown:
+                    LiSendMouseButtonEvent(CChar(BUTTON_ACTION_RELEASE), BUTTON_RIGHT)
+                default:
+                    break
+                }
+                stopTrackballMomentum()
+                mousePointerMoved = false
+            case "TRACKBALL":
+                stopTrackballMomentum()
+            default:
+                break
+            }
+        }
+
+        pressed = false
+        twoTouchesDetected = false
+        touchBegan = false
+        mousePointerMoved = false
+        quickDoubleTapDetected = false
+        restoreAlphaAfterRelease = false
+
+        if OnScreenWidgetView.obscuredByAlpha || superview?.alpha ?? 1.0 < 0.05 {
+            self.alpha = 0.02
+        } else {
+            tweakAlpha()
+        }
+    }
+
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if OnScreenWidgetView.gesturesSuppressed {
+            super.touchesEnded(touches, with: event)
+            return
+        }
         self.touchBegan = false
         super.touchesEnded(touches, with: event)
         
@@ -1928,4 +2025,3 @@ import UIKit
     }
     
 }
-

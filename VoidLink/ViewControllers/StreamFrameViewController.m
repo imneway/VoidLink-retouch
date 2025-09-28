@@ -428,13 +428,15 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     // Right-side edge is freed; Command Manager is opened by on-screen widget "CMD"
 
     // Add a small-threshold right-edge gesture to toggle OSC visibility
-    _rightEdgeToggleOscRecognizer = [[CustomEdgeSlideGestureRecognizer alloc] initWithTarget:self action:@selector(toggleOscVisibility)];
+    _rightEdgeToggleOscRecognizer = [[CustomEdgeSlideGestureRecognizer alloc] initWithTarget:self action:@selector(handleRightEdgeToggle:)];
     _rightEdgeToggleOscRecognizer.edges = UIRectEdgeRight;
     CGFloat smallThreshold = 15.0f / self.view.frame.size.width; // ~15pt swipe distance
     _rightEdgeToggleOscRecognizer.normalizedThresholdDistance = smallThreshold;
     _rightEdgeToggleOscRecognizer.delaysTouchesBegan = NO;
     _rightEdgeToggleOscRecognizer.delaysTouchesEnded = NO;
     _rightEdgeToggleOscRecognizer.cancelsTouchesInView = NO;
+    _rightEdgeToggleOscRecognizer.delegate = self;
+    _rightEdgeToggleOscRecognizer.edgeDelegate = self;
     // Right edge small gesture is standalone now; no dependency on Command Manager gesture
     [self.view addGestureRecognizer:_rightEdgeToggleOscRecognizer];
     
@@ -482,6 +484,9 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 - (void)reConfigStreamViewRealtimeAndReloadSettings:(BOOL)reloadSettings{
     //[self.view removeGestureRecognizer:]
     //first, remove all gesture recognizers:
+    if (self->_streamView) {
+        [self->_streamView endRightEdgeGestureSuppression];
+    }
     for (UIGestureRecognizer *recognizer in _streamView.gestureRecognizers) {
         [_streamView removeGestureRecognizer:recognizer];
     }
@@ -1077,6 +1082,13 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     }
 }
 
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    if (self->_streamView) {
+        [self->_streamView endRightEdgeGestureSuppression];
+    }
+}
+
 #pragma mark - Self-Heal Reconnect Guard
 
 - (void)startStreamOrEnterSelfHealIfOffline {
@@ -1600,6 +1612,43 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         return;
     } */
     [self expandSettingsView];  // expand settings view in other cases;
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    if (gestureRecognizer == _rightEdgeToggleOscRecognizer) {
+        CustomEdgeSlideGestureRecognizer *edgeRecognizer = (CustomEdgeSlideGestureRecognizer *)gestureRecognizer;
+        CGPoint location = [touch locationInView:gestureRecognizer.view];
+        CGRect bounds = gestureRecognizer.view.bounds;
+        CGFloat tolerance = MAX(edgeRecognizer.EDGE_TOLERANCE, 24.0f);
+        BOOL withinEdge = NO;
+
+        if (edgeRecognizer.edges & UIRectEdgeRight) {
+            withinEdge = location.x >= (CGRectGetMaxX(bounds) - tolerance);
+        } else if (edgeRecognizer.edges & UIRectEdgeLeft) {
+            withinEdge = location.x <= tolerance;
+        } else if (edgeRecognizer.edges & UIRectEdgeTop) {
+            withinEdge = location.y <= tolerance;
+        } else if (edgeRecognizer.edges & UIRectEdgeBottom) {
+            withinEdge = location.y >= (CGRectGetMaxY(bounds) - tolerance);
+        }
+
+        if (!withinEdge) {
+            return NO;
+        }
+
+        [self->_streamView beginRightEdgeGestureSuppressionForTouch:touch];
+    }
+    return YES;
+}
+
+- (void)edgeSlideGesture:(CustomEdgeSlideGestureRecognizer *)recognizer didFinishWithSuccess:(BOOL)success {
+    [self->_streamView endRightEdgeGestureSuppression];
+}
+
+- (void)handleRightEdgeToggle:(CustomEdgeSlideGestureRecognizer *)recognizer {
+    if (recognizer.state == UIGestureRecognizerStateEnded) {
+        [self toggleOscVisibility];
+    }
 }
 
 - (void)toggleOscVisibility{

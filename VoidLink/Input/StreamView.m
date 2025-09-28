@@ -76,6 +76,10 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     UILabel* keyboardToggleTip;
     
     UIKeyModifierFlags comboKeyModifierFlags;
+
+    BOOL oscGestureSuppressed;
+    NSUInteger rightEdgeGestureSuppressionDepth;
+    NSMutableSet* suppressedGestureTouchAddrs;
 }
 
 - (CGFloat)currentSnapOffset {
@@ -116,6 +120,8 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     localMousePointerMode = streamConfig.localMousePointerMode;
     
     keysDown = [[NSMutableSet alloc] init];
+    suppressedGestureTouchAddrs = [NSMutableSet set];
+    rightEdgeGestureSuppressionDepth = 0;
     keyInputField = [[KeyboardInputField alloc] initWithFrame:CGRectZero];
     [keyInputField setKeyboardType:UIKeyboardTypeDefault];
     [keyInputField setAutocorrectionType:UITextAutocorrectionTypeNo];
@@ -723,6 +729,25 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 
 #endif
 
+- (BOOL)shouldIgnoreTouchesForGestureSuppression:(NSSet *)touches consume:(BOOL)consume {
+    BOOL matched = NO;
+    for (UITouch *touch in touches) {
+        NSNumber *addr = @((uintptr_t)touch);
+        if ([suppressedGestureTouchAddrs containsObject:addr]) {
+            matched = YES;
+            if (consume) {
+                [suppressedGestureTouchAddrs removeObject:addr];
+            }
+        }
+    }
+
+    if (oscGestureSuppressed) {
+        return YES;
+    }
+
+    return matched;
+}
+
 - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
 #if !TARGET_OS_TV
     // if (@available(iOS 13.4, *)) {
@@ -751,7 +776,11 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     
     // Notify of user interaction and start expiration timer
     [self startInteractionTimer];
-    
+
+    if ([self shouldIgnoreTouchesForGestureSuppression:touches consume:NO]) {
+        return;
+    }
+
     if(settings.touchMode.intValue == NativeTouch || settings.touchMode.intValue == RelativeTouch){
         [self->onScreenControls handleTouchDownEvent:touches];
         [self->touchHandler touchesBegan:touches withEvent:event];
@@ -916,7 +945,11 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     }
     
     hasUserInteracted = YES;
-    
+
+    if ([self shouldIgnoreTouchesForGestureSuppression:touches consume:NO]) {
+        return;
+    }
+
     if(self->settings.touchMode.intValue == NativeTouch || self->settings.touchMode.intValue == RelativeTouch){
         [self->touchHandler touchesMoved:touches withEvent:event];
         [self->onScreenControls handleTouchMovedEvent:touches];
@@ -1012,7 +1045,11 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     Log(LOG_D, @"Touch up");
     
     hasUserInteracted = YES;
-    
+
+    if ([self shouldIgnoreTouchesForGestureSuppression:touches consume:YES]) {
+        return;
+    }
+
     if(settings.touchMode.intValue == NativeTouch || settings.touchMode.intValue == RelativeTouch){
         [self->touchHandler touchesEnded:touches withEvent:event]; // when touches ended, must call the native touchhandler before onScreenControls, since the NSSet of touches captured by on screen button shall be updated later
         [self->onScreenControls handleTouchUpEvent:touches];
@@ -1032,9 +1069,57 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
         }
     }
 #endif
+    if ([self shouldIgnoreTouchesForGestureSuppression:touches consume:YES]) {
+        return;
+    }
     [self handleMouseButtonEvent:BUTTON_ACTION_RELEASE
                       forTouches:touches
                        withEvent:event];
+}
+
+- (void)beginRightEdgeGestureSuppressionForTouch:(UITouch *)touch {
+    if (!oscGestureSuppressed) {
+        oscGestureSuppressed = YES;
+        rightEdgeGestureSuppressionDepth = 1;
+#if !TARGET_OS_TV
+        if (onScreenControls != nil) {
+            [onScreenControls cancelAllActiveTouches];
+        }
+#endif
+        [OnScreenWidgetView beginGestureSuppression];
+    } else {
+        rightEdgeGestureSuppressionDepth = MAX(rightEdgeGestureSuppressionDepth, 1);
+    }
+
+    if (touch != nil) {
+        [suppressedGestureTouchAddrs addObject:@((uintptr_t)touch)];
+    }
+}
+
+- (void)endRightEdgeGestureSuppression {
+    if (!oscGestureSuppressed) {
+        if (suppressedGestureTouchAddrs.count > 0) {
+            [suppressedGestureTouchAddrs removeAllObjects];
+        }
+        return;
+    }
+
+    if (rightEdgeGestureSuppressionDepth > 1) {
+        rightEdgeGestureSuppressionDepth -= 1;
+        return;
+    }
+
+    rightEdgeGestureSuppressionDepth = 0;
+    oscGestureSuppressed = NO;
+    [suppressedGestureTouchAddrs removeAllObjects];
+    [OnScreenWidgetView endGestureSuppression];
+}
+
+- (void)willMoveToWindow:(UIWindow *)newWindow {
+    [super willMoveToWindow:newWindow];
+    if (newWindow == nil) {
+        [self endRightEdgeGestureSuppression];
+    }
 }
 
 #if !TARGET_OS_TV

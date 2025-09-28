@@ -18,6 +18,7 @@
 #import "LayoutOnScreenControlsViewController.h"
 #import "MainFrameViewController.h"
 #import "StreamManager.h"
+#import "CustomEdgeSlideGestureRecognizer.h"
 
 #import <AVKit/AVKit.h>
 #import <UIKit/UIKit.h>
@@ -27,7 +28,7 @@
 
 @interface StreamFrameViewController : GCEventViewController <ConnectionCallbacks, ControllerSupportDelegate, UserInteractionDelegate, UIScrollViewDelegate, AVPictureInPictureControllerDelegate>
 #else
-@interface StreamFrameViewController : UIViewController <ConnectionCallbacks, ControllerSupportDelegate, UserInteractionDelegate, UIScrollViewDelegate, ToolboxSpecialEntryDelegate, AVPictureInPictureControllerDelegate, UIAdaptivePresentationControllerDelegate>
+@interface StreamFrameViewController : UIViewController <ConnectionCallbacks, ControllerSupportDelegate, UserInteractionDelegate, UIScrollViewDelegate, ToolboxSpecialEntryDelegate, AVPictureInPictureControllerDelegate, UIAdaptivePresentationControllerDelegate, UIGestureRecognizerDelegate, CustomEdgeSlideGestureRecognizerDelegate>
 
 #endif
 @property (nonatomic) StreamManager* streamMan;

@@ -54,6 +54,9 @@
 - (void) clearOnScreenWidgets;
 - (void) reloadOnScreenWidgetViews;
 
+- (void)beginRightEdgeGestureSuppressionForTouch:(UITouch *)touch;
+- (void)endRightEdgeGestureSuppression;
+
 // Obscure OSC layers by alpha while keeping them interactive
 - (void)setOscObscuredByAlpha:(BOOL)enabled;
 - (BOOL)isOscObscuredByAlpha;

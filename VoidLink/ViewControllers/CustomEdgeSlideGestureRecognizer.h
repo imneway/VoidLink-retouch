@@ -11,12 +11,19 @@
 // CustomEdgeSlideGestureRecognizer.h
 #import <UIKit/UIKit.h>
 
+@class CustomEdgeSlideGestureRecognizer;
+
+@protocol CustomEdgeSlideGestureRecognizerDelegate <NSObject>
+- (void)edgeSlideGesture:(CustomEdgeSlideGestureRecognizer *)recognizer didFinishWithSuccess:(BOOL)success;
+@end
+
 @interface CustomEdgeSlideGestureRecognizer : UIGestureRecognizer
 
 @property (nonatomic, assign) UIRectEdge edges; // Specify the edge(s) you want to recognize the swipe gesture on
 @property (nonatomic, assign) CGFloat normalizedThresholdDistance; // Distance from the edge to start recognizing the gesture
 @property (nonatomic, assign) bool immediateTriggering;
 @property (nonatomic, assign) CGFloat EDGE_TOLERANCE;
+@property (nonatomic, weak) id<CustomEdgeSlideGestureRecognizerDelegate> edgeDelegate;
 
 @end
 #endif /* CustomEdgeSlideGestureRecognizer_h */

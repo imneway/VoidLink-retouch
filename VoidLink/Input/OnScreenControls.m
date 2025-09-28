@@ -195,6 +195,41 @@ static float L3_Y;
     [_controllerSupport updateFinished:_controller];
 }
 
+- (void) cancelAllActiveTouches {
+    NSMutableSet *activeTouches = [NSMutableSet set];
+
+    if (_aTouch) { [activeTouches addObject:_aTouch]; }
+    if (_bTouch) { [activeTouches addObject:_bTouch]; }
+    if (_xTouch) { [activeTouches addObject:_xTouch]; }
+    if (_yTouch) { [activeTouches addObject:_yTouch]; }
+    if (_dpadTouch) { [activeTouches addObject:_dpadTouch]; }
+    if (_upTouch) { [activeTouches addObject:_upTouch]; }
+    if (_leftTouch) { [activeTouches addObject:_leftTouch]; }
+    if (_rightTouch) { [activeTouches addObject:_rightTouch]; }
+    if (_downTouch) { [activeTouches addObject:_downTouch]; }
+    if (_lsTouch) { [activeTouches addObject:_lsTouch]; }
+    if (_rsTouch) { [activeTouches addObject:_rsTouch]; }
+    if (_startTouch) { [activeTouches addObject:_startTouch]; }
+    if (_selectTouch) { [activeTouches addObject:_selectTouch]; }
+    if (_r1Touch) { [activeTouches addObject:_r1Touch]; }
+    if (_r2Touch) { [activeTouches addObject:_r2Touch]; }
+    if (_r3Touch) { [activeTouches addObject:_r3Touch]; }
+    if (_l1Touch) { [activeTouches addObject:_l1Touch]; }
+    if (_l2Touch) { [activeTouches addObject:_l2Touch]; }
+    if (_l3Touch) { [activeTouches addObject:_l3Touch]; }
+
+    if (_deadTouches.count > 0) {
+        [activeTouches unionSet:[NSSet setWithArray:_deadTouches]];
+    }
+
+    if (activeTouches.count == 0) {
+        return;
+    }
+
+    [self handleTouchUpEvent:activeTouches];
+    [_deadTouches removeAllObjects];
+}
+
 // sending self as an instance to OnScreenWidgetView
 - (void)sendInstance{
     NSLog(@"OnScreenControls is sending its instance...");

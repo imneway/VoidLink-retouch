@@ -11,9 +11,17 @@
 #import "CustomEdgeSlideGestureRecognizer.h"
 #import <UIKit/UIGestureRecognizerSubclass.h>
 
+@interface CustomEdgeSlideGestureRecognizer () {
+    UITouch *capturedUITouch;
+    CGFloat startPointX;
+    BOOL delegateNotifiedForCurrentGesture;
+}
+
+- (void)notifyDelegateWithSuccess:(BOOL)success;
+
+@end
+
 @implementation CustomEdgeSlideGestureRecognizer
-UITouch* capturedUITouch;
-CGFloat startPointX;
 //static CGFloat screenWidthInPoints;
 
 - (instancetype)initWithTarget:(nullable id)target action:(nullable SEL)action {
@@ -35,12 +43,16 @@ CGFloat startPointX;
         if(self.edges & UIRectEdgeLeft){
             if(startPointX < _EDGE_TOLERANCE){
                 self.state = UIGestureRecognizerStateEnded;
+                [self notifyDelegateWithSuccess:YES];
+                capturedUITouch = nil;
             }
             // NSLog(@"startPointX  %f , normalizedGestureDeltaX %f", startPointX,  normalizedGestureDistance);
         }
         if(self.edges & UIRectEdgeRight){
             if(startPointX > streamFrameViewWidthInPoints - _EDGE_TOLERANCE){
                 self.state = UIGestureRecognizerStateEnded;
+                [self notifyDelegateWithSuccess:YES];
+                capturedUITouch = nil;
             }
            // NSLog(@"startPointX  %f , normalizedGestureDeltaX %f", startPointX,  normalizedGestureDistance);
         }
@@ -55,25 +67,49 @@ CGFloat startPointX;
         CGFloat _endPointX = [capturedUITouch locationInView:self.view].x;
         CGFloat screenWidthInPoints = self.view.frame.size.width;
         CGFloat normalizedGestureDistance = fabs(_endPointX - startPointX)/screenWidthInPoints;
+        BOOL success = NO;
         
         if(self.edges & UIRectEdgeLeft){
             if(startPointX < _EDGE_TOLERANCE && normalizedGestureDistance > _normalizedThresholdDistance){
-                self.state = UIGestureRecognizerStateEnded;
+                success = YES;
             }
             // NSLog(@"startPointX  %f , normalizedGestureDeltaX %f", startPointX,  normalizedGestureDistance);
         }
         if(self.edges & UIRectEdgeRight){
             if((startPointX > (screenWidthInPoints - _EDGE_TOLERANCE)) && normalizedGestureDistance > _normalizedThresholdDistance){
-                self.state = UIGestureRecognizerStateEnded;
+                success = YES;
             }
            // NSLog(@"startPointX  %f , normalizedGestureDeltaX %f", startPointX,  normalizedGestureDistance);
         }
+        self.state = success ? UIGestureRecognizerStateEnded : UIGestureRecognizerStateFailed;
+        [self notifyDelegateWithSuccess:success];
     }
+    capturedUITouch = nil;
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesCancelled:touches withEvent:event];
+    [self notifyDelegateWithSuccess:NO];
+    capturedUITouch = nil;
+    self.state = UIGestureRecognizerStateCancelled;
+}
+
+- (void)reset {
+    if (!delegateNotifiedForCurrentGesture) {
+        [self notifyDelegateWithSuccess:NO];
+    }
+    delegateNotifiedForCurrentGesture = NO;
+    capturedUITouch = nil;
+    startPointX = 0.0f;
+    [super reset];
+}
+
+- (void)notifyDelegateWithSuccess:(BOOL)success {
+    if ([self.edgeDelegate respondsToSelector:@selector(edgeSlideGesture:didFinishWithSuccess:)]) {
+        [self.edgeDelegate edgeSlideGesture:self didFinishWithSuccess:success];
+    }
+    delegateNotifiedForCurrentGesture = YES;
 }
 
 @end
-
-
-
-
 
