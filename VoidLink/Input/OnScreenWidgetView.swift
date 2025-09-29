@@ -177,8 +177,8 @@ import UIKit
     // border & visual effect
     private var minimumBorderAlpha: CGFloat = 0.19
     private var defaultBorderColor: CGColor = UIColor(white: 0.2, alpha: 0.3).cgColor
-//    private let voidlinkPurple: CGColor = UIColor(red: 0.5, green: 0.5, blue: 1.0, alpha: 0.86).cgColor
-    private let voidlinkPurple: CGColor = UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.4).cgColor //Overwrite the purple border color
+    private let highlightAlphaRange: (min: CGFloat, max: CGFloat) = (0.07, 0.4)
+    private let highlightReferenceBackgroundAlpha: CGFloat = 0.5
     
     //slide buttons
     private var capturedTouches: NSMutableSet
@@ -192,7 +192,26 @@ import UIKit
     // whole button press down visual effect
     @objc public let buttonDownVisualEffectLayer = CAShapeLayer()
     private var buttonDownVisualEffectWidth: CGFloat
-    
+
+    private func highlightAlpha(for backgroundAlpha: CGFloat) -> CGFloat {
+        let clampedBackground = max(0.0, min(backgroundAlpha, highlightReferenceBackgroundAlpha))
+        guard highlightReferenceBackgroundAlpha > 0 else { return highlightAlphaRange.max }
+        let normalized = clampedBackground / highlightReferenceBackgroundAlpha
+        return highlightAlphaRange.min + normalized * (highlightAlphaRange.max - highlightAlphaRange.min)
+    }
+
+    private var buttonHighlightAlpha: CGFloat {
+        return highlightAlpha(for: backgroundAlpha)
+    }
+
+    private var buttonHighlightColor: UIColor {
+        return UIColor(white: 1.0, alpha: buttonHighlightAlpha)
+    }
+
+    private var buttonHighlightCGColor: CGColor {
+        return buttonHighlightColor.cgColor
+    }
+
     
     @objc init(cmdString: String, buttonLabel: String, shape:String) {
         
@@ -724,7 +743,7 @@ import UIKit
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        self.l3r3Indicator.borderColor = voidlinkPurple
+        self.l3r3Indicator.borderColor = buttonHighlightCGColor
         self.l3r3Indicator.position = CGPointMake(CGRectGetMinX(self.frame)+touchBeganLocation.x, CGRectGetMinY(self.frame)+touchBeganLocation.y)
         
         CATransaction.commit()
@@ -1055,14 +1074,14 @@ import UIKit
         indicatorBorder.fillColor = UIColor.clear.cgColor
         let path = UIBezierPath(roundedRect: indicatorBorder.bounds, cornerRadius: indicatorBorder.cornerRadius)
         indicatorBorder.path = path.cgPath
-        indicatorBorder.borderColor = voidlinkPurple
+        indicatorBorder.borderColor = buttonHighlightCGColor
         
         return indicatorBorder
     }
     
     private func showLrudDirectionIndicator(with indicatorLayer:CAShapeLayer){
         // Add the border layer below the super layer
-        indicatorLayer.borderColor = voidlinkPurple
+        indicatorLayer.borderColor = buttonHighlightCGColor
         
         // show the indicator based on the touchBeganLocation
         indicatorLayer.position = CGPointMake(CGRectGetMinX(self.frame)+touchBeganLocation.x, CGRectGetMinY(self.frame)+touchBeganLocation.y)
@@ -1265,7 +1284,10 @@ import UIKit
         // self.layer.borderWidth = 0
         buttonDownVisualEffectLayer.position = CGPointMake(CGRectGetMidX(self.frame), CGRectGetMidY(self.frame)) // update position every time we press down the button
         buttonDownVisualEffectLayer.borderWidth = self.buttonDownVisualEffectWidth // this will show the visual effect
-        buttonDownVisualEffectLayer.borderColor = voidlinkPurple
+        buttonDownVisualEffectLayer.borderColor = buttonHighlightCGColor
+        if self.widgetType == WidgetTypeEnum.button {
+            self.backgroundColor = buttonHighlightColor
+        }
         if vibrationOn {
             vibrationGenerator.prepare()
             vibrationGenerator.impactOccurred()
@@ -1282,6 +1304,9 @@ import UIKit
         CATransaction.setDisableActions(true)
         // self.layer.borderWidth = 1
         buttonDownVisualEffectLayer.borderWidth = 0
+        if self.widgetType == WidgetTypeEnum.button {
+            self.tweakAlpha()
+        }
         buttonDownVisualEffectLayer.borderColor = defaultBorderColor
         CATransaction.commit()
     }
@@ -1311,11 +1336,12 @@ import UIKit
         buttonDownVisualEffectLayer.cornerRadius = self.layer.cornerRadius + self.buttonDownVisualEffectWidth
         buttonDownVisualEffectLayer.backgroundColor = UIColor.clear.cgColor;
         buttonDownVisualEffectLayer.fillColor = UIColor.clear.cgColor;
-        
+        buttonDownVisualEffectLayer.borderColor = buttonHighlightCGColor
+
         // Create a path for the border
         let path = UIBezierPath(roundedRect: buttonDownVisualEffectLayer.bounds, cornerRadius: buttonDownVisualEffectLayer.cornerRadius)
         buttonDownVisualEffectLayer.path = path.cgPath
-        
+
         // Add the border layer below the main view layer
         self.layer.superlayer?.insertSublayer(buttonDownVisualEffectLayer, below: self.layer)
         
