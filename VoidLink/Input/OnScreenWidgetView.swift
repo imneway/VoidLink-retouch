@@ -177,7 +177,7 @@ import UIKit
     // border & visual effect
     private var minimumBorderAlpha: CGFloat = 0.19
     private var defaultBorderColor: CGColor = UIColor(white: 0.2, alpha: 0.3).cgColor
-    private let highlightAlphaRange: (min: CGFloat, max: CGFloat) = (0.07, 0.4)
+    private let highlightAlphaRange: (min: CGFloat, max: CGFloat) = (0.002, 0.4)
     private let highlightReferenceBackgroundAlpha: CGFloat = 0.5
     
     //slide buttons
