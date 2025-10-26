@@ -133,20 +133,13 @@ static float RS_CENTER_Y;
 static const float DEFAULT_STICK_OPACITY = 0.63;
 static const float OBSCURED_ALPHA = 0.02f; // keep interactive while visually hidden
 
-static const CGFloat BUTTON_CENTER_INDICATOR_RADIUS = 3.0f;
+static const CGFloat BUTTON_CENTER_INDICATOR_RADIUS = 3.5f;
 static const CGFloat BUTTON_CENTER_INDICATOR_HIGHLIGHT_LINE_WIDTH = 0.0f;
-static const CGFloat BUTTON_CENTER_INDICATOR_BASE_ALPHA = 0.06f;
-static const CGFloat BUTTON_CENTER_INDICATOR_BASE_STROKE_ALPHA = 0.12f;
+static const CGFloat BUTTON_CENTER_INDICATOR_BASE_ALPHA = 0.04f;
+static const CGFloat BUTTON_CENTER_INDICATOR_BASE_STROKE_ALPHA = 0.0f;
 static const CGFloat BUTTON_CENTER_INDICATOR_BASE_LINE_WIDTH = 1.0f;
-static const CGFloat D_PAD_INDICATOR_OFFSET = 8.0f;
-static NSString * const kIndicatorKeyDPadUp = @"dpadUp";
-static NSString * const kIndicatorKeyDPadDown = @"dpadDown";
-static NSString * const kIndicatorKeyDPadLeft = @"dpadLeft";
-static NSString * const kIndicatorKeyDPadRight = @"dpadRight";
-static NSString * const kIndicatorKeyA = @"aButton";
-static NSString * const kIndicatorKeyB = @"bButton";
-static NSString * const kIndicatorKeyX = @"xButton";
-static NSString * const kIndicatorKeyY = @"yButton";
+static NSString * const kIndicatorKeyDPadCenter = @"dpadCenter";
+static NSString * const kIndicatorKeyABXYCenter = @"abxyCenter";
 
 static float START_X;
 static float START_Y;
@@ -2076,14 +2069,8 @@ static float L3_Y;
         _buttonCenterIndicatorBases = [NSMutableDictionary dictionaryWithCapacity:5];
     }
 
-    [self ensureIndicatorLayerForKey:kIndicatorKeyDPadUp];
-    [self ensureIndicatorLayerForKey:kIndicatorKeyDPadDown];
-    [self ensureIndicatorLayerForKey:kIndicatorKeyDPadLeft];
-    [self ensureIndicatorLayerForKey:kIndicatorKeyDPadRight];
-    [self ensureIndicatorLayerForKey:kIndicatorKeyA];
-    [self ensureIndicatorLayerForKey:kIndicatorKeyB];
-    [self ensureIndicatorLayerForKey:kIndicatorKeyX];
-    [self ensureIndicatorLayerForKey:kIndicatorKeyY];
+    [self ensureIndicatorLayerForKey:kIndicatorKeyDPadCenter];
+    [self ensureIndicatorLayerForKey:kIndicatorKeyABXYCenter];
 }
 
 - (void)ensureIndicatorLayerForKey:(NSString *)key {
@@ -2095,8 +2082,8 @@ static float L3_Y;
     if (!highlight || !base) {
         return;
     }
-    [_view.layer addSublayer:highlight];
     [_view.layer addSublayer:base];
+    [_view.layer addSublayer:highlight];
     _buttonCenterIndicators[key] = highlight;
     _buttonCenterIndicatorBases[key] = base;
 }
@@ -2107,13 +2094,13 @@ static float L3_Y;
     CAShapeLayer *layer = [CAShapeLayer layer];
     layer.bounds = circleRect;
     layer.path = [UIBezierPath bezierPathWithOvalInRect:circleRect].CGPath;
-    layer.fillColor = [[UIColor colorWithWhite:1.0f alpha:0.64f] CGColor];
+    layer.fillColor = [[UIColor colorWithWhite:1.0f alpha:0.95f] CGColor];
     layer.strokeColor = nil;
     layer.lineWidth = BUTTON_CENTER_INDICATOR_HIGHLIGHT_LINE_WIDTH;
     layer.contentsScale = [UIScreen mainScreen].scale;
     layer.hidden = YES;
     layer.opacity = 0.0f;
-    layer.zPosition = 1000.0f;
+    layer.zPosition = 1001.0f;
     layer.compositingFilter = @"softLightBlendMode";
     return layer;
 }
@@ -2131,7 +2118,7 @@ static float L3_Y;
     layer.contentsScale = [UIScreen mainScreen].scale;
     layer.hidden = YES;
     layer.opacity = 0.0f;
-    layer.zPosition = 1001.0f;
+    layer.zPosition = 1000.0f;
     return layer;
 }
 
@@ -2143,14 +2130,8 @@ static float L3_Y;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
 
-    [self updateIndicatorForKey:kIndicatorKeyDPadUp withLayer:self._upButton];
-    [self updateIndicatorForKey:kIndicatorKeyDPadDown withLayer:self._downButton];
-    [self updateIndicatorForKey:kIndicatorKeyDPadLeft withLayer:self._leftButton];
-    [self updateIndicatorForKey:kIndicatorKeyDPadRight withLayer:self._rightButton];
-    [self updateIndicatorForKey:kIndicatorKeyA withLayer:self._aButton];
-    [self updateIndicatorForKey:kIndicatorKeyB withLayer:self._bButton];
-    [self updateIndicatorForKey:kIndicatorKeyX withLayer:self._xButton];
-    [self updateIndicatorForKey:kIndicatorKeyY withLayer:self._yButton];
+    [self updateIndicatorForKey:kIndicatorKeyDPadCenter withLayer:self._dPadBackground ?: self._upButton];
+    [self updateIndicatorForKey:kIndicatorKeyABXYCenter withLayer:self._aButton];
 
     [CATransaction commit];
 
@@ -2162,7 +2143,7 @@ static float L3_Y;
 }
 
 - (void)updateIndicatorForKey:(NSString *)key withLayer:(CALayer *)layer {
-    if (!key || !layer) {
+    if (!key) {
         return;
     }
     CAShapeLayer *highlight = _buttonCenterIndicators[key];
@@ -2170,15 +2151,33 @@ static float L3_Y;
     if (!highlight && !base) {
         return;
     }
-    CGPoint centerPoint = [self centerPointForLayer:layer];
-    if (!isnan(centerPoint.x) && !isnan(centerPoint.y)) {
-        CGPoint position = [self positionByApplyingOffsetForKey:key toPoint:centerPoint];
-        if (highlight) {
-            highlight.position = position;
+
+    CGPoint position = CGPointZero;
+    BOOL hasValidPosition = NO;
+
+    if ([key isEqualToString:kIndicatorKeyDPadCenter]) {
+        position = [self dPadIndicatorPosition];
+        hasValidPosition = !isnan(position.x) && !isnan(position.y);
+    } else if ([key isEqualToString:kIndicatorKeyABXYCenter]) {
+        position = [self abxyIndicatorPosition];
+        hasValidPosition = !isnan(position.x) && !isnan(position.y);
+    } else if (layer) {
+        CGPoint centerPoint = [self centerPointForLayer:layer];
+        hasValidPosition = !isnan(centerPoint.x) && !isnan(centerPoint.y);
+        if (hasValidPosition) {
+            position = centerPoint;
         }
-        if (base) {
-            base.position = position;
-        }
+    }
+
+    if (!hasValidPosition) {
+        return;
+    }
+
+    if (highlight) {
+        highlight.position = position;
+    }
+    if (base) {
+        base.position = position;
     }
 }
 
@@ -2191,51 +2190,79 @@ static float L3_Y;
     return [resolvedLayer convertPoint:centerInLayer toLayer:_view.layer];
 }
 
-- (CGPoint)positionByApplyingOffsetForKey:(NSString *)key toPoint:(CGPoint)point {
-    if (!key) {
-        return point;
+- (CGPoint)dPadIndicatorPosition {
+    CALayer *backgroundLayer = self._dPadBackground;
+    if (backgroundLayer && !backgroundLayer.hidden) {
+        CGPoint centerPoint = [self centerPointForLayer:backgroundLayer];
+        if (!isnan(centerPoint.x) && !isnan(centerPoint.y)) {
+            return centerPoint;
+        }
     }
 
-    if ([key isEqualToString:kIndicatorKeyDPadUp]) {
-        point.y -= D_PAD_INDICATOR_OFFSET;
-    } else if ([key isEqualToString:kIndicatorKeyDPadDown]) {
-        point.y += D_PAD_INDICATOR_OFFSET;
-    } else if ([key isEqualToString:kIndicatorKeyDPadLeft]) {
-        point.x -= D_PAD_INDICATOR_OFFSET;
-    } else if ([key isEqualToString:kIndicatorKeyDPadRight]) {
-        point.x += D_PAD_INDICATOR_OFFSET;
+    CALayer *layers[] = { self._upButton, self._downButton, self._leftButton, self._rightButton };
+    size_t layerCount = sizeof(layers) / sizeof(layers[0]);
+    CGFloat sumX = 0.0f;
+    CGFloat sumY = 0.0f;
+    size_t visibleCount = 0;
+
+    for (size_t idx = 0; idx < layerCount; idx++) {
+        CALayer *layer = layers[idx];
+        if (!layer || layer.hidden) {
+            continue;
+        }
+        CGPoint centerPoint = [self centerPointForLayer:layer];
+        if (isnan(centerPoint.x) || isnan(centerPoint.y)) {
+            continue;
+        }
+        sumX += centerPoint.x;
+        sumY += centerPoint.y;
+        visibleCount++;
     }
 
-    return point;
+    if (visibleCount > 0) {
+        return CGPointMake(sumX / (CGFloat)visibleCount, sumY / (CGFloat)visibleCount);
+    }
+
+    return CGPointMake(D_PAD_CENTER_X, D_PAD_CENTER_Y);
+}
+
+- (CGPoint)abxyIndicatorPosition {
+    CALayer *layers[] = { self._aButton, self._bButton, self._xButton, self._yButton };
+    size_t layerCount = sizeof(layers) / sizeof(layers[0]);
+    CGFloat sumX = 0.0f;
+    CGFloat sumY = 0.0f;
+    size_t visibleCount = 0;
+
+    for (size_t idx = 0; idx < layerCount; idx++) {
+        CALayer *layer = layers[idx];
+        if (!layer || layer.hidden) {
+            continue;
+        }
+        CGPoint centerPoint = [self centerPointForLayer:layer];
+        if (isnan(centerPoint.x) || isnan(centerPoint.y)) {
+            continue;
+        }
+        sumX += centerPoint.x;
+        sumY += centerPoint.y;
+        visibleCount++;
+    }
+
+    if (visibleCount > 0) {
+        return CGPointMake(sumX / (CGFloat)visibleCount, sumY / (CGFloat)visibleCount);
+    }
+
+    return CGPointMake(BUTTON_CENTER_X, BUTTON_CENTER_Y);
 }
 
 - (CALayer *)layerForIndicatorKey:(NSString *)key {
     if (!key) {
         return nil;
     }
-    if ([key isEqualToString:kIndicatorKeyDPadUp]) {
-        return self._upButton;
+    if ([key isEqualToString:kIndicatorKeyDPadCenter]) {
+        return self._dPadBackground ?: self._upButton;
     }
-    if ([key isEqualToString:kIndicatorKeyDPadDown]) {
-        return self._downButton;
-    }
-    if ([key isEqualToString:kIndicatorKeyDPadLeft]) {
-        return self._leftButton;
-    }
-    if ([key isEqualToString:kIndicatorKeyDPadRight]) {
-        return self._rightButton;
-    }
-    if ([key isEqualToString:kIndicatorKeyA]) {
+    if ([key isEqualToString:kIndicatorKeyABXYCenter]) {
         return self._aButton;
-    }
-    if ([key isEqualToString:kIndicatorKeyB]) {
-        return self._bButton;
-    }
-    if ([key isEqualToString:kIndicatorKeyX]) {
-        return self._xButton;
-    }
-    if ([key isEqualToString:kIndicatorKeyY]) {
-        return self._yButton;
     }
     return nil;
 }
@@ -2244,6 +2271,29 @@ static float L3_Y;
     if (!key) {
         return NO;
     }
+    if ([key isEqualToString:kIndicatorKeyDPadCenter]) {
+        CALayer *layers[] = { self._dPadBackground, self._upButton, self._downButton, self._leftButton, self._rightButton };
+        size_t count = sizeof(layers) / sizeof(layers[0]);
+        for (size_t idx = 0; idx < count; idx++) {
+            CALayer *layer = layers[idx];
+            if (layer && !layer.hidden) {
+                return YES;
+            }
+        }
+        return NO;
+    }
+    if ([key isEqualToString:kIndicatorKeyABXYCenter]) {
+        CALayer *layers[] = { self._aButton, self._bButton, self._xButton, self._yButton };
+        size_t count = sizeof(layers) / sizeof(layers[0]);
+        for (size_t idx = 0; idx < count; idx++) {
+            CALayer *layer = layers[idx];
+            if (layer && !layer.hidden) {
+                return YES;
+            }
+        }
+        return NO;
+    }
+
     CALayer *layer = [self layerForIndicatorKey:key];
     return layer && !layer.hidden;
 }
