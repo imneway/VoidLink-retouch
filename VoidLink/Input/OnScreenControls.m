@@ -2094,7 +2094,7 @@ static float L3_Y;
     CAShapeLayer *layer = [CAShapeLayer layer];
     layer.bounds = circleRect;
     layer.path = [UIBezierPath bezierPathWithOvalInRect:circleRect].CGPath;
-    layer.fillColor = [[UIColor colorWithWhite:1.0f alpha:0.95f] CGColor];
+    layer.fillColor = [[UIColor colorWithWhite:1.0f alpha:0.1f] CGColor];
     layer.strokeColor = nil;
     layer.lineWidth = BUTTON_CENTER_INDICATOR_HIGHLIGHT_LINE_WIDTH;
     layer.contentsScale = [UIScreen mainScreen].scale;

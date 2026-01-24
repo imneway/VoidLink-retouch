@@ -625,7 +625,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     if (!_snapRatioButton) {
         _snapRatioButton = [UIButton buttonWithType:UIButtonTypeSystem];
         _snapRatioButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        [_snapRatioButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.44] forState:UIControlStateNormal];
+        [_snapRatioButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
         _snapRatioButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
         [_snapRatioButton addTarget:self action:@selector(toggleSnapRatio) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:_snapRatioButton];
@@ -635,7 +635,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     if (!_oscToggleButton) {
         _oscToggleButton = [UIButton buttonWithType:UIButtonTypeSystem];
         _oscToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        [_oscToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.4] forState:UIControlStateNormal];
+        [_oscToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
         _oscToggleButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
         [_oscToggleButton addTarget:self action:@selector(toggleOscOnOff) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:_oscToggleButton];
@@ -677,7 +677,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     if (!_timeLabel) {
         _timeLabel = [[UILabel alloc] init];
         _timeLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        _timeLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.44];
+        _timeLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.22];
         _timeLabel.userInteractionEnabled = NO;
         [self.view addSubview:_timeLabel];
     }
@@ -686,7 +686,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     if (!_batteryLabel) {
         _batteryLabel = [[UILabel alloc] init];
         _batteryLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        _batteryLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.44];
+        _batteryLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.22];
         _batteryLabel.userInteractionEnabled = NO;
         [self.view addSubview:_batteryLabel];
     }
