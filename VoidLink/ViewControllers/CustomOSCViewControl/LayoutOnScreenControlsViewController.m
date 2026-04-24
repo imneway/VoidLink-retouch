@@ -476,7 +476,10 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         [confirm addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Delete"] style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action){
             [target removeFromSuperview];
             [self.onScreenWidgetViews removeObject:target];
-            if(self->selectedWidgetView == target) self->selectedWidgetView = nil;
+            if(self->selectedWidgetView == target){
+                self->selectedWidgetView = nil;
+                self->widgetViewSelected = false; // keep selection flags in sync; otherwise undo / inspector keep the widget-selected branch
+            }
             [self hideStickIndicators];
         }]];
         [self presentViewController:confirm animated:YES completion:nil];

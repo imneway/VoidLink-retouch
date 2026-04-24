@@ -557,11 +557,14 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
                 widgetView.slideMode = buttonState.slideMode;
                 // Add the widgetView to the view controller's view
                 if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
-                    // Place the fullscreen trigger directly above the stream-rendering view (self)
-                    // and below all other widgets that get appended via addSubview. atIndex:0 would
-                    // push it under the video layer because _streamView is itself inserted at 0 in
-                    // StreamFrameViewController.
-                    [self->streamFrameTopLayerView insertSubview:widgetView aboveSubview:self];
+                    // The stream-rendering view (self in non-AbsoluteTouch, or the wrapping
+                    // _scrollView in AbsoluteTouch) is always at index 0 of streamFrameTopLayerView
+                    // (see StreamFrameViewController.configZoomGestureAndAddStreamView). Insert
+                    // just above it so the fullscreen trigger overlays the video while sitting
+                    // below every regular widget that gets appended via addSubview later.
+                    // Avoid `aboveSubview:self`, which raises in AbsoluteTouch mode because self
+                    // is nested inside _scrollView and isn't a direct subview of the host.
+                    [self->streamFrameTopLayerView insertSubview:widgetView atIndex:1];
                 } else {
                     [self->streamFrameTopLayerView addSubview:widgetView]; // add keyboard button to the stream frame view. must add it to the target view before setting location.
                 }
