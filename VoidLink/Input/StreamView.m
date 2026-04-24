@@ -556,7 +556,15 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
                 widgetView.minStickOffset = buttonState.minStickOffset;
                 widgetView.slideMode = buttonState.slideMode;
                 // Add the widgetView to the view controller's view
-                [self->streamFrameTopLayerView addSubview:widgetView]; // add keyboard button to the stream frame view. must add it to the target view before setting location.
+                if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
+                    // Place the fullscreen trigger directly above the stream-rendering view (self)
+                    // and below all other widgets that get appended via addSubview. atIndex:0 would
+                    // push it under the video layer because _streamView is itself inserted at 0 in
+                    // StreamFrameViewController.
+                    [self->streamFrameTopLayerView insertSubview:widgetView aboveSubview:self];
+                } else {
+                    [self->streamFrameTopLayerView addSubview:widgetView]; // add keyboard button to the stream frame view. must add it to the target view before setting location.
+                }
                 buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
                 [widgetView setLocationWithPosition:buttonState.position];
                 [widgetView resizeWidgetView]; // resize must be called after relocation

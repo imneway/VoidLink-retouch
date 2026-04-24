@@ -8,7 +8,7 @@
 
 import UIKit
 
-@objc class OnScreenWidgetView: UIView, InstanceProviderDelegate {
+@objc class OnScreenWidgetView: UIView, InstanceProviderDelegate, UIGestureRecognizerDelegate {
     private static let activeInstances = NSHashTable<OnScreenWidgetView>.weakObjects()
     private static var gesturesSuppressed = false
 
@@ -49,7 +49,10 @@ import UIKit
         case uninitialized
         case button
         case touchPad
+        case fullscreenTrigger
     }
+
+    @objc public static let FULLSCREEN_SHAPE = "fullscreen"
     
     @objc public var widgetType: WidgetTypeEnum = WidgetTypeEnum.uninitialized
     @objc static public var obscuredByAlpha: Bool = false
@@ -274,6 +277,19 @@ import UIKit
 
         self.buttonLabel = buttonLabel
         self.shape = shape
+        // Full-screen trigger widget: shape override forces widgetType regardless of cmdString,
+        // so bound cmd still resolves via existing button / combo mappings but behavior switches
+        // to double-tap-to-fire, full-screen invisible overlay.
+        if shape == OnScreenWidgetView.FULLSCREEN_SHAPE {
+            self.widgetType = WidgetTypeEnum.fullscreenTrigger
+            if self.comboButtonStrings.isEmpty {
+                self.comboButtonStrings = [self.cmdString]
+            }
+            self.buttonString = self.comboButtonStrings.first ?? self.cmdString
+            self.touchPadString = ""
+            self.hasStickIndicator = false
+            self.hasSensitivityTweak = false
+        }
         self.label = UILabel()
         self.outlineLabel = UILabel()
         // self.originalBackgroundColor = UIColor(white: 0.2, alpha: 0.7)
@@ -565,8 +581,38 @@ import UIKit
     }
     
     private func changeAndActivateContraints(){
+        if self.widgetType == WidgetTypeEnum.fullscreenTrigger {
+            if OnScreenWidgetView.editMode {
+                // Small visible handle in the editor so the user can tap it (invisible-but-clickable
+                // handles are harder to discover). We keep it non-movable in touchesMoved.
+                NSLayoutConstraint.activate([
+                    self.widthAnchor.constraint(equalToConstant: 320),
+                    self.heightAnchor.constraint(equalToConstant: 130),
+                ])
+            } else if let superview = self.superview {
+                // Runtime: cover the entire parent. hitTest returns nil so taps still pass through
+                // to the stream view; the double-tap gesture recognizer on superview detects the combo.
+                NSLayoutConstraint.activate([
+                    self.leadingAnchor.constraint(equalTo: superview.leadingAnchor),
+                    self.trailingAnchor.constraint(equalTo: superview.trailingAnchor),
+                    self.topAnchor.constraint(equalTo: superview.topAnchor),
+                    self.bottomAnchor.constraint(equalTo: superview.bottomAnchor),
+                ])
+            }
+            self.deNormalizedWidthFactor = 1.0
+            self.deNormalizedHeightFactor = 1.0
+            NSLayoutConstraint.activate([
+                label.centerXAnchor.constraint(equalTo: centerXAnchor),
+                label.centerYAnchor.constraint(equalTo: centerYAnchor),
+                outlineLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+                outlineLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            ])
+            self.layer.cornerRadius = OnScreenWidgetView.editMode ? 12 : 0
+            return
+        }
+
         let isNormalizedSizeFactor = self.widthFactor > 6;
-        
+
         if self.shape == "round"{ // we'll make custom osc buttons round & smaller
             NSLayoutConstraint.activate([
                 self.widthAnchor.constraint(equalToConstant: isNormalizedSizeFactor ? denormalizeSize(sizeFactor:self.widthFactor) : CGFloat(Int(60 * self.widthFactor / 2) * 2)),
@@ -606,6 +652,10 @@ import UIKit
     }
     
     private func setupView() {
+        if self.widgetType == WidgetTypeEnum.fullscreenTrigger {
+            setupFullscreenTriggerView()
+            return
+        }
         label.text = self.buttonLabel
         label.font = roundedBoldFont(ofSize: 19)
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -692,6 +742,199 @@ import UIKit
             if self.crossMarkLayer.superlayer == nil {self.crossMarkLayer = createCrossMark()}
             if self.stickBallLayer.superlayer == nil {self.stickBallLayer = createStickBall()}
         }
+    }
+
+    private let fullscreenEditBorderLayer = CAShapeLayer()
+    private weak var fullscreenDoubleTapGesture: UITapGestureRecognizer?
+    private weak var attachedFullscreenGestureToSuperview: UIView?
+
+    private func setupFullscreenTriggerView() {
+        self.translatesAutoresizingMaskIntoConstraints = false
+        self.layer.borderWidth = 0
+        self.layer.borderColor = UIColor.clear.cgColor
+
+        let displayText = self.buttonLabel.isEmpty ? self.cmdString : self.buttonLabel
+        label.text = OnScreenWidgetView.editMode ? "\(displayText) — double-tap trigger" : ""
+        label.font = roundedBoldFont(ofSize: 22)
+        label.textColor = UIColor(white: 1.0, alpha: 0.85)
+        label.textAlignment = .center
+        label.adjustsFontSizeToFitWidth = true
+        label.minimumScaleFactor = 0.3
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        outlineLabel.text = label.text
+        outlineLabel.font = label.font
+        outlineLabel.textAlignment = .center
+        outlineLabel.adjustsFontSizeToFitWidth = true
+        outlineLabel.minimumScaleFactor = 0.3
+        outlineLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        if outlineLabel.superview !== self { self.addSubview(outlineLabel) }
+        if label.superview !== self { self.addSubview(label) }
+        self.bringSubviewToFront(label)
+        applyLabelStroke()
+
+        updateFullscreenEditAppearance()
+
+        if OnScreenWidgetView.editMode {
+            // In edit mode, mirror the pattern used by other widget types: width/height set via
+            // Auto Layout (inside changeAndActivateContraints), then switch to frame-based
+            // positioning so `center = storedCenter` drives the handle location.
+            self.translatesAutoresizingMaskIntoConstraints = true
+            self.changeAndActivateContraints()
+            center = storedCenter
+        } else {
+            // Runtime: edge constraints anchor the widget to the superview's 4 sides so it covers
+            // the full stream area. Leave translatesAutoresizingMaskIntoConstraints = false so the
+            // constraints remain authoritative.
+            self.translatesAutoresizingMaskIntoConstraints = false
+            self.changeAndActivateContraints()
+        }
+    }
+
+    private func updateFullscreenEditAppearance() {
+        if OnScreenWidgetView.editMode {
+            if fullscreenEditBorderLayer.superlayer == nil {
+                self.layer.addSublayer(fullscreenEditBorderLayer)
+            }
+            fullscreenEditBorderLayer.strokeColor = UIColor(white: 1.0, alpha: 0.55).cgColor
+            fullscreenEditBorderLayer.fillColor = UIColor.clear.cgColor
+            fullscreenEditBorderLayer.lineWidth = 2.5
+            fullscreenEditBorderLayer.lineDashPattern = [10, 6]
+            self.backgroundColor = UIColor(white: 0.1, alpha: 0.12) // slight tint so editor users can see it
+            layoutFullscreenEditBorder()
+        } else {
+            fullscreenEditBorderLayer.removeFromSuperlayer()
+            self.backgroundColor = .clear
+        }
+    }
+
+    private func layoutFullscreenEditBorder() {
+        guard fullscreenEditBorderLayer.superlayer != nil else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let inset: CGFloat = 3
+        fullscreenEditBorderLayer.frame = self.bounds
+        fullscreenEditBorderLayer.path = UIBezierPath(rect: self.bounds.insetBy(dx: inset, dy: inset)).cgPath
+        CATransaction.commit()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if widgetType == WidgetTypeEnum.fullscreenTrigger {
+            layoutFullscreenEditBorder()
+        }
+    }
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        if widgetType == WidgetTypeEnum.fullscreenTrigger {
+            if superview == nil {
+                detachFullscreenGesture()
+            } else {
+                attachFullscreenGestureIfNeeded()
+            }
+        }
+    }
+
+    private func attachFullscreenGestureIfNeeded() {
+        // Only attach the gesture recognizer in runtime (not edit mode).
+        // In edit mode, the widget is hit-testable for tap-to-select via its own touchesBegan;
+        // in runtime, the widget returns nil from hitTest, so double-tap detection must live
+        // on the superview (streamFrameTopLayerView), which is what actually receives touches.
+        if OnScreenWidgetView.editMode {
+            detachFullscreenGesture()
+            return
+        }
+        guard let superview = self.superview else { return }
+        if attachedFullscreenGestureToSuperview === superview, fullscreenDoubleTapGesture != nil {
+            return
+        }
+        detachFullscreenGesture()
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleFullscreenDoubleTap(_:)))
+        tap.numberOfTapsRequired = 2
+        tap.numberOfTouchesRequired = 1
+        tap.cancelsTouchesInView = true
+        tap.delaysTouchesBegan = false
+        tap.delaysTouchesEnded = false
+        tap.delegate = self
+        superview.addGestureRecognizer(tap)
+        fullscreenDoubleTapGesture = tap
+        attachedFullscreenGestureToSuperview = superview
+    }
+
+    private func detachFullscreenGesture() {
+        if let tap = fullscreenDoubleTapGesture, let host = attachedFullscreenGestureToSuperview {
+            host.removeGestureRecognizer(tap)
+        }
+        fullscreenDoubleTapGesture = nil
+        attachedFullscreenGestureToSuperview = nil
+    }
+
+    @objc private func handleFullscreenDoubleTap(_ gesture: UITapGestureRecognizer) {
+        guard !OnScreenWidgetView.editMode else { return }
+        guard !OnScreenWidgetView.gesturesSuppressed else { return }
+        if vibrationOn {
+            vibrationGenerator.prepare()
+            vibrationGenerator.impactOccurred()
+        }
+        let strings = self.comboButtonStrings
+        if !strings.isEmpty {
+            self.sendComboButtonsDownEvent(comboStrings: strings)
+            DispatchQueue.global(qos: .userInteractive).async {
+                usleep(100000)
+                self.sendComboButtonsUpEvent(comboStrings: strings)
+            }
+        } else if self.cmdString.contains("+") && !self.cmdString.contains("-") {
+            if let keyboardCmdStrings = CommandManager.shared.extractKeyStringsFromComboCommand(from: self.cmdString) {
+                CommandManager.shared.sendKeyComboCommand(keyboardCmdStrings: keyboardCmdStrings)
+            }
+        }
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if widgetType == WidgetTypeEnum.fullscreenTrigger && !OnScreenWidgetView.editMode {
+            // Transparent to hit-testing in runtime: taps pass through to the stream view below.
+            // Double-taps are caught by the gesture recognizer attached to superview.
+            return nil
+        }
+        return super.hitTest(point, with: event)
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard gestureRecognizer === fullscreenDoubleTapGesture else { return true }
+        guard let superview = self.superview else { return true }
+        let locationInSuper = touch.location(in: superview)
+
+        // 1) Reject when another widget view would handle the double-tap (e.g., a fire-button
+        // widget where the user legitimately wants rapid double taps).
+        for subview in superview.subviews {
+            if subview === self { continue }
+            guard let widget = subview as? OnScreenWidgetView else { continue }
+            if widget.widgetType == WidgetTypeEnum.fullscreenTrigger { continue }
+            if widget.isHidden || !widget.isUserInteractionEnabled { continue }
+            if widget.frame.contains(locationInSuper) {
+                return false
+            }
+        }
+
+        // 2) Reject when the touch lands on a legacy OnScreenControls CALayer (stick,
+        // ABXY, bumpers, triggers, dpad, …). Those layers are sublayers of the same
+        // superview and don't appear in `superview.subviews`. OnScreenControls itself
+        // hit-tests against `presentationLayer`, so we mirror that to stay consistent
+        // when layers are mid-animation (e.g., scale/opacity tweens during press).
+        if let oscButtonLayers = onScreenControls.value(forKey: "OSCButtonLayers") as? [CALayer] {
+            for layer in oscButtonLayers {
+                if layer.isHidden { continue }
+                let geom = layer.presentation() ?? layer
+                let pointInLayer = superview.layer.convert(locationInSuper, to: geom)
+                if geom.contains(pointInLayer) {
+                    return false
+                }
+            }
+        }
+
+        return true
     }
 
     private func roundedBoldFont(ofSize size: CGFloat) -> UIFont {
@@ -1477,6 +1720,14 @@ import UIKit
             super.touchesBegan(touches, with: event)
             return
         }
+        if widgetType == WidgetTypeEnum.fullscreenTrigger {
+            super.touchesBegan(touches, with: event)
+            if OnScreenWidgetView.editMode {
+                self.pressed = true
+                NotificationCenter.default.post(name: Notification.Name("OnScreenWidgetViewSelected"), object: self)
+            }
+            return
+        }
         self.touchBegan = true
         self.firstTouchMoved = false
         super.touchesBegan(touches, with: event)
@@ -1712,6 +1963,10 @@ import UIKit
             super.touchesMoved(touches, with: event)
             return
         }
+        if widgetType == WidgetTypeEnum.fullscreenTrigger {
+            super.touchesMoved(touches, with: event)
+            return // non-movable, non-slidable
+        }
         super.touchesMoved(touches, with: event)
         if !OnScreenWidgetView.editMode {
             
@@ -1877,9 +2132,14 @@ import UIKit
             super.touchesEnded(touches, with: event)
             return
         }
+        if widgetType == WidgetTypeEnum.fullscreenTrigger {
+            super.touchesEnded(touches, with: event)
+            self.pressed = false
+            return
+        }
         self.touchBegan = false
         super.touchesEnded(touches, with: event)
-        
+
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         

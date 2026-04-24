@@ -134,12 +134,18 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     OnScreenWidgetView.editMode = true;
     [self hideStickIndicators];
 
+    // Drop selection state before tearing down the views, otherwise selectedWidgetView can end
+    // up pointing at a detached (orphaned) widget and downstream code (trashCanTapped, sliders,
+    // delete-on-overlap) would operate on the orphan.
+    self->selectedWidgetView = nil;
+    self->widgetViewSelected = false;
+
     for (UIView *subview in self.view.subviews) {
         if ([subview isKindOfClass:[OnScreenWidgetView class]]) {
             [subview removeFromSuperview];
         }
     }
-    
+
     [self.onScreenWidgetViews removeAllObjects];
 
     
@@ -166,7 +172,13 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
             widgetView.minStickOffset = buttonState.minStickOffset;
             widgetView.slideMode = buttonState.slideMode;
             // Add the widgetView to the view controller's view
-            [self.view insertSubview:widgetView belowSubview:self.widgetPanelStack];
+            if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger && self.streamOverlay){
+                // Fullscreen trigger must sit above the stream overlay but below all other widgets
+                // and the widget panel so editor interactions with other controls are unaffected.
+                [self.view insertSubview:widgetView aboveSubview:self.streamOverlay];
+            } else {
+                [self.view insertSubview:widgetView belowSubview:self.widgetPanelStack];
+            }
             buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
             [widgetView setLocationWithPosition:buttonState.position];
             [widgetView resizeWidgetView]; // resize must be called after relocation
@@ -453,6 +465,24 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 }
 
 - (IBAction) trashCanTapped:(id)sender {
+    // Fullscreen trigger widgets can't be drag-deleted (they're pinned and only show a small
+    // edit-mode handle), so tapping the trash can while one is selected offers a direct delete.
+    if(self->selectedWidgetView != nil && self->selectedWidgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
+        OnScreenWidgetView* target = self->selectedWidgetView;
+        UIAlertController *confirm = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Delete Full-Screen Trigger?"]
+                                                                         message:[LocalizationHelper localizedStringForKey:@"The full-screen double-tap trigger will be removed from this profile."]
+                                                                  preferredStyle:UIAlertControllerStyleAlert];
+        [confirm addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+        [confirm addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Delete"] style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action){
+            [target removeFromSuperview];
+            [self.onScreenWidgetViews removeObject:target];
+            if(self->selectedWidgetView == target) self->selectedWidgetView = nil;
+            [self hideStickIndicators];
+        }]];
+        [self presentViewController:confirm animated:YES completion:nil];
+        return;
+    }
+
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Delete Buttons Here"] message:[LocalizationHelper localizedStringForKey:@"Drag and drop buttons onto this trash can to remove them from the interface"] preferredStyle:UIAlertControllerStyleAlert];
 
     UIAlertAction *ok = [UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:nil];
@@ -507,6 +537,14 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         else [self presentViewController:nothingToUndoAlertController animated:YES completion:nil];
         self.undoButton.alpha = selectedWidgetView.layoutChanges.count>1 ? 1.0 : 0.3;
     }
+}
+
+- (void) presentFullscreenTriggerDuplicateAlert{
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Duplicate Full-Screen Trigger"]
+                                                                   message:[LocalizationHelper localizedStringForKey:@"Only one full-screen trigger widget is allowed per profile. Delete the existing one first."]
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"OK"] style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void) presentInvalidWidgetCommandAlert{
@@ -690,13 +728,33 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     if(trimmedString.length != minStickOffsetString.length) paramInvalid = true;
     widgetInitParams[@"minStickOffsetString"] = trimmedString;
     
-    NSSet* validShapes = [NSSet setWithObjects:@"round", @"square", @"largesquare", nil];
+    NSSet* validShapes = [NSSet setWithObjects:@"round", @"square", @"largesquare", @"fullscreen", nil];
     if([widgetShape isEqualToString:@"r"]) widgetShape = @"round";
     else if([widgetShape isEqualToString:@"s"]) widgetShape = @"square";
+    else if([widgetShape isEqualToString:@"f"]) widgetShape = @"fullscreen";
     else if([widgetShape isEqualToString:@""]) widgetShape = @"default";
     else if(![validShapes containsObject:widgetShape]){
         paramInvalid = true;}
     widgetInitParams[@"shape"] = widgetShape;
+
+    if(!paramInvalid && [widgetShape isEqualToString:@"fullscreen"]){
+        bool boundKey =
+            !noValidKeyboardString ||
+            !noValidMouseButtonString ||
+            !noValidOscButtonString ||
+            !noValidSuperComboButtonString;
+        if(!boundKey){
+            paramInvalid = true; // fullscreen trigger requires a real key/button/combo binding
+        }
+        if(!paramInvalid){
+            for (OnScreenWidgetView *existing in self.onScreenWidgetViews) {
+                if(existing.widgetType == WidgetTypeEnumFullscreenTrigger && existing != self->selectedWidgetView){
+                    [self presentFullscreenTriggerDuplicateAlert];
+                    return false; // short-circuit: suppress generic invalid alert
+                }
+            }
+        }
+    }
 
     if(paramInvalid) [self presentInvalidWidgetCommandAlert];
     return !paramInvalid;
@@ -704,6 +762,17 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 
 - (void) updateWidget:(OnScreenWidgetView* )widget byParams:(NSMutableDictionary* )widgetInitParams createNew:(bool)createNew{
     if(![self isWidgetParamsValid:widgetInitParams]) return;
+    // Creating a clone would leave us with two fullscreen triggers, which is forbidden.
+    // (In modify mode the old widget is removed below, so the check in isWidgetParamsValid
+    // already handles that path by excluding selectedWidgetView.)
+    if(createNew && [widgetInitParams[@"shape"] isEqualToString:@"fullscreen"]){
+        for (OnScreenWidgetView *existing in self.onScreenWidgetViews) {
+            if(existing.widgetType == WidgetTypeEnumFullscreenTrigger){
+                [self presentFullscreenTriggerDuplicateAlert];
+                return;
+            }
+        }
+    }
     OnScreenWidgetView* newWidget = [[OnScreenWidgetView alloc] initWithCmdString:widgetInitParams[@"cmdString"] buttonLabel:widgetInitParams[@"buttonLabel"] shape:widgetInitParams[@"shape"]]; //reconstruct widgetView
     newWidget.guidelineDelegate = (id<OnScreenWidgetGuidelineUpdateDelegate>)self;
     newWidget.translatesAutoresizingMaskIntoConstraints = NO; // weird but this is mandatory, or you will find no key views added to the right place
@@ -718,9 +787,19 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     [newWidget setVibrationWithStyle:widget.vibrationStyle];
     newWidget.mouseButtonAction = widget.mouseButtonAction;
     newWidget.slideMode = widget.slideMode;
-    [self.view insertSubview:newWidget belowSubview:self.widgetPanelStack];
+    if(newWidget.widgetType == WidgetTypeEnumFullscreenTrigger && self.streamOverlay){
+        [self.view insertSubview:newWidget aboveSubview:self.streamOverlay];
+    } else {
+        [self.view insertSubview:newWidget belowSubview:self.widgetPanelStack];
+    }
 
-    if(createNew) [newWidget setLocationWithPosition:CGPointMake(90, 130)];
+    if(createNew){
+        if(newWidget.widgetType == WidgetTypeEnumFullscreenTrigger){
+            [newWidget setLocationWithPosition:CGPointMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds))];
+        } else {
+            [newWidget setLocationWithPosition:CGPointMake(90, 130)];
+        }
+    }
     else [newWidget setLocationWithPosition:widget.center];
     [newWidget resizeWidgetView]; // resize must be called after relocation
     [newWidget adjustTransparencyWithAlpha:widget.backgroundAlpha];
@@ -743,8 +822,13 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     widgetView.minStickOffset = [widgetInitParams[@"minStickOffsetString"] floatValue];
     [self.onScreenWidgetViews addObject:widgetView];
     // Add the widgetView to the view controller's view
-    [self.view insertSubview:widgetView belowSubview:self.widgetPanelStack];
-    [widgetView setLocationWithPosition:CGPointMake(90, 130)];
+    if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger && self.streamOverlay){
+        [self.view insertSubview:widgetView aboveSubview:self.streamOverlay];
+        [widgetView setLocationWithPosition:CGPointMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds))];
+    } else {
+        [self.view insertSubview:widgetView belowSubview:self.widgetPanelStack];
+        [widgetView setLocationWithPosition:CGPointMake(90, 130)];
+    }
     [widgetView resizeWidgetView];
     [widgetView setVibrationWithStyle:UIImpactFeedbackStyleLight];
 }
@@ -845,16 +929,27 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     [self.widgetAlphaSlider setValue: self->selectedWidgetView.backgroundAlpha];
     [self.widgetBorderWidthSlider setValue:self->selectedWidgetView.borderWidth];
     
+    bool isFullscreenTrigger = selectedWidgetView.widgetType == WidgetTypeEnumFullscreenTrigger;
+
     self.slidableStack.hidden = selectedWidgetView.widgetType != WidgetTypeEnumButton;
     [self.slidableSelector setSelectedSegmentIndex:selectedWidgetView.slideMode];
-    
-    bool showSensitivityFactorStack = selectedWidgetView.hasSensitivityTweak;
-    bool showStickIndicatorOffsetStack = selectedWidgetView.hasStickIndicator;
-        
+
+    bool showSensitivityFactorStack = selectedWidgetView.hasSensitivityTweak && !isFullscreenTrigger;
+    bool showStickIndicatorOffsetStack = selectedWidgetView.hasStickIndicator && !isFullscreenTrigger;
+
     self.sensitivityXStack.hidden = self.sensitivityYStack.hidden = !showSensitivityFactorStack;
     self.stickIndicatorOffsetStack.hidden = !showStickIndicatorOffsetStack;
-    self.mouseDownButtonStack.hidden = !([selectedWidgetView.cmdString containsString:@"MOUSEPAD"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
-    self.decelerationRateStack.hidden = !([selectedWidgetView.cmdString containsString:@"TRACKBALL"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
+    self.mouseDownButtonStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"MOUSEPAD"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
+    self.decelerationRateStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"TRACKBALL"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
+
+    // Fullscreen trigger is pinned (no size/position controls), transparent (no alpha/border),
+    // and has no slide/mouse/sensitivity behavior — hide the unrelated stacks entirely.
+    self.widgetSizeStack.hidden = isFullscreenTrigger;
+    self.widgetHeightStack.hidden = isFullscreenTrigger;
+    self.borderWidthAlphaStack.hidden = isFullscreenTrigger;
+    if(isFullscreenTrigger){
+        self.coordinateControlStack.hidden = YES;
+    }
     
     [self autoFitStack:self.widgetPanelStack];
 
@@ -1470,7 +1565,12 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     if(selectedWidgetView) [self.view insertSubview:selectedWidgetView belowSubview:_widgetPanelStack];
 
     
-    if(!isToolbarHidden && self->selectedWidgetView != nil && [self layerIsOverlappingWithTrashcanButton:selectedWidgetView.layer]){
+    // Fullscreen trigger has its own explicit delete flow via trashCanTapped (the handle is
+    // small and pinned, so drag-to-trash doesn't apply).
+    if(!isToolbarHidden
+       && self->selectedWidgetView != nil
+       && self->selectedWidgetView.widgetType != WidgetTypeEnumFullscreenTrigger
+       && [self layerIsOverlappingWithTrashcanButton:selectedWidgetView.layer]){
         [self->selectedWidgetView removeFromSuperview];
         [self.onScreenWidgetViews removeObject:self->selectedWidgetView];
         [self hideStickIndicators];
