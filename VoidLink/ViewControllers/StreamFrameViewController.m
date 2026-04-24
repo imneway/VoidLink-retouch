@@ -515,6 +515,12 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     [self->_streamView reloadOnScreenControlsRealtimeWith:(ControllerSupport*)_controllerSupport
                                         andConfig:(StreamConfiguration*)_streamConfig]; //reload OSC here.
     [self->_streamView reloadOnScreenWidgetViews]; //reload keyboard buttons here. the keyboard widget view will be added to the streamframe view instead streamview, the highest layer, which saves a lot of reengineering
+
+    // Restore persisted OSC ON/OFF state
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"oscManuallyDisabled"]) {
+        [self->_streamView disableOnScreenControls];
+        [self->_streamView clearOnScreenWidgets];
+    }
     [self reloadAirPlayConfig];
     [self mousePresenceChanged];
     [self applySnapToTopIfNeeded];
@@ -756,6 +762,11 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         [self->_streamView clearOnScreenWidgets]; // Remove all onscreen widgets completely
     }
     
+    // Persist OSC ON/OFF state
+    BOOL oscIsNowOff = [self->_streamView getCurrentOscState] == OnScreenControlsLevelOff;
+    [[NSUserDefaults standardUserDefaults] setBool:oscIsNowOff forKey:@"oscManuallyDisabled"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
     // Update button title
     [self updateSnapRatioButton];
 }
