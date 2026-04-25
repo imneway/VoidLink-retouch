@@ -1731,6 +1731,11 @@ import UIKit
             super.touchesBegan(touches, with: event)
             if OnScreenWidgetView.editMode {
                 self.pressed = true
+                if let touch = touches.first, let parent = self.superview {
+                    // moveByTouch reads latestTouchLocation; seed it so the first drag delta is sane.
+                    self.latestTouchLocation = touch.location(in: parent)
+                    self.touchBeganLocation = self.latestTouchLocation
+                }
                 NotificationCenter.default.post(name: Notification.Name("OnScreenWidgetViewSelected"), object: self)
             }
             return
@@ -1972,7 +1977,13 @@ import UIKit
         }
         if widgetType == WidgetTypeEnum.fullscreenTrigger {
             super.touchesMoved(touches, with: event)
-            return // non-movable, non-slidable
+            // Allow drag in edit mode so the user can drop the handle on the trash button
+            // (matches every other widget). The position itself isn't persisted — touchesEnded
+            // either deletes via overlap or animates the handle back to storedCenter.
+            if OnScreenWidgetView.editMode, let touch = touches.first {
+                self.moveByTouch(touch: touch)
+            }
+            return // still no slide / touchpad behavior in runtime
         }
         super.touchesMoved(touches, with: event)
         if !OnScreenWidgetView.editMode {
@@ -2142,6 +2153,20 @@ import UIKit
         if widgetType == WidgetTypeEnum.fullscreenTrigger {
             super.touchesEnded(touches, with: event)
             self.pressed = false
+            // The host VC's touchesEnded runs next via responder chain forwarding and will
+            // remove the widget when its frame overlaps the trash button (same path as every
+            // other widget). If we're still attached afterwards, animate the handle back to
+            // its anchor position so the editor stays at a known, predictable spot.
+            if self.superview != nil {
+                let target = self.storedCenter
+                UIView.animate(withDuration: 0.28,
+                               delay: 0,
+                               usingSpringWithDamping: 0.72,
+                               initialSpringVelocity: 0.6,
+                               options: [.curveEaseOut, .allowUserInteraction]) {
+                    self.center = target
+                }
+            }
             return
         }
         self.touchBegan = false

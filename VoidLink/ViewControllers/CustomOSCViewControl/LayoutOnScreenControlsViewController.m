@@ -474,27 +474,6 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 }
 
 - (IBAction) trashCanTapped:(id)sender {
-    // Fullscreen trigger widgets can't be drag-deleted (they're pinned and only show a small
-    // edit-mode handle), so tapping the trash can while one is selected offers a direct delete.
-    if(self->selectedWidgetView != nil && self->selectedWidgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
-        OnScreenWidgetView* target = self->selectedWidgetView;
-        UIAlertController *confirm = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Delete Full-Screen Trigger?"]
-                                                                         message:[LocalizationHelper localizedStringForKey:@"The full-screen double-tap trigger will be removed from this profile."]
-                                                                  preferredStyle:UIAlertControllerStyleAlert];
-        [confirm addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
-        [confirm addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Delete"] style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action){
-            [target removeFromSuperview];
-            [self.onScreenWidgetViews removeObject:target];
-            if(self->selectedWidgetView == target){
-                self->selectedWidgetView = nil;
-                self->widgetViewSelected = false; // keep selection flags in sync; otherwise undo / inspector keep the widget-selected branch
-            }
-            [self hideStickIndicators];
-        }]];
-        [self presentViewController:confirm animated:YES completion:nil];
-        return;
-    }
-
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Delete Buttons Here"] message:[LocalizationHelper localizedStringForKey:@"Drag and drop buttons onto this trash can to remove them from the interface"] preferredStyle:UIAlertControllerStyleAlert];
 
     UIAlertAction *ok = [UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:nil];
@@ -1574,14 +1553,20 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     // UITouch *touch = [touches anyObject]; // Get the first touch in the set
     _widgetPanelStack.userInteractionEnabled = true;
     
-    if(selectedWidgetView) [self.view insertSubview:selectedWidgetView belowSubview:_widgetPanelStack];
+    // Bring the selected widget to the front of subviews so the trash check below uses an
+    // unobscured layer rect. Fullscreen trigger keeps its low Z-position (above streamOverlay,
+    // below all other widgets) — we re-anchor it there instead of moving it just below the
+    // panel stack like normal widgets.
+    if(selectedWidgetView){
+        if(selectedWidgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
+            if(self.streamOverlay) [self.view insertSubview:selectedWidgetView aboveSubview:self.streamOverlay];
+        } else {
+            [self.view insertSubview:selectedWidgetView belowSubview:_widgetPanelStack];
+        }
+    }
 
-    
-    // Fullscreen trigger has its own explicit delete flow via trashCanTapped (the handle is
-    // small and pinned, so drag-to-trash doesn't apply).
     if(!isToolbarHidden
        && self->selectedWidgetView != nil
-       && self->selectedWidgetView.widgetType != WidgetTypeEnumFullscreenTrigger
        && [self layerIsOverlappingWithTrashcanButton:selectedWidgetView.layer]){
         [self->selectedWidgetView removeFromSuperview];
         [self.onScreenWidgetViews removeObject:self->selectedWidgetView];
