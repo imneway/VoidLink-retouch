@@ -579,8 +579,16 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
                 } else {
                     [self->streamFrameTopLayerView addSubview:widgetView]; // add keyboard button to the stream frame view. must add it to the target view before setting location.
                 }
-                buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
-                [widgetView setLocationWithPosition:buttonState.position];
+                if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
+                    // Runtime sizing comes from edge constraints in changeAndActivateContraints,
+                    // so storedCenter doesn't drive geometry here — but pin it to the midpoint
+                    // anyway so anything that later reads storedCenter (e.g., the editor reusing
+                    // the same OSCProfile) doesn't trip on a stale persisted position.
+                    [widgetView setLocationWithPosition:CGPointMake(CGRectGetMidX(self->streamFrameTopLayerView.bounds), CGRectGetMidY(self->streamFrameTopLayerView.bounds))];
+                } else {
+                    buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
+                    [widgetView setLocationWithPosition:buttonState.position];
+                }
                 [widgetView resizeWidgetView]; // resize must be called after relocation
                 [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
                 [widgetView adjustBorderWithWidth:buttonState.borderWidth];

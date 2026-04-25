@@ -188,8 +188,17 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
             } else {
                 [self.view insertSubview:widgetView belowSubview:self.widgetPanelStack];
             }
-            buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
-            [widgetView setLocationWithPosition:buttonState.position];
+            if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
+                // Pin the handle to the view midpoint on every reload, ignoring any persisted
+                // position (a stale off-center value would otherwise let a plain tap land on the
+                // trash button via the touchesEnded overlap check, deleting the widget without a
+                // drag). Save path may serialize whatever center the handle ended up at, but this
+                // override makes that data effectively dead — every reload re-anchors here.
+                [widgetView setLocationWithPosition:CGPointMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds))];
+            } else {
+                buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
+                [widgetView setLocationWithPosition:buttonState.position];
+            }
             [widgetView resizeWidgetView]; // resize must be called after relocation
             [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
             [widgetView adjustBorderWithWidth:buttonState.borderWidth];
