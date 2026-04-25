@@ -4632,25 +4632,25 @@
         }
       }
     },
-    "Shape (r - round, s - square)" : {
+    "Shape (r/s/f)" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "按键形状 (r - 圆形, s - 方形)"
+            "value" : "形状 (r圆 s方 f全屏)"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "形狀 (r - 圓形, s - 方形)"
+            "value" : "形狀 (r圓 s方 f全螢幕)"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "形狀 (r - 圓形, s - 方形)"
+            "value" : "形狀 (r圓 s方 f全螢幕)"
           }
         }
       }

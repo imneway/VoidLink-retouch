@@ -570,7 +570,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 }
 
 - (IBAction) addTapped:(id)sender{
-    
+
     NSMutableDictionary* widgetInitParams = [NSMutableDictionary dictionary];
 
     UIAlertController *alertController = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@""]
@@ -599,7 +599,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     }];
     
     [alertController addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-        textField.placeholder = [LocalizationHelper localizedStringForKey:@"Shape (r - round, s - square)"];
+        textField.placeholder = [LocalizationHelper localizedStringForKey:@"Shape (r/s/f)"];
         textField.keyboardType = UIKeyboardTypeASCIICapable;
         textField.autocorrectionType = UITextAutocorrectionTypeNo;
         textField.spellCheckingType = UITextSpellCheckingTypeNo;
@@ -672,7 +672,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     }];
     
     [alertController addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-        textField.placeholder = [LocalizationHelper localizedStringForKey:@"Shape (r - round, s - square)"];
+        textField.placeholder = [LocalizationHelper localizedStringForKey:@"Shape (r/s/f)"];
         textField.keyboardType = UIKeyboardTypeASCIICapable;
         textField.autocorrectionType = UITextAutocorrectionTypeNo;
         textField.spellCheckingType = UITextSpellCheckingTypeNo;
