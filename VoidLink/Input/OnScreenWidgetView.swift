@@ -398,6 +398,13 @@ import UIKit
     }
 
     @objc public func adjustTransparency(alpha: CGFloat){
+        if widgetType == WidgetTypeEnum.fullscreenTrigger {
+            // Fullscreen trigger owns its own background through setupFullscreenTriggerView
+            // (clear at runtime, faint dark tint in editor). tweakAlpha would paint a gray
+            // bg across the entire screen, which is then only reset by the follow-up
+            // setupView call inside adjustBorder — fragile. Just no-op here.
+            return
+        }
         if alpha != 0 {
             self.backgroundAlpha = alpha
         }
@@ -2088,6 +2095,15 @@ import UIKit
     @objc private func cancelActiveTouchesDueToGestureSuppression() {
         if Thread.isMainThread == false {
             DispatchQueue.main.async { self.cancelActiveTouchesDueToGestureSuppression() }
+            return
+        }
+
+        if widgetType == WidgetTypeEnum.fullscreenTrigger {
+            // Fullscreen trigger doesn't capture touches at runtime (hitTest returns nil) and
+            // owns its own appearance via setupFullscreenTriggerView. The fall-through tweakAlpha
+            // below would force a gray UIColor(white:0.2, alpha:0.32) on a full-screen view —
+            // which renders as a translucent grey overlay covering the entire stream until the
+            // next setupView call. Bail early; there's nothing to clean up here.
             return
         }
 
