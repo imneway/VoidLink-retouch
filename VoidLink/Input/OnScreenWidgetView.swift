@@ -282,7 +282,11 @@ import UIKit
         // to double-tap-to-fire, full-screen invisible overlay.
         if shape == OnScreenWidgetView.FULLSCREEN_SHAPE {
             self.widgetType = WidgetTypeEnum.fullscreenTrigger
-            if self.comboButtonStrings.isEmpty {
+            // For "+"-style legacy keyboard combos (e.g. "A+B") leave comboButtonStrings empty so
+            // handleFullscreenDoubleTap falls into the extractKeyStringsFromComboCommand branch.
+            // The single-token send path (sendComboButtonsDownEvent) only handles already-split
+            // tokens that match the keyboard / mouse / osc / touchpad mapping tables.
+            if self.comboButtonStrings.isEmpty && !self.cmdString.contains("+") {
                 self.comboButtonStrings = [self.cmdString]
             }
             self.buttonString = self.comboButtonStrings.first ?? self.cmdString

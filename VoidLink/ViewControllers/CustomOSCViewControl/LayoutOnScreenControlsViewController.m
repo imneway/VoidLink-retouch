@@ -1710,6 +1710,11 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 
 - (void)updateCoordinateDisplay {
     if (self->selectedWidgetView != nil && self->widgetViewSelected) {
+        if (self->selectedWidgetView.widgetType == WidgetTypeEnumFullscreenTrigger) {
+            // Pinned widget: no coordinate readout, no nudge buttons.
+            self.coordinateControlStack.hidden = YES;
+            return;
+        }
         // 显示WidgetView的坐标
         CGPoint center = self->selectedWidgetView.center;
         self.coordinateLabel.text = [NSString stringWithFormat:@"坐标：[%.0f], [%.0f]", center.x, center.y];
@@ -1727,8 +1732,11 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 
 - (void)moveSelectedControlByOffset:(CGPoint)offset {
     if (self->selectedWidgetView != nil && self->widgetViewSelected) {
+        if (self->selectedWidgetView.widgetType == WidgetTypeEnumFullscreenTrigger) {
+            return; // pinned widget — direction-pad nudges must not relocate it
+        }
         // 移动WidgetView
-        CGPoint newCenter = CGPointMake(self->selectedWidgetView.center.x + offset.x, 
+        CGPoint newCenter = CGPointMake(self->selectedWidgetView.center.x + offset.x,
                                        self->selectedWidgetView.center.y + offset.y);
         self->selectedWidgetView.center = newCenter;
         [self updateCoordinateDisplay];
