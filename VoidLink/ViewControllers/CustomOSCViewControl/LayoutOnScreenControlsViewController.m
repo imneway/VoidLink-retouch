@@ -153,11 +153,20 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     
     // _activeCustomOscButtonPositionDict will be updated every time when the osc profile is reloaded
     OSCProfile *oscProfile = [profilesManager getSelectedProfile]; //returns the currently selected OSCProfile
+    BOOL fullscreenTriggerInstantiated = NO;
     for (NSData *buttonStateEncoded in oscProfile.buttonStates) {
         // OnScreenButtonState* buttonState = [NSKeyedUnarchiver unarchivedObjectOfClass:[OnScreenButtonState class] fromData:buttonStateEncoded error:nil];
         OnScreenButtonState* buttonState = [profilesManager unarchiveButtonStateEncoded:buttonStateEncoded];
         if(buttonState.buttonType == CustomOnScreenWidget){
+            // Match the runtime guard in StreamView.reloadOnScreenWidgetViews: defensively dedupe
+            // duplicate fullscreen entries from a corrupted profile so the editor never shows two
+            // overlapping handles.
+            BOOL isFullscreen = [buttonState.widgetShape isEqualToString:@"fullscreen"];
+            if(isFullscreen && fullscreenTriggerInstantiated) continue;
             OnScreenWidgetView* widgetView = [[OnScreenWidgetView alloc] initWithCmdString:buttonState.name buttonLabel:buttonState.alias shape:buttonState.widgetShape]; //reconstruct widgetView
+            if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
+                fullscreenTriggerInstantiated = YES;
+            }
             widgetView.guidelineDelegate = (id<OnScreenWidgetGuidelineUpdateDelegate>)self;
             widgetView.translatesAutoresizingMaskIntoConstraints = NO; // weird but this is mandatory, or you will find no key views added to the right place
             widgetView.widthFactor = buttonState.widthFactor;
@@ -1578,6 +1587,10 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         [self.onScreenWidgetViews removeObject:self->selectedWidgetView];
         [self hideStickIndicators];
         [selectedWidgetView.buttonDownVisualEffectLayer removeFromSuperlayer];
+        // Clear selection state so the inspector / undo flow doesn't keep a dangling pointer
+        // to the just-deleted widget.
+        self->selectedWidgetView = nil;
+        self->widgetViewSelected = false;
     }
     
     
