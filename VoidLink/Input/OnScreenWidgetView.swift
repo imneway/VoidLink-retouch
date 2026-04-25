@@ -910,11 +910,12 @@ import UIKit
         guard let superview = self.superview else { return true }
         let locationInSuper = touch.location(in: superview)
 
-        // 1) Reject if any sibling UIControl (snap-ratio toggle, OSC on/off, etc.) — or any
-        // other interactive subview — would handle the touch. We rely on superview.hitTest
-        // to recursively find what UIKit would actually deliver this touch to. The fullscreen
-        // widget's own hitTest returns nil at runtime, so the result is always something
-        // *other than* self.
+        // 1) Reject if a sibling UIControl (snap-ratio toggle, OSC on/off, etc.) or another
+        // widget view would handle the touch. superview.hitTest recursively finds what UIKit
+        // would actually deliver this touch to; the fullscreen widget's own hitTest returns
+        // nil at runtime so the result is always something *other than* self. (Plain UIView
+        // siblings with their own recognizers aren't covered here — none exist today; widen
+        // this branch if such a sibling is added later.)
         if let hit = superview.hitTest(locationInSuper, with: nil) {
             if hit is UIControl { return false }                         // any UIButton / segmented control / slider, etc.
             if let widget = hit as? OnScreenWidgetView,
