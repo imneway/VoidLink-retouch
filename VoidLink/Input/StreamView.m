@@ -535,10 +535,21 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     OSCProfile *oscProfile = [profilesManager getSelectedProfile]; //returns the currently selected OSCProfile
 
     if(!OnScreenWidgetView.editMode){ // in edit mode, keyboard widget view will be updated within layoutool view controller.
+        BOOL fullscreenTriggerInstantiated = NO;
         for (NSData *buttonStateEncoded in oscProfile.buttonStates) {
             OnScreenButtonState* buttonState = [profilesManager unarchiveButtonStateEncoded:buttonStateEncoded];
             if(buttonState.buttonType == CustomOnScreenWidget){
+                // Defensive runtime guard: even if a malformed profile somehow persists more
+                // than one fullscreen trigger (the editor blocks duplicates, but corrupted /
+                // hand-edited NSUserDefaults could still get through), only ever instantiate
+                // the first one — otherwise each instance attaches its own double-tap recognizer
+                // to the shared superview and a single double-tap would fan out N times.
+                BOOL isFullscreen = [buttonState.widgetShape isEqualToString:@"fullscreen"];
+                if(isFullscreen && fullscreenTriggerInstantiated) continue;
                 OnScreenWidgetView* widgetView = [[OnScreenWidgetView alloc] initWithCmdString:buttonState.name buttonLabel:buttonState.alias shape:buttonState.widgetShape]; //reconstruct widgetView
+                if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
+                    fullscreenTriggerInstantiated = YES;
+                }
                 //--------------------------------------------------
                 onScreenControls.delegate = widgetView; // connecting onScreenControls to OnScreenWidgetView, sending the active instance for touchPad stick control
                 [onScreenControls sendInstance];
