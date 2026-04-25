@@ -910,15 +910,17 @@ import UIKit
         guard let superview = self.superview else { return true }
         let locationInSuper = touch.location(in: superview)
 
-        // 1) Reject when another widget view would handle the double-tap (e.g., a fire-button
-        // widget where the user legitimately wants rapid double taps).
-        for subview in superview.subviews {
-            if subview === self { continue }
-            guard let widget = subview as? OnScreenWidgetView else { continue }
-            if widget.widgetType == WidgetTypeEnum.fullscreenTrigger { continue }
-            if widget.isHidden || !widget.isUserInteractionEnabled { continue }
-            if widget.frame.contains(locationInSuper) {
-                return false
+        // 1) Reject if any sibling UIControl (snap-ratio toggle, OSC on/off, etc.) — or any
+        // other interactive subview — would handle the touch. We rely on superview.hitTest
+        // to recursively find what UIKit would actually deliver this touch to. The fullscreen
+        // widget's own hitTest returns nil at runtime, so the result is always something
+        // *other than* self.
+        if let hit = superview.hitTest(locationInSuper, with: nil) {
+            if hit is UIControl { return false }                         // any UIButton / segmented control / slider, etc.
+            if let widget = hit as? OnScreenWidgetView,
+               widget !== self,
+               widget.widgetType != WidgetTypeEnum.fullscreenTrigger {
+                return false                                              // another widget view will handle the double-tap
             }
         }
 
