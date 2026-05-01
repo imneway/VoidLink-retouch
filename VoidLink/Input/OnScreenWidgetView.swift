@@ -759,6 +759,11 @@ import UIKit
     private weak var fullscreenDoubleTapGesture: UITapGestureRecognizer?
     private weak var attachedFullscreenGestureToSuperview: UIView?
 
+    // Mistouch buffer (pt) added around every sibling widget and OSC layer when deciding
+    // whether the fullscreen-trigger double-tap should fire. Only suppresses the fullscreen
+    // gesture; never widens any other control's actual hit area.
+    private static let fullscreenMistouchBuffer: CGFloat = 15
+
     private func setupFullscreenTriggerView() {
         self.translatesAutoresizingMaskIntoConstraints = false
         self.layer.borderWidth = 0
@@ -943,6 +948,33 @@ import UIKit
                 let geom = layer.presentation() ?? layer
                 let pointInLayer = superview.layer.convert(locationInSuper, to: geom)
                 if geom.contains(pointInLayer) {
+                    return false
+                }
+            }
+        }
+
+        // 3) Mistouch buffer: also reject when the touch falls within a fixed-pt ring just
+        // outside any sibling widget or OSC layer. The buffer only suppresses this
+        // fullscreen-trigger gesture — it never widens the underlying control's own hit
+        // area, so a tap inside another widget's buffer that also lands inside a third
+        // widget's actual hit area still triggers that third widget normally.
+        // Note: don't skip on alpha — obscured-mode widgets/layers run at OBSCURED_ALPHA
+        // (~0.02) but stay interactive, so they still need the mistouch ring.
+        let buffer = OnScreenWidgetView.fullscreenMistouchBuffer
+        for case let widget as OnScreenWidgetView in superview.subviews {
+            if widget === self { continue }
+            if widget.widgetType == WidgetTypeEnum.fullscreenTrigger { continue }
+            if widget.isHidden { continue }
+            if widget.frame.insetBy(dx: -buffer, dy: -buffer).contains(locationInSuper) {
+                return false
+            }
+        }
+        if let oscButtonLayers = onScreenControls.value(forKey: "OSCButtonLayers") as? [CALayer] {
+            for layer in oscButtonLayers {
+                if layer.isHidden { continue }
+                if layer.superlayer == nil { continue } // matches isInDeadZone gating in OnScreenControls
+                let geom = layer.presentation() ?? layer
+                if geom.frame.insetBy(dx: -buffer, dy: -buffer).contains(locationInSuper) {
                     return false
                 }
             }
