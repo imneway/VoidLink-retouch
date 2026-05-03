@@ -104,9 +104,9 @@ import UIKit
     // outputs while keeping full deflection at the same boundary, so a slow tweak
     // gives precision and a fast swing still reaches max — useful for hybrid
     // camera + aim use cases (e.g. bow scopes). Pair with stickInputScale to
-    // control physical range vs softness independently. 1.3 mild · 1.5 default
-    // (matches the wider ALT default range) · 1.8–2.0 strong precision.
-    @objc public var stickResponseExponent: CGFloat = 1.5
+    // control physical range vs softness independently. 1.0 linear · 1.3 default
+    // (mild precision) · 1.5–1.8 stronger precision at the cost of mid-range slope.
+    @objc public var stickResponseExponent: CGFloat = 1.3
 
     
     // for LSVPAD, RSVPAD
@@ -285,8 +285,11 @@ import UIKit
                 // be both soft at low end and smooth approaching max. Without
                 // this the 35pt boundary forces any precision-shaped curve to
                 // become very steep near full deflection (1mm = 20% jumps).
+                // 55 puts max deflection at ~12mm finger travel (vs 7mm @35
+                // and 17mm @80) — enough room for a mild curve, not so wide
+                // that reaching max becomes its own chore.
                 if self.touchPadString == "RSPADALT" || self.touchPadString == "LSPADALT" {
-                    self.stickInputScale = 80
+                    self.stickInputScale = 55
                 }
             }
             else {print("无法从 keyString 提取 comboKeyStrings")}
