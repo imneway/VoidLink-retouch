@@ -36,6 +36,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) CGFloat decelerationRate; // for OnScreenWidgetView
 @property (nonatomic, assign) CGFloat stickIndicatorOffset; // for OnScreenWidgetView
 @property (nonatomic, assign) CGFloat minStickOffset; // for OnScreenWidgetView
+@property (nonatomic, assign) CGFloat stickInputScale; // for OnScreenWidgetView ALT pads (0 = use widget default)
+@property (nonatomic, assign) CGFloat stickResponseExponent; // for OnScreenWidgetView ALT pads (<1.0 = use widget default)
 @property NSString* widgetShape; // for OnScreenWidgetView
 
 @property (nonatomic, assign) CGFloat oscLayerSizeFactor; // for OnScreenController CALayer

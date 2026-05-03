@@ -49,6 +49,8 @@
     [encoder encodeFloat:self.borderWidth forKey:@"borderWidth"];
     [encoder encodeObject:self.widgetShape forKey:@"widgetShape"];
     [encoder encodeFloat:self.minStickOffset forKey:@"minStickOffset"];
+    [encoder encodeFloat:self.stickInputScale forKey:@"stickInputScale"];
+    [encoder encodeFloat:self.stickResponseExponent forKey:@"stickResponseExponent"];
 }
 
 - (id) initWithCoder:(NSCoder*)decoder {
@@ -74,6 +76,8 @@
         self.borderWidth = [decoder decodeFloatForKey:@"borderWidth"];
         self.widgetShape = [decoder decodeObjectForKey:@"widgetShape"];
         self.minStickOffset = [decoder decodeFloatForKey:@"minStickOffset"];
+        self.stickInputScale = [decoder decodeFloatForKey:@"stickInputScale"];
+        self.stickResponseExponent = [decoder decodeFloatForKey:@"stickResponseExponent"];
     }
     return self;
 }

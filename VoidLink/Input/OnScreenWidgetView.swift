@@ -94,6 +94,7 @@ import UIKit
     // for all touchPad or buttons hybrid with touchPads
     @objc public var hasStickIndicator: Bool = false
     @objc public var hasSensitivityTweak: Bool = false
+    @objc public var hasResponseCurveTweak: Bool = false
     
     // for all stick pads
     @objc public var minStickOffset: CGFloat = 0
@@ -106,7 +107,7 @@ import UIKit
     // camera + aim use cases (e.g. bow scopes). Pair with stickInputScale to
     // control physical range vs softness independently. 1.0 linear · 1.3 default
     // (mild precision) · 1.5–1.8 stronger precision at the cost of mid-range slope.
-    @objc public var stickResponseExponent: CGFloat = 1.3
+    @objc public var stickResponseExponent: CGFloat = 1.38
 
     
     // for LSVPAD, RSVPAD
@@ -290,6 +291,7 @@ import UIKit
                 // that reaching max becomes its own chore.
                 if self.touchPadString == "RSPADALT" || self.touchPadString == "LSPADALT" {
                     self.stickInputScale = 55
+                    self.hasResponseCurveTweak = true
                 }
             }
             else {print("无法从 keyString 提取 comboKeyStrings")}

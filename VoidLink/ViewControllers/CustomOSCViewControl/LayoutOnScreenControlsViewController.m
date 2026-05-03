@@ -179,6 +179,8 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
             widgetView.trackballDecelerationRate = buttonState.decelerationRate;
             widgetView.stickIndicatorOffset = buttonState.stickIndicatorOffset;
             widgetView.minStickOffset = buttonState.minStickOffset;
+            if (buttonState.stickInputScale > 0) widgetView.stickInputScale = buttonState.stickInputScale;
+            if (buttonState.stickResponseExponent >= 1.0) widgetView.stickResponseExponent = buttonState.stickResponseExponent;
             widgetView.slideMode = buttonState.slideMode;
             // Add the widgetView to the view controller's view
             if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger && self.streamOverlay){
@@ -784,6 +786,12 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     newWidget.trackballDecelerationRate = widget.trackballDecelerationRate;
     newWidget.stickIndicatorOffset = widget.stickIndicatorOffset;
     newWidget.minStickOffset = [widgetInitParams[@"minStickOffsetString"] floatValue];
+    // Only carry response-curve tunables across when both old and new are ALT pads;
+    // otherwise the new widget keeps its type-appropriate init defaults.
+    if (widget.hasResponseCurveTweak && newWidget.hasResponseCurveTweak) {
+        newWidget.stickInputScale = widget.stickInputScale;
+        newWidget.stickResponseExponent = widget.stickResponseExponent;
+    }
     [newWidget setVibrationWithStyle:widget.vibrationStyle];
     newWidget.mouseButtonAction = widget.mouseButtonAction;
     newWidget.slideMode = widget.slideMode;
@@ -936,9 +944,11 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 
     bool showSensitivityFactorStack = selectedWidgetView.hasSensitivityTweak && !isFullscreenTrigger;
     bool showStickIndicatorOffsetStack = selectedWidgetView.hasStickIndicator && !isFullscreenTrigger;
+    bool showResponseCurveStack = selectedWidgetView.hasResponseCurveTweak && !isFullscreenTrigger;
 
     self.sensitivityXStack.hidden = self.sensitivityYStack.hidden = !showSensitivityFactorStack;
     self.stickIndicatorOffsetStack.hidden = !showStickIndicatorOffsetStack;
+    self.stickInputScaleStack.hidden = self.stickResponseExponentStack.hidden = !showResponseCurveStack;
     self.mouseDownButtonStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"MOUSEPAD"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
     self.decelerationRateStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"TRACKBALL"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
 
@@ -970,6 +980,14 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         [self autoFitLabel:self.stickIndicatorOffsetLabel];
         [self.stickIndicatorOffsetLabel setText:[LocalizationHelper localizedStringForKey:@"Indicator Offset: %.0f", self->selectedWidgetView.stickIndicatorOffset]];
         [self->selectedWidgetView updateStickIndicator];
+    }
+    if(showResponseCurveStack){
+        [self.stickInputScaleSlider setValue:self->selectedWidgetView.stickInputScale];
+        [self autoFitLabel:self.stickInputScaleLabel];
+        [self.stickInputScaleLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Range: %.0f", self->selectedWidgetView.stickInputScale]];
+        [self.stickResponseExponentSlider setValue:self->selectedWidgetView.stickResponseExponent];
+        [self autoFitLabel:self.stickResponseExponentLabel];
+        [self.stickResponseExponentLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Curve: %.2f", self->selectedWidgetView.stickResponseExponent]];
     }
     [self autoFitLabel:self.widgetSizeLabel];
     
@@ -1014,6 +1032,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     self.sensitivityXStack.hidden = self.sensitivityYStack.hidden = true;
     self.mouseDownButtonStack.hidden = true;
     self.decelerationRateStack.hidden = true;
+    self.stickInputScaleStack.hidden = self.stickResponseExponentStack.hidden = true;
     
     self->controllerLayerSelected = true;
     self->selectedControllerLayer = controllerLayer;
@@ -1160,6 +1179,68 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     return;
 }
 
+- (void)stickInputScaleSliderMoved:(UISlider* )sender{
+    [self.stickInputScaleLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Range: %.0f", sender.value]];
+    if(self->selectedWidgetView != nil && self->widgetViewSelected){
+        self->selectedWidgetView.stickInputScale = sender.value;
+    }
+}
+
+- (void)stickResponseExponentSliderMoved:(UISlider* )sender{
+    [self.stickResponseExponentLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Curve: %.2f", sender.value]];
+    if(self->selectedWidgetView != nil && self->widgetViewSelected){
+        self->selectedWidgetView.stickResponseExponent = sender.value;
+    }
+}
+
+- (void)installResponseCurveSliders{
+    UIColor* whiteColor = [UIColor whiteColor];
+    UIFont* labelFont = [UIFont systemFontOfSize:18];
+    UIColor* sliderTint = [UIColor colorWithRed:0.188 green:0.690 blue:0.780 alpha:0.5];
+
+    // Range slider: physical finger travel (in points) for full deflection.
+    self.stickInputScaleLabel = [[UILabel alloc] init];
+    self.stickInputScaleLabel.font = labelFont;
+    self.stickInputScaleLabel.textColor = whiteColor;
+    self.stickInputScaleLabel.text = [LocalizationHelper localizedStringForKey:@"Stick Range"];
+    [self.stickInputScaleLabel.widthAnchor constraintEqualToConstant:160].active = YES;
+
+    self.stickInputScaleSlider = [[UISlider alloc] init];
+    self.stickInputScaleSlider.minimumValue = 30;
+    self.stickInputScaleSlider.maximumValue = 120;
+    self.stickInputScaleSlider.value = 55;
+    self.stickInputScaleSlider.tintColor = sliderTint;
+    [self.stickInputScaleSlider addTarget:self action:@selector(stickInputScaleSliderMoved:) forControlEvents:UIControlEventValueChanged];
+
+    self.stickInputScaleStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.stickInputScaleLabel, self.stickInputScaleSlider]];
+    self.stickInputScaleStack.axis = UILayoutConstraintAxisHorizontal;
+    self.stickInputScaleStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.stickInputScaleStack.heightAnchor constraintEqualToConstant:20].active = YES;
+    self.stickInputScaleStack.hidden = YES;
+    [self.widgetPanelStack addArrangedSubview:self.stickInputScaleStack];
+
+    // Curve exponent slider: 1.0 (linear) .. 2.5 (strong precision).
+    self.stickResponseExponentLabel = [[UILabel alloc] init];
+    self.stickResponseExponentLabel.font = labelFont;
+    self.stickResponseExponentLabel.textColor = whiteColor;
+    self.stickResponseExponentLabel.text = [LocalizationHelper localizedStringForKey:@"Stick Curve"];
+    [self.stickResponseExponentLabel.widthAnchor constraintEqualToConstant:160].active = YES;
+
+    self.stickResponseExponentSlider = [[UISlider alloc] init];
+    self.stickResponseExponentSlider.minimumValue = 1.0;
+    self.stickResponseExponentSlider.maximumValue = 2.5;
+    self.stickResponseExponentSlider.value = 1.38;
+    self.stickResponseExponentSlider.tintColor = sliderTint;
+    [self.stickResponseExponentSlider addTarget:self action:@selector(stickResponseExponentSliderMoved:) forControlEvents:UIControlEventValueChanged];
+
+    self.stickResponseExponentStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.stickResponseExponentLabel, self.stickResponseExponentSlider]];
+    self.stickResponseExponentStack.axis = UILayoutConstraintAxisHorizontal;
+    self.stickResponseExponentStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.stickResponseExponentStack.heightAnchor constraintEqualToConstant:20].active = YES;
+    self.stickResponseExponentStack.hidden = YES;
+    [self.widgetPanelStack addArrangedSubview:self.stickResponseExponentStack];
+}
+
 - (void)showIndicatorOffset{
     selectedWidgetView.touchBeganLocation = CGPointMake(CGRectGetWidth(selectedWidgetView.frame)/2, CGRectGetHeight(selectedWidgetView.frame)/4);
     [selectedWidgetView showStickIndicator];
@@ -1256,6 +1337,11 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     [self.stickIndicatorOffsetSlider addTarget:self action:@selector(stickIndicatorOffsetSliderMoved:) forControlEvents:(UIControlEventValueChanged)];
     self.stickIndicatorOffsetLabel.text = [LocalizationHelper localizedStringForKey:@"Indicator Offset"];
     self.stickIndicatorOffsetStack.hidden = YES;
+
+    // ALT-pad response curve sliders (built programmatically, no storyboard outlets).
+    // Inserted into the bottom of widgetPanelStack so they appear after the existing
+    // sensitivity sliders. Visibility gated by `hasResponseCurveTweak` (set on RSPADALT/LSPADALT).
+    [self installResponseCurveSliders];
     
     NSDictionary *whiteFontAttributes = @{
         NSForegroundColorAttributeName: [UIColor whiteColor]

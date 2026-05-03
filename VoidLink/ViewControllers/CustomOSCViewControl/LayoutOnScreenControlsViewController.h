@@ -81,6 +81,14 @@ NS_ASSUME_NONNULL_BEGIN
 @property (strong, nonatomic) IBOutlet UILabel *decelerationRateLabel;
 @property (strong, nonatomic) IBOutlet UISlider *decelerationRateSlider;
 
+// ALT-pad response curve controls (built programmatically, not in storyboard)
+@property (strong, nonatomic) UILabel *stickInputScaleLabel;
+@property (strong, nonatomic) UISlider *stickInputScaleSlider;
+@property (strong, nonatomic) UIStackView *stickInputScaleStack;
+@property (strong, nonatomic) UILabel *stickResponseExponentLabel;
+@property (strong, nonatomic) UISlider *stickResponseExponentSlider;
+@property (strong, nonatomic) UIStackView *stickResponseExponentStack;
+
 
 
 
