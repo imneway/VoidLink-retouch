@@ -99,6 +99,13 @@ import UIKit
     @objc public var minStickOffset: CGFloat = 0
     public let stickMaxOffset: CGFloat = 0x7FFE
 
+    // Response curve exponent applied to ALT stick pads after the circular clamp.
+    // 1.0 = linear (legacy). >1 compresses small finger displacements into smaller
+    // outputs while keeping full deflection at the same boundary, so a slow tweak
+    // gives precision and a fast swing still reaches max — useful for hybrid
+    // camera + aim use cases (e.g. bow scopes). 1.5 mild · 1.8 default · 2.0 strong.
+    @objc public var stickResponseExponent: CGFloat = 1.8
+
     
     // for LSVPAD, RSVPAD
     @objc public var deltaX: CGFloat
@@ -1657,7 +1664,21 @@ import UIKit
         }
         return input * (18/stickInputScale)
     }
-    
+
+    // Reshape the (already-clamped) stick offset radially: keep the direction,
+    // remap magnitude through a power curve so tiny offsets shrink further while
+    // the boundary still maps to full deflection.
+    private func applyStickResponseCurve(_ adjX: inout CGFloat, _ adjY: inout CGFloat) {
+        guard stickResponseExponent.isFinite, stickResponseExponent > 1.0 else { return }
+        let mag = hypot(adjX, adjY)
+        guard mag > 0 else { return }
+        let normalized = min(mag / stickInputScale, 1.0)
+        let curved = pow(normalized, stickResponseExponent)
+        let scale = (curved * stickInputScale) / mag
+        adjX *= scale
+        adjY *= scale
+    }
+
     private func sendRightStickTouchPadEvent(inputX: CGFloat, inputY: CGFloat){
         var adjX = inputX
         var adjY = inputY
@@ -1668,6 +1689,7 @@ import UIKit
                 adjX *= scale
                 adjY *= scale
             }
+            applyStickResponseCurve(&adjX, &adjY)
         }
         var targetX = self.touchInputToStickInput(input: adjX)
         var targetY = -self.touchInputToStickInput(input: adjY)
@@ -1676,7 +1698,7 @@ import UIKit
         targetY = (targetY >= 0 ? 1.0 : -1.0) * self.minStickOffset + (self.stickMaxOffset - self.minStickOffset) * (targetY/self.stickMaxOffset)
         self.onScreenControls.sendRightStickTouchPadEvent(targetX, targetY)
     }
-    
+
     private func sendLeftStickTouchPadEvent(inputX: CGFloat, inputY: CGFloat){
         var adjX = inputX
         var adjY = inputY
@@ -1687,6 +1709,7 @@ import UIKit
                 adjX *= scale
                 adjY *= scale
             }
+            applyStickResponseCurve(&adjX, &adjY)
         }
         var targetX = self.touchInputToStickInput(input: adjX)
         var targetY = -self.touchInputToStickInput(input: adjY)
