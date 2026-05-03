@@ -103,8 +103,10 @@ import UIKit
     // 1.0 = linear (legacy). >1 compresses small finger displacements into smaller
     // outputs while keeping full deflection at the same boundary, so a slow tweak
     // gives precision and a fast swing still reaches max — useful for hybrid
-    // camera + aim use cases (e.g. bow scopes). 1.5 mild · 1.8 default · 2.0 strong.
-    @objc public var stickResponseExponent: CGFloat = 1.8
+    // camera + aim use cases (e.g. bow scopes). Pair with stickInputScale to
+    // control physical range vs softness independently. 1.3 mild · 1.5 default
+    // (matches the wider ALT default range) · 1.8–2.0 strong precision.
+    @objc public var stickResponseExponent: CGFloat = 1.5
 
     
     // for LSVPAD, RSVPAD
@@ -116,7 +118,17 @@ import UIKit
     @objc public var offSetY: CGFloat
     private let crossMarkColor: CGColor = UIColor(white: 1, alpha: 0.70).cgColor
     private let stickBallColor: CGColor = UIColor(white: 1, alpha: 0.75).cgColor
-    private var stickInputScale: CGFloat = 35
+    // Finger displacement (in points) at which the stick reaches full deflection.
+    // Smaller = more sensitive (less travel). Wider = more precision band.
+    // Default 35 keeps legacy non-ALT pads unchanged; ALT pads override to ~80
+    // at init so the response curve has room to be both soft and smooth.
+    @objc public var stickInputScale: CGFloat = 35 {
+        didSet {
+            if !stickInputScale.isFinite || stickInputScale <= 0 {
+                stickInputScale = oldValue
+            }
+        }
+    }
     private var l3r3Indicator = CAShapeLayer()
     private let stickBallMaxOffset = 18.0
     @objc public var crossMarkLayer = CAShapeLayer()
@@ -267,6 +279,14 @@ import UIKit
                 case "DS4TOUCH":
                     self.comboButtonStrings = ["DS4TCHBTN"]
                 default: break
+                }
+
+                // ALT pads: widen the playable range so the response curve can
+                // be both soft at low end and smooth approaching max. Without
+                // this the 35pt boundary forces any precision-shaped curve to
+                // become very steep near full deflection (1mm = 20% jumps).
+                if self.touchPadString == "RSPADALT" || self.touchPadString == "LSPADALT" {
+                    self.stickInputScale = 80
                 }
             }
             else {print("无法从 keyString 提取 comboKeyStrings")}
