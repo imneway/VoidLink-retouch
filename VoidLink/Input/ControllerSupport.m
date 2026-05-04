@@ -79,13 +79,14 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 }
 
 // Conversion factor: rotation rate (deg/s) → stick value (-32766..+32766).
-// Tuned so 327°/s yields full deflection at gyroSensitivity=1.0 — fast head
-// turn maxes out, gentle aim adjustments live in the precision band.
-static const CGFloat GYRO_TO_STICK_DPS_PER_FULL = 327.0f;
+// Tuned so 120°/s yields full deflection at gyroSensitivity=1.0 — moderate
+// head turn maxes out, gentle aim adjustments produce ~10-20% stick which
+// feels responsive without being twitchy. User can tune via gyroSensitivity.
+static const CGFloat GYRO_TO_STICK_DPS_PER_FULL = 120.0f;
 static const CGFloat GYRO_TO_STICK_SCALE = 32766.0f / GYRO_TO_STICK_DPS_PER_FULL;
-// Mouse mode: convert deg/s of head turn into pixels-per-tick. At 60Hz tick
-// rate, 327°/s → ~5px per tick × 60 = 300px/s, comparable to a slow drag.
-static const CGFloat GYRO_TO_MOUSE_SCALE = 0.085f;
+// Mouse mode: deg/s → pixels-per-tick. Calibrated so a slow head turn drives
+// the cursor at a comfortable rate; user tunes via gyroSensitivity.
+static const CGFloat GYRO_TO_MOUSE_SCALE = 0.18f;
 
 // Clamp helper to int16_t range expected by Limelight stick events.
 static inline int16_t clamp_int16(CGFloat v) {
@@ -294,20 +295,41 @@ static inline int16_t clamp_int16(CGFloat v) {
                             }
                             voidController.lastDeviceGyroSample = deviceGyroSample;
 
-                            // Extract pitch/yaw/roll in deg/s (game frame). The
-                            // landscape/portrait sign flip mirrors the original
-                            // DS4-motion mapping so subsequent modes match the
-                            // user's spatial intuition without per-mode tuning.
+                            // Extract pitch/yaw/roll in deg/s (game frame).
+                            //
+                            // CMRotationRate is in the device's intrinsic frame:
+                            //   .x = rotation around long-edge axis
+                            //   .y = rotation around short-edge axis
+                            //   .z = rotation around screen-perpendicular axis
+                            //
+                            // In landscape, the user's intuition maps as:
+                            //   tilting top edge toward you (look up/down) = rotation
+                            //     around the short edge of the device → .y → pitch
+                            //   twisting iPad horizontally (look left/right) = rotation
+                            //     around the long edge of the device → .x → yaw
+                            //   banking like an airplane (roll) = rotation around the
+                            //     axis perpendicular to the screen → .z → roll
+                            //
+                            // The DS4 motion path used .z for yaw (kept for backward
+                            // compat with whatever host-side remap it relied on).
+                            // For stick/mouse synthesis we must match the user's
+                            // physical intuition, so we use .x for yaw here.
                             BOOL landscape = UIApplication.sharedApplication.windows.firstObject.windowScene.interfaceOrientation == 4;
-                            float pitch_dps = deviceGyroSample.y * (landscape ? 57.2957795f : -57.2957795f) * self->_gyroSensitivity;
-                            float yaw_dps   = deviceGyroSample.z * 57.2957795f * self->_gyroSensitivity;
-                            float roll_dps  = deviceGyroSample.x * (landscape ? 57.2957795f : -57.2957795f) * self->_gyroSensitivity;
+                            float ds4_pitch_dps = deviceGyroSample.y * (landscape ? 57.2957795f : -57.2957795f) * self->_gyroSensitivity;
+                            float ds4_yaw_dps   = deviceGyroSample.z * 57.2957795f * self->_gyroSensitivity;
+                            float ds4_roll_dps  = deviceGyroSample.x * (landscape ? 57.2957795f : -57.2957795f) * self->_gyroSensitivity;
+                            // Stick / Mouse modes use intuition-correct yaw extraction:
+                            float pitch_dps = ds4_pitch_dps;  // up/down tilt unchanged
+                            float yaw_dps   = deviceGyroSample.x * (landscape ? 57.2957795f : -57.2957795f) * self->_gyroSensitivity;
+                            float roll_dps  = deviceGyroSample.z * 57.2957795f * self->_gyroSensitivity;
 
                             switch (self->_mapGyroTo) {
                                 case MapGyroToMotion:
+                                    // Preserve the legacy DS4 axis mapping — the
+                                    // host emulator expects the original convention.
                                     LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber,
                                                                 LI_MOTION_TYPE_GYRO,
-                                                                pitch_dps, yaw_dps, roll_dps);
+                                                                ds4_pitch_dps, ds4_yaw_dps, ds4_roll_dps);
                                     break;
                                 case MapGyroToRightStick: {
                                     // Stick Y default-inverts: tilt up → positive pitch → +Y stick.
