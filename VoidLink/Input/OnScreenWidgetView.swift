@@ -33,11 +33,12 @@ import UIKit
     @objc func getOnScreenControlsInstance(_ sender: Any) {
         if let controls = sender as? OnScreenControls {
             self.onScreenControls = controls
-            // Tell ControllerSupport that motion-event gating is needed once any
-            // GYRO/GYROPAUSE widget exists. Without this, gyro stays in legacy
-            // always-on mode and the button press wouldn't change anything.
-            if !self.motionControlButtonString.isEmpty {
-                controls.markMotionControlButtonRegistered()
+            // Tell ControllerSupport which kind of gyro gate this widget needs.
+            // Without this the gyro tick stays in legacy always-on mode.
+            switch self.motionControlButtonString {
+            case "GYRO":      controls.markGyroToggleButtonRegistered()
+            case "GYROPAUSE": controls.markGyroPauseButtonRegistered()
+            default: break
             }
             print("ClassA received OnScreenControls instance: \(controls)")
         } else {
@@ -2214,6 +2215,51 @@ import UIKit
         }
     }
 
+    // iOS sends touchesCancelled when a touch sequence is interrupted by the
+    // system (incoming call, control center swipe, modal alert, gesture
+    // recognizer claim, app→background, etc.). Without this override, UIView's
+    // default behavior is to silently drop the touch — which means handleButtonDown
+    // already fired (push to motion-button hold count, host received OSCR2 down,
+    // etc.) but the matching handlebuttonUp never runs. Result: motion button
+    // count leaks → gyro fires forever even after the user lets go, AND the
+    // host-side button stays stuck → all subsequent screen taps fight the stuck
+    // input. Routing to the same cleanup path the gesture-suppression observer
+    // uses keeps both the local count and the host-side button state balanced.
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        cancelActiveTouchesDueToGestureSuppression()
+    }
+
+    // Same leak class as touchesCancelled: a widget can be removed from its
+    // superview (OSC layout reload, clearOnScreenWidgets) while the user's
+    // finger is still down on it. Without this, the matching handlebuttonUp
+    // never runs and motion-button count + host R2 state leak the same way.
+    // Slide-captured buttons (handleButtonSliding) leave `pressed=false` but
+    // still hold capturedTouches and may have pushed motion-button state, so
+    // we widen the guard to cover all "this widget owns active input" cases.
+    override func willMove(toSuperview newSuperview: UIView?) {
+        super.willMove(toSuperview: newSuperview)
+        guard newSuperview == nil else { return }
+        let hasActiveInput = self.pressed
+            || self.motionButtonHeld
+            || self.capturedTouches.count > 0
+            || self.activePointerIds.count > 0
+        if hasActiveInput {
+            cancelActiveTouchesDueToGestureSuppression()
+        }
+    }
+
+    // Force-release every pointer the host has open for this widget's DS4TOUCH
+    // surface. Used by the cancel/teardown path where we don't have specific
+    // UITouch references to map.
+    private func cancelAllControllerTouches() {
+        for pointerId in activePointerIds {
+            LiSendControllerTouchEvent(0, UInt8(LI_TOUCH_EVENT_UP), pointerId, 0, 0, 1)
+        }
+        activePointerIds.removeAll()
+        pointerIdDict.removeAll()
+    }
+
     @objc private func cancelActiveTouchesDueToGestureSuppression() {
         if Thread.isMainThread == false {
             DispatchQueue.main.async { self.cancelActiveTouchesDueToGestureSuppression() }
@@ -2229,7 +2275,13 @@ import UIKit
             return
         }
 
-        if pressed && widgetType == WidgetTypeEnum.button {
+        // Slide-captured buttons hold capturedTouches without setting `pressed`,
+        // and pure GYRO/GYROPAUSE buttons hold motion-button state. Widen the
+        // cleanup guard so any of those leak paths still reaches handlebuttonUp.
+        let buttonNeedsCleanup = self.pressed
+            || self.motionButtonHeld
+            || self.capturedTouches.count > 0
+        if buttonNeedsCleanup && widgetType == WidgetTypeEnum.button {
             handlebuttonUp()
         }
 
@@ -2264,6 +2316,27 @@ import UIKit
                 mousePointerMoved = false
             case "TRACKBALL":
                 stopTrackballMomentum()
+            case "DS4TOUCH":
+                // touchesEnded calls handleControllerTouchesUp(touches:) which
+                // needs the actual UITouches to compute final coords. The cancel
+                // path doesn't have those, so force-release every open pointer
+                // at (0,0) — host clears the touch state regardless of coords.
+                cancelAllControllerTouches()
+            case "DPAD":
+                onScreenControls.releaseControllerButton(LEFT_FLAG)
+                onScreenControls.releaseControllerButton(RIGHT_FLAG)
+                onScreenControls.releaseControllerButton(UP_FLAG)
+                onScreenControls.releaseControllerButton(DOWN_FLAG)
+            case "WASDPAD":
+                LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["W"]!, Int8(KEY_ACTION_UP), 0)
+                LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["A"]!, Int8(KEY_ACTION_UP), 0)
+                LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["S"]!, Int8(KEY_ACTION_UP), 0)
+                LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["D"]!, Int8(KEY_ACTION_UP), 0)
+            case "ARROWPAD":
+                LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["LEFT_ARROW"]!, Int8(KEY_ACTION_UP), 0)
+                LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["RIGHT_ARROW"]!, Int8(KEY_ACTION_UP), 0)
+                LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["UP_ARROW"]!, Int8(KEY_ACTION_UP), 0)
+                LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["DOWN_ARROW"]!, Int8(KEY_ACTION_UP), 0)
             default:
                 break
             }
@@ -2275,6 +2348,10 @@ import UIKit
         mousePointerMoved = false
         quickDoubleTapDetected = false
         restoreAlphaAfterRelease = false
+        // Drop any captured touch references — touchesEnded clears these on the
+        // happy path, but cancellation never gets there. Stale entries would
+        // confuse the next slide-capture pass.
+        capturedTouches.removeAllObjects()
 
         if OnScreenWidgetView.obscuredByAlpha || superview?.alpha ?? 1.0 < 0.05 {
             self.alpha = 0.02

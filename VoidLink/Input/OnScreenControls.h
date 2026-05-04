@@ -131,7 +131,10 @@ typedef NS_ENUM(NSInteger, OnScreenControlsLevel) {
 // Motion-button forwarders — see ControllerSupport.h. On-screen widgets call
 // these on press / release so we don't need to expose the bare ControllerSupport
 // reference upward.
-- (void) markMotionControlButtonRegistered;
+// Mark which kind of motion-control button this widget owns. Determines the
+// gyro-emission default state per ControllerSupport.motionEmissionAllowed.
+- (void) markGyroToggleButtonRegistered;
+- (void) markGyroPauseButtonRegistered;
 - (void) clearMotionControlButtonRegistration;
 - (void) pushMotionButtonHold;
 - (void) popMotionButtonHold;

@@ -28,14 +28,21 @@
 // one GYRO button is held (and no GYROPAUSE button is held). When NO, the
 // legacy always-on behavior under the user's GyroMode setting is preserved.
 // Designed for "press R2 to aim" patterns — see CommandManager.motionControlButtonCmds.
-@property (atomic, assign) BOOL hasMotionControlButton;
+// Two registration flags so emission semantics match user intuition for each
+// widget type:
+//   GYRO widget present     → default OFF, hold a GYRO button to enable
+//   GYROPAUSE widget present → default ON,  hold a GYROPAUSE button to suspend
+//   Both present            → AND of the two
+//   Neither                 → legacy always-on behavior
+@property (atomic, assign) BOOL hasGyroToggleButton;
+@property (atomic, assign) BOOL hasGyroPauseButton;
 - (void) pushMotionButtonHold;
 - (void) popMotionButtonHold;
 - (void) pushMotionButtonPause;
 - (void) popMotionButtonPause;
 - (void) resetMotionButtonHolds;
-// Call before reloading on-screen widgets so the global hasMotionControlButton
-// flag accurately reflects the new layout. Without this, a previous session's
+// Call before reloading on-screen widgets so the registration flags
+// accurately reflect the new layout. Without this, a previous session's
 // GYRO widgets would keep gyro emission gated behind a hold count of 0.
 - (void) clearMotionControlButtonRegistration;
 

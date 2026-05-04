@@ -103,15 +103,20 @@ static inline int16_t clamp_int16(CGFloat v) {
 
 // MARK: - Motion-button gating
 
-// YES when motion events should be emitted right now. Legacy behavior
-// (no on-screen GYRO buttons) returns YES. With GYRO buttons present,
-// only emits while at least one GYRO is held and no GYROPAUSE is held.
+// YES when motion events should be emitted right now. With no motion-control
+// widgets registered, returns YES (legacy always-on under user's GyroMode).
+// With GYRO widgets registered, default OFF — at least one GYRO must be held.
+// With GYROPAUSE widgets registered, default ON — no GYROPAUSE may be held.
 // Read under the same lock as push/pop to avoid races between the gyro
 // timer (background thread, ~60Hz reads) and touch handlers (main thread).
 - (BOOL) motionEmissionAllowed {
-    if (!self.hasMotionControlButton) return YES;
+    BOOL hasToggle = self.hasGyroToggleButton;
+    BOOL hasPause  = self.hasGyroPauseButton;
+    if (!hasToggle && !hasPause) return YES;
     @synchronized (self) {
-        return _motionButtonHoldCount > 0 && _motionButtonPauseCount == 0;
+        BOOL toggleAllows = !hasToggle || _motionButtonHoldCount > 0;
+        BOOL pauseAllows  = !hasPause  || _motionButtonPauseCount == 0;
+        return toggleAllows && pauseAllows;
     }
 }
 
@@ -143,7 +148,8 @@ static inline int16_t clamp_int16(CGFloat v) {
 }
 
 - (void) clearMotionControlButtonRegistration {
-    self.hasMotionControlButton = NO;
+    self.hasGyroToggleButton = NO;
+    self.hasGyroPauseButton = NO;
     [self resetMotionButtonHolds];
 }
 
@@ -1812,6 +1818,17 @@ static inline int16_t clamp_int16(CGFloat v) {
             [voidController.gyroTimer invalidate];
             voidController.gyroTimer = nil;
         }
+    }
+    // Clear any leftover gyro-synthesized stick contribution so subsequent
+    // physical-stick / button updateFinished calls don't keep blending in
+    // a stale value (would manifest as "stick stuck slightly off-center"
+    // after disabling the gyro mid-stream).
+    if (voidController.gyroStickX != 0 || voidController.gyroStickY != 0) {
+        @synchronized(voidController) {
+            voidController.gyroStickX = 0;
+            voidController.gyroStickY = 0;
+        }
+        [self updateFinished:voidController];
     }
 }
 
