@@ -1886,11 +1886,7 @@ BOOL isCustomResolution(int resolutionSelected) {
     self.mapGyroToLabel.text = [LocalizationHelper localizedStringForKey:@"Map Gyro To"];
     self.mapGyroToLabel.font = labelFont;
     self.mapGyroToLabel.textColor = whiteColor;
-    [self.mapGyroToLabel.widthAnchor constraintEqualToConstant:200].active = YES;
 
-    // Short labels — narrow Settings panels (especially iPhone) can't fit
-    // multi-word segment titles without truncation. Tooltip / docs use the
-    // full names; the segment itself stays compact.
     self.mapGyroToSelector = [[UISegmentedControl alloc] initWithItems:@[
         [LocalizationHelper localizedStringForKey:@"DS4"],
         [LocalizationHelper localizedStringForKey:@"Stick"],
@@ -1904,9 +1900,13 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self.mapGyroToSelector setTitleTextAttributes:whiteFontAttributes forState:UIControlStateNormal];
     [self.mapGyroToSelector addTarget:self action:@selector(mapGyroToChanged:) forControlEvents:UIControlEventValueChanged];
 
+    // Vertical stack: label on top (full width), segment full width below.
+    // 4 segments + Chinese / multi-language labels won't fit horizontally on
+    // narrow Settings panels — splitting onto two rows is the cleanest fix.
     self.mapGyroToStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.mapGyroToLabel, self.mapGyroToSelector]];
-    self.mapGyroToStack.axis = UILayoutConstraintAxisHorizontal;
-    self.mapGyroToStack.spacing = 8;
+    self.mapGyroToStack.axis = UILayoutConstraintAxisVertical;
+    self.mapGyroToStack.spacing = 4;
+    self.mapGyroToStack.alignment = UIStackViewAlignmentFill;
     self.mapGyroToStack.translatesAutoresizingMaskIntoConstraints = NO;
 }
 
@@ -1916,6 +1916,28 @@ BOOL isCustomResolution(int resolutionSelected) {
     // the next reconnect — by design, since the gyro tick is wired to the
     // mode at setup time. Users typically tweak between sessions anyway.
     [[NSUserDefaults standardUserDefaults] setInteger:sender.selectedSegmentIndex forKey:@"mapGyroTo"];
+    [self updateGyroStackVisibility];
+}
+
+// Single source of truth for which gyro-related stacks are visible. Called
+// from emulatedControllerTypeChanged AND mapGyroToChanged so both paths
+// converge on consistent state.
+- (void)updateGyroStackVisibility {
+    NSInteger ctrlIndex = self.emulatedControllerTypeSelector.selectedSegmentIndex;
+    NSInteger mapTo = self.mapGyroToSelector.selectedSegmentIndex;
+    BOOL isXboxCtrl = (ctrlIndex == 0);
+    BOOL stickOrMouseMapping = (mapTo == 1 || mapTo == 2); // RightStick or Mouse
+    BOOL gyroFullyOff = (mapTo == 3) && isXboxCtrl;        // Off + non-DS4 = no gyro at all
+
+    // gyroModeStack: only relevant for DS4 motion path.
+    [self setHidden:isXboxCtrl forStack:_gyroModeStack];
+    // gyroSensitivityStack: relevant whenever ANY gyro path is active.
+    [self setHidden:gyroFullyOff forStack:_gyroSensitivityStack];
+    // Invert switches: only useful when we're synthesizing stick / mouse.
+    [self setHidden:!stickOrMouseMapping forStack:_gyroInvertPitchStack];
+    [self setHidden:!stickOrMouseMapping forStack:_gyroInvertYawStack];
+
+    [touchAndControlSection updateViewForFoldState];
 }
 
 // Helper: build one horizontal label+switch row, return the stack and the
@@ -2054,9 +2076,7 @@ BOOL isCustomResolution(int resolutionSelected) {
 }
 
 - (void)emulatedControllerTypeChanged:(UISegmentedControl* )sender{
-    [self setHidden:sender.selectedSegmentIndex == 0 forStack:_gyroModeStack];
-    [self setHidden:sender.selectedSegmentIndex == 0 forStack:_gyroSensitivityStack];
-    [touchAndControlSection updateViewForFoldState];
+    [self updateGyroStackVisibility];
 }
 
 - (void)setHidden:(BOOL)hidden forStack:(UIStackView* )stack{
