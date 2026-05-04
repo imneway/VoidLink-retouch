@@ -178,9 +178,21 @@ static inline int16_t clamp_int16(CGFloat v) {
             [self stopTimerForController:voidController];
             return;
         }
-        
+
         if(voidController.gamepad.motion.hasAttitudeAndRotationRate) [voidController.motionTypes addObject:@(LI_MOTION_TYPE_ACCEL)];
         if(voidController.gamepad.motion.hasRotationRate) [voidController.motionTypes addObject:@(LI_MOTION_TYPE_GYRO)];
+
+        // Self-bootstrap motionTypes for the OSC controller in mapping mode.
+        // The legacy path waits for the host to call setMotionEventState
+        // (only happens with DS4 emulation, where the host receives motion).
+        // For Xbox emulation + RightStick / Mouse mapping, the host never
+        // requests motion, so we have to seed the type ourselves to make
+        // the timer-setup loop below fire.
+        if (needDeviceGyroForMapping) {
+            if (!voidController.motionTypes) voidController.motionTypes = [[NSMutableSet alloc] init];
+            [voidController.motionTypes addObject:@(LI_MOTION_TYPE_GYRO)];
+            if (voidController.reportRateHz == 0) voidController.reportRateHz = 60;
+        }
 
         for(NSNumber* motionTypeObj in voidController.motionTypes){
             uint8_t motionType = motionTypeObj.intValue;
