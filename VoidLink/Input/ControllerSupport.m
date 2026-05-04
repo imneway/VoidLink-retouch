@@ -62,6 +62,7 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     bool _multiController;
     bool _swapABXYButtons;
     int _gyroMode;
+    int _mapGyroTo;          // MapGyroTo enum, see DataManager.h
     CGFloat _gyroSensitivity;
     bool _captureMouse;
 
@@ -70,6 +71,22 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     // closures. NSTimer block reads are best-effort — a missed sample is fine.
     int _motionButtonHoldCount;
     int _motionButtonPauseCount;
+}
+
+// Conversion factor: rotation rate (deg/s) → stick value (-32766..+32766).
+// Tuned so 327°/s yields full deflection at gyroSensitivity=1.0 — fast head
+// turn maxes out, gentle aim adjustments live in the precision band.
+static const CGFloat GYRO_TO_STICK_DPS_PER_FULL = 327.0f;
+static const CGFloat GYRO_TO_STICK_SCALE = 32766.0f / GYRO_TO_STICK_DPS_PER_FULL;
+// Mouse mode: convert deg/s of head turn into pixels-per-tick. At 60Hz tick
+// rate, 327°/s → ~5px per tick × 60 = 300px/s, comparable to a slow drag.
+static const CGFloat GYRO_TO_MOUSE_SCALE = 0.085f;
+
+// Clamp helper to int16_t range expected by Limelight stick events.
+static inline int16_t clamp_int16(CGFloat v) {
+    if (v > 32766) return 32766;
+    if (v < -32766) return -32766;
+    return (int16_t)v;
 }
 
 // UPDATE_BUTTON_FLAG(controller, flag, pressed)
@@ -177,6 +194,10 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                         voidController.hasAccelerometer = YES;
                         voidController.accelTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
                             if (![self motionEmissionAllowed]) return;
+                            // Accel only matters for the DS4 motion path. Skip when
+                            // gyro is being routed to stick/mouse — sending accel
+                            // alone would produce inconsistent host-side motion state.
+                            if (self->_mapGyroTo != MapGyroToMotion) return;
                             // Don't send duplicate samples
                             CMAcceleration lastDeviceAccelSample = voidController.lastDeviceAccelSample;
                             CMAcceleration deviceAccelSample = voidController.motionManager.deviceMotion.userAcceleration;
@@ -220,7 +241,20 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                         NSLog(@"setup device built-in gyro gyroTimer");
                         voidController.hasGyroscope = YES;
                         voidController.gyroTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
-                            if (![self motionEmissionAllowed]) return;
+                            BOOL emit = [self motionEmissionAllowed] && self->_mapGyroTo != MapGyroToOff;
+                            // When suppressed, drop any leftover RightStick gyro
+                            // contribution to 0 once. Otherwise the last non-zero
+                            // value would keep blending into the physical stick.
+                            if (!emit) {
+                                if (voidController.gyroStickX != 0 || voidController.gyroStickY != 0) {
+                                    @synchronized(voidController) {
+                                        voidController.gyroStickX = 0;
+                                        voidController.gyroStickY = 0;
+                                    }
+                                    [self updateFinished:voidController];
+                                }
+                                return;
+                            }
                             // Don't send duplicate samples
                             CMRotationRate lastDeviceGyroSample = voidController.lastDeviceGyroSample;
                             CMRotationRate deviceGyroSample = voidController.motionManager.deviceMotion.rotationRate;
@@ -228,22 +262,42 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                                     return;
                             }
                             voidController.lastDeviceGyroSample = deviceGyroSample;
-                            
-                            // Convert rad/s to deg/s
-                            //NSLog(@"sending built-in gyro data, accelSample data 00: %f, playerIndex: %d",deviceGyroSample.x, voidController.playerIndex);
-                            if(UIApplication.sharedApplication.windows.firstObject.windowScene.interfaceOrientation == 4){//check for landscape left or landscape right
-                                LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber,
-                                                            LI_MOTION_TYPE_GYRO,
-                                                            deviceGyroSample.y * 57.2957795f * self->_gyroSensitivity,
-                                                            deviceGyroSample.z * 57.2957795f * self->_gyroSensitivity,
-                                                            deviceGyroSample.x * 57.2957795f * self->_gyroSensitivity);
-                            }
-                            else{
-                                LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber,
-                                                            LI_MOTION_TYPE_GYRO,
-                                                            deviceGyroSample.y * -57.2957795f * self->_gyroSensitivity,
-                                                            deviceGyroSample.z * 57.2957795f * self->_gyroSensitivity,
-                                                            deviceGyroSample.x * -57.2957795f * self->_gyroSensitivity);
+
+                            // Extract pitch/yaw/roll in deg/s (game frame). The
+                            // landscape/portrait sign flip mirrors the original
+                            // DS4-motion mapping so subsequent modes match the
+                            // user's spatial intuition without per-mode tuning.
+                            BOOL landscape = UIApplication.sharedApplication.windows.firstObject.windowScene.interfaceOrientation == 4;
+                            float pitch_dps = deviceGyroSample.y * (landscape ? 57.2957795f : -57.2957795f) * self->_gyroSensitivity;
+                            float yaw_dps   = deviceGyroSample.z * 57.2957795f * self->_gyroSensitivity;
+                            float roll_dps  = deviceGyroSample.x * (landscape ? 57.2957795f : -57.2957795f) * self->_gyroSensitivity;
+
+                            switch (self->_mapGyroTo) {
+                                case MapGyroToMotion:
+                                    LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber,
+                                                                LI_MOTION_TYPE_GYRO,
+                                                                pitch_dps, yaw_dps, roll_dps);
+                                    break;
+                                case MapGyroToRightStick: {
+                                    // Stick Y is inverted: tilting iPad's top edge
+                                    // up (positive pitch) should look up, which is
+                                    // positive Y in Limelight stick conventions.
+                                    int16_t stickX = clamp_int16(yaw_dps * GYRO_TO_STICK_SCALE);
+                                    int16_t stickY = clamp_int16(-pitch_dps * GYRO_TO_STICK_SCALE);
+                                    @synchronized(voidController) {
+                                        voidController.gyroStickX = stickX;
+                                        voidController.gyroStickY = stickY;
+                                    }
+                                    [self updateFinished:voidController];
+                                    break;
+                                }
+                                case MapGyroToMouse: {
+                                    int16_t mouseX = clamp_int16(yaw_dps * GYRO_TO_MOUSE_SCALE);
+                                    int16_t mouseY = clamp_int16(-pitch_dps * GYRO_TO_MOUSE_SCALE);
+                                    if (mouseX != 0 || mouseY != 0) LiSendMouseMoveEvent(mouseX, mouseY);
+                                    break;
+                                }
+                                default: break;
                             }
                         }];
                         break;
@@ -552,6 +606,14 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                 rightStickX = MAX_MAGNITUDE(rightStickX, controller.mergedWithController.lastRightStickX);
                 rightStickY = MAX_MAGNITUDE(rightStickY, controller.mergedWithController.lastRightStickY);
             }
+
+            // Blend gyro-synthesized right stick contribution (when mapGyroTo
+            // == RightStick the gyro tick writes here directly). max-magnitude
+            // means a stationary iPad never blocks physical stick input, and
+            // a stationary thumb never blocks gyro input — whichever pushes
+            // harder wins each axis.
+            rightStickX = MAX_MAGNITUDE(rightStickX, controller.gyroStickX);
+            rightStickY = MAX_MAGNITUDE(rightStickY, controller.gyroStickY);
             
             //NSLog(@"gamepadMask: %@", [self binaryRepresentationOfInteger:buttonFlags]); // we got the pressed OSC buttons here.
             
@@ -1410,6 +1472,7 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     TemporarySettings* currentSettings = [dataMan getSettings];
     _oscEnabled = _oscEnabled || (OnScreenControlsLevel)[currentSettings.onscreenControls integerValue] != OnScreenControlsLevelOff || streamConfig.gyroMode != GyroModeOff;
     _gyroSensitivity = currentSettings.gyroSensitivity.floatValue;
+    _mapGyroTo = currentSettings.mapGyroTo.intValue;  // 0 = MapGyroToMotion (legacy default)
 }
 
 - (void)resetGyroInputForController:(VoidController* )voidController{

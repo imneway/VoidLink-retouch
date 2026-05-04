@@ -33,6 +33,9 @@
 @property (nonatomic, retain) NSNumber * touchMoveEventInterval;
 @property (nonatomic, retain) NSNumber * touchPointerVelocityFactor;
 @property (nonatomic, retain) NSNumber * gyroSensitivity;
+// Where iPad gyroscope sensor data is routed; see MapGyroTo enum.
+// Stored in NSUserDefaults under @"mapGyroTo".
+@property (nonatomic, retain) NSNumber * mapGyroTo;
 @property (nonatomic, retain) NSNumber * emulatedControllerType;
 @property (nonatomic, retain) NSNumber * mousePointerVelocityFactor;
 @property (nonatomic, retain) NSNumber * pointerVelocityModeDivider;

@@ -127,6 +127,9 @@
     // New UI options are stored in NSUserDefaults for now
     self.snapScreenToTop = [[NSUserDefaults standardUserDefaults] boolForKey:@"snapScreenToTop"];
     self.snapScreenRatioMode = [NSNumber numberWithInteger:[[NSUserDefaults standardUserDefaults] integerForKey:@"snapScreenRatioMode"]];
+    // mapGyroTo defaults to Motion (= 0), preserving legacy DS4-only behavior
+    // for users upgrading without explicitly choosing a value.
+    self.mapGyroTo = [NSNumber numberWithInteger:[[NSUserDefaults standardUserDefaults] integerForKey:@"mapGyroTo"]];
 #endif
     self.uniqueId = settings.uniqueId;
     

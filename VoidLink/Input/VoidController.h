@@ -39,6 +39,11 @@ typedef NS_ENUM(NSInteger, ControllerDeviceBatteryState) {
 @property (nonatomic)                   short lastLeftStickY;
 @property (nonatomic)                   short lastRightStickX;
 @property (nonatomic)                   short lastRightStickY;
+// Gyro-synthesized right stick contribution. Max-magnitude blended into the
+// outgoing right stick at updateFinished time so device tilt and physical
+// thumbstick coexist instead of overwriting each other.
+@property (nonatomic)                   short gyroStickX;
+@property (nonatomic)                   short gyroStickY;
 
 @property (nonatomic)                   controller_touch_context_t primaryTouch;
 @property (nonatomic)                   controller_touch_context_t secondaryTouch;

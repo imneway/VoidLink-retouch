@@ -42,6 +42,22 @@ typedef NS_ENUM(NSInteger, GyroMode) {
     AlwaysController
 };
 
+// Where the device's gyroscope should be routed when active.
+//   MapGyroToMotion (default) — host receives DS4-style controller motion
+//                               events. Requires a game with native gyro support.
+//   MapGyroToRightStick       — synthesize a right-thumbstick input on iPad,
+//                               max-blended with physical stick. Works with
+//                               any controller-input game (Switch emu, PC games).
+//   MapGyroToMouse            — synthesize relative mouse motion. For PC games
+//                               that aim with mouse, no gamepad needed.
+//   MapGyroToOff              — disable all gyro emission regardless of GyroMode.
+typedef NS_ENUM(NSInteger, MapGyroTo) {
+    MapGyroToMotion,
+    MapGyroToRightStick,
+    MapGyroToMouse,
+    MapGyroToOff
+};
+
 typedef NS_ENUM(NSInteger, FramePacingMode) {
     FramePacingModeOff,
     FramePacingModeLegacy,
