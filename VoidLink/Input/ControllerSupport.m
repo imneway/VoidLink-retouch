@@ -63,6 +63,8 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     bool _swapABXYButtons;
     int _gyroMode;
     int _mapGyroTo;          // MapGyroTo enum, see DataManager.h
+    BOOL _gyroInvertPitch;   // flip Y axis output (vertical flip)
+    BOOL _gyroInvertYaw;     // flip X axis output (horizontal flip)
     CGFloat _gyroSensitivity;
     bool _captureMouse;
 
@@ -283,11 +285,13 @@ static inline int16_t clamp_int16(CGFloat v) {
                                                                 pitch_dps, yaw_dps, roll_dps);
                                     break;
                                 case MapGyroToRightStick: {
-                                    // Stick Y is inverted: tilting iPad's top edge
-                                    // up (positive pitch) should look up, which is
-                                    // positive Y in Limelight stick conventions.
-                                    int16_t stickX = clamp_int16(yaw_dps * GYRO_TO_STICK_SCALE);
-                                    int16_t stickY = clamp_int16(-pitch_dps * GYRO_TO_STICK_SCALE);
+                                    // Stick Y default-inverts: tilt up → positive pitch → +Y stick.
+                                    // The user-facing flips re-apply on top of that base convention,
+                                    // so "Vertical Flip" off ⇒ ySign = -1, on ⇒ ySign = +1.
+                                    const float xSign = self->_gyroInvertYaw ? -1.0f : 1.0f;
+                                    const float ySign = self->_gyroInvertPitch ? 1.0f : -1.0f;
+                                    int16_t stickX = clamp_int16(yaw_dps * xSign * GYRO_TO_STICK_SCALE);
+                                    int16_t stickY = clamp_int16(pitch_dps * ySign * GYRO_TO_STICK_SCALE);
                                     @synchronized(voidController) {
                                         voidController.gyroStickX = stickX;
                                         voidController.gyroStickY = stickY;
@@ -296,8 +300,10 @@ static inline int16_t clamp_int16(CGFloat v) {
                                     break;
                                 }
                                 case MapGyroToMouse: {
-                                    int16_t mouseX = clamp_int16(yaw_dps * GYRO_TO_MOUSE_SCALE);
-                                    int16_t mouseY = clamp_int16(-pitch_dps * GYRO_TO_MOUSE_SCALE);
+                                    const float xSign = self->_gyroInvertYaw ? -1.0f : 1.0f;
+                                    const float ySign = self->_gyroInvertPitch ? 1.0f : -1.0f;
+                                    int16_t mouseX = clamp_int16(yaw_dps * xSign * GYRO_TO_MOUSE_SCALE);
+                                    int16_t mouseY = clamp_int16(pitch_dps * ySign * GYRO_TO_MOUSE_SCALE);
                                     if (mouseX != 0 || mouseY != 0) LiSendMouseMoveEvent(mouseX, mouseY);
                                     break;
                                 }
@@ -1477,6 +1483,8 @@ static inline int16_t clamp_int16(CGFloat v) {
     _oscEnabled = _oscEnabled || (OnScreenControlsLevel)[currentSettings.onscreenControls integerValue] != OnScreenControlsLevelOff || streamConfig.gyroMode != GyroModeOff;
     _gyroSensitivity = currentSettings.gyroSensitivity.floatValue;
     _mapGyroTo = currentSettings.mapGyroTo.intValue;  // 0 = MapGyroToMotion (legacy default)
+    _gyroInvertPitch = currentSettings.gyroInvertPitch;
+    _gyroInvertYaw = currentSettings.gyroInvertYaw;
 }
 
 - (void)resetGyroInputForController:(VoidController* )voidController{

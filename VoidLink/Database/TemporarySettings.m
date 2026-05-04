@@ -130,6 +130,8 @@
     // mapGyroTo defaults to Motion (= 0), preserving legacy DS4-only behavior
     // for users upgrading without explicitly choosing a value.
     self.mapGyroTo = [NSNumber numberWithInteger:[[NSUserDefaults standardUserDefaults] integerForKey:@"mapGyroTo"]];
+    self.gyroInvertPitch = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertPitch"];
+    self.gyroInvertYaw = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertYaw"];
 #endif
     self.uniqueId = settings.uniqueId;
     

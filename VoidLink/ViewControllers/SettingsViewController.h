@@ -112,6 +112,12 @@
 @property (strong, nonatomic) UIStackView *mapGyroToStack;
 @property (strong, nonatomic) UILabel *mapGyroToLabel;
 @property (strong, nonatomic) UISegmentedControl *mapGyroToSelector;
+// Per-axis invert toggles for stick / mouse mapping (DS4 motion path is
+// untouched). Persisted under @"gyroInvertPitch" / @"gyroInvertYaw".
+@property (strong, nonatomic) UIStackView *gyroInvertPitchStack;
+@property (strong, nonatomic) UISwitch *gyroInvertPitchSwitch;
+@property (strong, nonatomic) UIStackView *gyroInvertYawStack;
+@property (strong, nonatomic) UISwitch *gyroInvertYawSwitch;
 
 @property (strong, nonatomic) IBOutlet UIStackView *audioConfigStack;
 @property (strong, nonatomic) IBOutlet UISegmentedControl *audioConfigSelector;

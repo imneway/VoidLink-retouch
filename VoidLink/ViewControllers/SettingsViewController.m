@@ -601,6 +601,9 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self addSetting:self.gyroSensitivityStack ofId:@"gyroSensitivityStack" withInfoTag:NO withDynamicLabel:YES to:touchAndControlSection];
     [self installMapGyroToControl];
     [self addSetting:self.mapGyroToStack ofId:@"mapGyroToStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
+    [self installGyroInvertControls];
+    [self addSetting:self.gyroInvertPitchStack ofId:@"gyroInvertPitchStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
+    [self addSetting:self.gyroInvertYawStack ofId:@"gyroInvertYawStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [touchAndControlSection addToParentStack:_parentStack];
     [touchAndControlSection setExpanded:YES];
 
@@ -1910,6 +1913,46 @@ BOOL isCustomResolution(int resolutionSelected) {
     // the next reconnect — by design, since the gyro tick is wired to the
     // mode at setup time. Users typically tweak between sessions anyway.
     [[NSUserDefaults standardUserDefaults] setInteger:sender.selectedSegmentIndex forKey:@"mapGyroTo"];
+}
+
+// Helper: build one horizontal label+switch row, return the stack and the
+// switch. Caller wires the switch's action to its own handler so each
+// invert axis stays self-contained.
+- (UIStackView*) makeGyroInvertRowWithLabelText:(NSString*)labelText switchOutRef:(UISwitch* __strong*)switchOut {
+    UILabel* label = [[UILabel alloc] init];
+    label.text = labelText;
+    label.font = [UIFont systemFontOfSize:18];
+    label.textColor = [UIColor whiteColor];
+    [label.widthAnchor constraintEqualToConstant:200].active = YES;
+
+    UISwitch* sw = [[UISwitch alloc] init];
+    *switchOut = sw;
+
+    UIStackView* stack = [[UIStackView alloc] initWithArrangedSubviews:@[label, sw]];
+    stack.axis = UILayoutConstraintAxisHorizontal;
+    stack.spacing = 8;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    return stack;
+}
+
+- (void) installGyroInvertControls {
+    self.gyroInvertPitchStack = [self makeGyroInvertRowWithLabelText:[LocalizationHelper localizedStringForKey:@"Vertical Flip (Gyro)"]
+                                                         switchOutRef:&_gyroInvertPitchSwitch];
+    self.gyroInvertPitchSwitch.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertPitch"];
+    [self.gyroInvertPitchSwitch addTarget:self action:@selector(gyroInvertPitchChanged:) forControlEvents:UIControlEventValueChanged];
+
+    self.gyroInvertYawStack = [self makeGyroInvertRowWithLabelText:[LocalizationHelper localizedStringForKey:@"Horizontal Flip (Gyro)"]
+                                                       switchOutRef:&_gyroInvertYawSwitch];
+    self.gyroInvertYawSwitch.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertYaw"];
+    [self.gyroInvertYawSwitch addTarget:self action:@selector(gyroInvertYawChanged:) forControlEvents:UIControlEventValueChanged];
+}
+
+- (void) gyroInvertPitchChanged:(UISwitch* )sender {
+    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"gyroInvertPitch"];
+}
+
+- (void) gyroInvertYawChanged:(UISwitch* )sender {
+    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"gyroInvertYaw"];
 }
 
 - (void) backgroundSessionTimerSliderMoved:(UISlider* )sender {

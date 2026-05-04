@@ -36,6 +36,10 @@
 // Where iPad gyroscope sensor data is routed; see MapGyroTo enum.
 // Stored in NSUserDefaults under @"mapGyroTo".
 @property (nonatomic, retain) NSNumber * mapGyroTo;
+// Per-axis gyro direction flips (apply only when mapGyroTo != Motion).
+// Stored in NSUserDefaults under @"gyroInvertPitch" / @"gyroInvertYaw".
+@property (nonatomic, assign) BOOL gyroInvertPitch;
+@property (nonatomic, assign) BOOL gyroInvertYaw;
 @property (nonatomic, retain) NSNumber * emulatedControllerType;
 @property (nonatomic, retain) NSNumber * mousePointerVelocityFactor;
 @property (nonatomic, retain) NSNumber * pointerVelocityModeDivider;
