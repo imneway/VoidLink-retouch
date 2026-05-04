@@ -103,20 +103,22 @@ static inline int16_t clamp_int16(CGFloat v) {
 
 // MARK: - Motion-button gating
 
-// YES when motion events should be emitted right now. With no motion-control
-// widgets registered, returns YES (legacy always-on under user's GyroMode).
-// With GYRO widgets registered, default OFF — at least one GYRO must be held.
-// With GYROPAUSE widgets registered, default ON — no GYROPAUSE may be held.
-// Read under the same lock as push/pop to avoid races between the gyro
-// timer (background thread, ~60Hz reads) and touch handlers (main thread).
+// YES when motion events should be emitted right now. Decision order:
+//   1. GYROPAUSE always wins (emergency suspend, even over forceGyroEnabled)
+//   2. forceGyroEnabled (persistent stream-view toggle) overrides hold gate
+//   3. No motion widgets registered → legacy always-on (under user's GyroMode)
+//   4. GYRO widgets registered → at least one must be held
+// Read under the same lock as push/pop to avoid races between the gyro timer
+// (background thread, ~60Hz reads) and touch handlers (main thread).
 - (BOOL) motionEmissionAllowed {
     BOOL hasToggle = self.hasGyroToggleButton;
     BOOL hasPause  = self.hasGyroPauseButton;
-    if (!hasToggle && !hasPause) return YES;
+    BOOL globalForce = self.forceGyroEnabled;
     @synchronized (self) {
-        BOOL toggleAllows = !hasToggle || _motionButtonHoldCount > 0;
-        BOOL pauseAllows  = !hasPause  || _motionButtonPauseCount == 0;
-        return toggleAllows && pauseAllows;
+        if (hasPause && _motionButtonPauseCount > 0) return NO;
+        if (globalForce) return YES;
+        if (!hasToggle && !hasPause) return YES;
+        return !hasToggle || _motionButtonHoldCount > 0;
     }
 }
 
@@ -1547,6 +1549,7 @@ static inline int16_t clamp_int16(CGFloat v) {
     _mapGyroTo = currentSettings.mapGyroTo.intValue;  // 0 = MapGyroToMotion (legacy default)
     _gyroInvertPitch = currentSettings.gyroInvertPitch;
     _gyroInvertYaw = currentSettings.gyroInvertYaw;
+    self.forceGyroEnabled = currentSettings.forceGyroEnabled;
 }
 
 - (void)resetGyroInputForController:(VoidController* )voidController{
@@ -1755,6 +1758,7 @@ static inline int16_t clamp_int16(CGFloat v) {
         strongSelf->_mapGyroTo = s.mapGyroTo.intValue;
         strongSelf->_gyroInvertPitch = s.gyroInvertPitch;
         strongSelf->_gyroInvertYaw = s.gyroInvertYaw;
+        strongSelf.forceGyroEnabled = s.forceGyroEnabled;
         // Re-evaluate timer state if mapGyroTo flipped between needs/doesn't
         // need device gyro — otherwise the legacy snapshot path is enough.
         if (previousMapGyroTo != strongSelf->_mapGyroTo) {

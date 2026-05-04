@@ -36,6 +36,10 @@
 //   Neither                 → legacy always-on behavior
 @property (atomic, assign) BOOL hasGyroToggleButton;
 @property (atomic, assign) BOOL hasGyroPauseButton;
+// Persistent global gyro override (NSUserDefaults @"forceGyroEnabled").
+// When YES, motionEmissionAllowed acts as if a GYRO button is held, even
+// when no widget is actually being pressed. GYROPAUSE still suspends.
+@property (atomic, assign) BOOL forceGyroEnabled;
 - (void) pushMotionButtonHold;
 - (void) popMotionButtonHold;
 - (void) pushMotionButtonPause;

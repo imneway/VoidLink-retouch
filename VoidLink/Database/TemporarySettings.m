@@ -132,6 +132,7 @@
     self.mapGyroTo = [NSNumber numberWithInteger:[[NSUserDefaults standardUserDefaults] integerForKey:@"mapGyroTo"]];
     self.gyroInvertPitch = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertPitch"];
     self.gyroInvertYaw = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertYaw"];
+    self.forceGyroEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:@"forceGyroEnabled"];
 #endif
     self.uniqueId = settings.uniqueId;
     

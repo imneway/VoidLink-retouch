@@ -109,6 +109,7 @@
 #pragma mark Snap ratio button
     UIButton *_snapRatioButton;
     UIButton *_oscToggleButton;
+    UIButton *_gyroToggleButton;
 #else
     UITapGestureRecognizer *_menuTapGestureRecognizer;
     UITapGestureRecognizer *_menuDoubleTapGestureRecognizer;
@@ -646,36 +647,63 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         [_oscToggleButton addTarget:self action:@selector(toggleOscOnOff) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:_oscToggleButton];
     }
-    
+
+    // Persistent gyro on/off toggle — independent of any GYRO widget hold
+    // gate. Stored in NSUserDefaults so the choice survives app restart.
+    if (!_gyroToggleButton) {
+        _gyroToggleButton = [UIButton buttonWithType:UIButtonTypeSystem];
+        _gyroToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+        [_gyroToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
+        _gyroToggleButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
+        [_gyroToggleButton addTarget:self action:@selector(toggleGyroOnOff) forControlEvents:UIControlEventTouchUpInside];
+        [self.view addSubview:_gyroToggleButton];
+    }
+
     // Update titles
     NSString *snapTitle = _settings.snapScreenRatioMode.integerValue == 0 ? @"16:9" : @"Full Screen";
     [_snapRatioButton setTitle:snapTitle forState:UIControlStateNormal];
-    
+
     // Update OSC button title based ONLY on ON/OFF state, not transparency state
     OnScreenControlsLevel currentLevel = [_streamView getCurrentOscState];
     NSString *oscTitle = (currentLevel == OnScreenControlsLevelOff) ? @"OSC OFF" : @"OSC ON";
     [_oscToggleButton setTitle:oscTitle forState:UIControlStateNormal];
-    
-    // Hide both buttons if snap screen is not enabled
+
+    BOOL gyroForceOn = [[NSUserDefaults standardUserDefaults] boolForKey:@"forceGyroEnabled"];
+    [_gyroToggleButton setTitle:(gyroForceOn ? @"GYRO ON" : @"GYRO OFF") forState:UIControlStateNormal];
+
+    // Hide all three buttons if snap screen is not enabled (matches OSC behavior)
     _snapRatioButton.hidden = !_settings.snapScreenToTop;
     _oscToggleButton.hidden = !_settings.snapScreenToTop;
-    
+    _gyroToggleButton.hidden = !_settings.snapScreenToTop;
+
     if (_snapRatioButton.hidden) return;
-    
-    // Layout both buttons at bottom-right
-    // First calculate sizes
+
+    // Layout all three buttons at bottom-right
     CGSize snapSize = [_snapRatioButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
     CGSize oscSize = [_oscToggleButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
-    
-    // Position snap ratio button (rightmost)
+    CGSize gyroSize = [_gyroToggleButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
+
     CGFloat snapX = self.view.bounds.size.width - 24 - snapSize.width;
-    CGFloat snapY = self.view.bounds.size.height - 12 - snapSize.height;
-    _snapRatioButton.frame = CGRectMake(snapX, snapY, snapSize.width, snapSize.height);
-    
-    // Position OSC button (left of snap ratio button with 8pt spacing)
+    CGFloat baseY = self.view.bounds.size.height - 12;
+    _snapRatioButton.frame = CGRectMake(snapX, baseY - snapSize.height, snapSize.width, snapSize.height);
+
     CGFloat oscX = snapX - 8 - oscSize.width;
-    CGFloat oscY = self.view.bounds.size.height - 12 - oscSize.height;
-    _oscToggleButton.frame = CGRectMake(oscX, oscY, oscSize.width, oscSize.height);
+    _oscToggleButton.frame = CGRectMake(oscX, baseY - oscSize.height, oscSize.width, oscSize.height);
+
+    CGFloat gyroX = oscX - 8 - gyroSize.width;
+    _gyroToggleButton.frame = CGRectMake(gyroX, baseY - gyroSize.height, gyroSize.width, gyroSize.height);
+}
+
+// Toggles the persistent forceGyroEnabled flag. ControllerSupport observes
+// VoidGyroSettingsDidChangeNotification and re-snapshots so the live stream
+// picks up the change without reconnect.
+- (void)toggleGyroOnOff {
+    BOOL current = [[NSUserDefaults standardUserDefaults] boolForKey:@"forceGyroEnabled"];
+    BOOL newValue = !current;
+    [[NSUserDefaults standardUserDefaults] setBool:newValue forKey:@"forceGyroEnabled"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    [_gyroToggleButton setTitle:(newValue ? @"GYRO ON" : @"GYRO OFF") forState:UIControlStateNormal];
+    [[NSNotificationCenter defaultCenter] postNotificationName:VoidGyroSettingsDidChangeNotification object:nil];
 }
 
 - (void)createTimeBatteryDisplay {

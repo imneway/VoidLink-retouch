@@ -40,6 +40,12 @@
 // Stored in NSUserDefaults under @"gyroInvertPitch" / @"gyroInvertYaw".
 @property (nonatomic, assign) BOOL gyroInvertPitch;
 @property (nonatomic, assign) BOOL gyroInvertYaw;
+// Persistent stream-view toggle: when YES, gyro emission is treated as if a
+// GYRO button is being held (independent of any actual hold counts). User
+// can still combine with R2-GYRO style widgets — the global toggle is OR'd
+// with the hold gate. GYROPAUSE still wins for emergency suspend.
+// Stored in NSUserDefaults under @"forceGyroEnabled".
+@property (nonatomic, assign) BOOL forceGyroEnabled;
 @property (nonatomic, retain) NSNumber * emulatedControllerType;
 @property (nonatomic, retain) NSNumber * mousePointerVelocityFactor;
 @property (nonatomic, retain) NSNumber * pointerVelocityModeDivider;
