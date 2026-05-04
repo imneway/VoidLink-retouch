@@ -106,6 +106,13 @@
 @property (strong, nonatomic) IBOutlet UIStackView *gyroSensitivityStack;
 @property (strong, nonatomic) IBOutlet UISlider *gyroSensitivitySlider;
 
+// Built programmatically — no storyboard outlet. See installMapGyroToControl
+// in SettingsViewController.m. Routes iPad gyroscope to DS4 motion / virtual
+// right stick / mouse / off; persisted under NSUserDefaults @"mapGyroTo".
+@property (strong, nonatomic) UIStackView *mapGyroToStack;
+@property (strong, nonatomic) UILabel *mapGyroToLabel;
+@property (strong, nonatomic) UISegmentedControl *mapGyroToSelector;
+
 @property (strong, nonatomic) IBOutlet UIStackView *audioConfigStack;
 @property (strong, nonatomic) IBOutlet UISegmentedControl *audioConfigSelector;
 

@@ -599,6 +599,8 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self addSetting:self.emulatedControllerTypeStack ofId:@"emulatedControllerTypeStack" withInfoTag:YES withDynamicLabel:NO to:touchAndControlSection];
     [self addSetting:self.gyroModeStack ofId:@"gyroModeStack" withInfoTag:YES withDynamicLabel:YES to:touchAndControlSection];
     [self addSetting:self.gyroSensitivityStack ofId:@"gyroSensitivityStack" withInfoTag:NO withDynamicLabel:YES to:touchAndControlSection];
+    [self installMapGyroToControl];
+    [self addSetting:self.mapGyroToStack ofId:@"mapGyroToStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [touchAndControlSection addToParentStack:_parentStack];
     [touchAndControlSection setExpanded:YES];
 
@@ -1867,6 +1869,43 @@ BOOL isCustomResolution(int resolutionSelected) {
 
 - (void) gyroSensitivitySliderMoved:(UISlider* )sender {
     [self findDynamicLabelFromStack:self.gyroSensitivityStack].text = [NSString stringWithFormat:@"  %d%%  ", (uint16_t)sender.value]; // Update label display
+}
+
+// Build the "Map Gyro To" segmented control programmatically and persist to
+// NSUserDefaults @"mapGyroTo". Persistence skips Core Data entirely (matches
+// the snapScreenToTop / snapScreenRatioMode pattern in TemporarySettings.m).
+// Order matches the MapGyroTo enum: Motion=0, RightStick=1, Mouse=2, Off=3.
+- (void) installMapGyroToControl {
+    UIFont* labelFont = [UIFont systemFontOfSize:18];
+    UIColor* whiteColor = [UIColor whiteColor];
+
+    self.mapGyroToLabel = [[UILabel alloc] init];
+    self.mapGyroToLabel.text = [LocalizationHelper localizedStringForKey:@"Map Gyro To"];
+    self.mapGyroToLabel.font = labelFont;
+    self.mapGyroToLabel.textColor = whiteColor;
+    [self.mapGyroToLabel.widthAnchor constraintEqualToConstant:200].active = YES;
+
+    self.mapGyroToSelector = [[UISegmentedControl alloc] initWithItems:@[
+        [LocalizationHelper localizedStringForKey:@"DS4 Motion"],
+        [LocalizationHelper localizedStringForKey:@"Right Stick"],
+        [LocalizationHelper localizedStringForKey:@"Mouse"],
+        [LocalizationHelper localizedStringForKey:@"Off"],
+    ]];
+    NSInteger savedIndex = [[NSUserDefaults standardUserDefaults] integerForKey:@"mapGyroTo"];
+    if (savedIndex < 0 || savedIndex > 3) savedIndex = 0;
+    self.mapGyroToSelector.selectedSegmentIndex = savedIndex;
+    NSDictionary* whiteFontAttributes = @{ NSForegroundColorAttributeName: whiteColor };
+    [self.mapGyroToSelector setTitleTextAttributes:whiteFontAttributes forState:UIControlStateNormal];
+    [self.mapGyroToSelector addTarget:self action:@selector(mapGyroToChanged:) forControlEvents:UIControlEventValueChanged];
+
+    self.mapGyroToStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.mapGyroToLabel, self.mapGyroToSelector]];
+    self.mapGyroToStack.axis = UILayoutConstraintAxisHorizontal;
+    self.mapGyroToStack.spacing = 8;
+    self.mapGyroToStack.translatesAutoresizingMaskIntoConstraints = NO;
+}
+
+- (void) mapGyroToChanged:(UISegmentedControl* )sender {
+    [[NSUserDefaults standardUserDefaults] setInteger:sender.selectedSegmentIndex forKey:@"mapGyroTo"];
 }
 
 - (void) backgroundSessionTimerSliderMoved:(UISlider* )sender {
