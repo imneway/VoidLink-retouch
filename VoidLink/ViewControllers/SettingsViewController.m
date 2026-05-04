@@ -1888,9 +1888,12 @@ BOOL isCustomResolution(int resolutionSelected) {
     self.mapGyroToLabel.textColor = whiteColor;
     [self.mapGyroToLabel.widthAnchor constraintEqualToConstant:200].active = YES;
 
+    // Short labels — narrow Settings panels (especially iPhone) can't fit
+    // multi-word segment titles without truncation. Tooltip / docs use the
+    // full names; the segment itself stays compact.
     self.mapGyroToSelector = [[UISegmentedControl alloc] initWithItems:@[
-        [LocalizationHelper localizedStringForKey:@"DS4 Motion"],
-        [LocalizationHelper localizedStringForKey:@"Right Stick"],
+        [LocalizationHelper localizedStringForKey:@"DS4"],
+        [LocalizationHelper localizedStringForKey:@"Stick"],
         [LocalizationHelper localizedStringForKey:@"Mouse"],
         [LocalizationHelper localizedStringForKey:@"Off"],
     ]];

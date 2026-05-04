@@ -169,7 +169,12 @@ static inline int16_t clamp_int16(CGFloat v) {
 
 -(void)updateTimerStateForController:(VoidController* )voidController{
     if (@available(iOS 14.0, tvOS 14.0, *)) {
-        if(_gyroMode == GyroModeOff){
+        // GyroMode==Off used to short-circuit the timer entirely, but with
+        // mapGyroTo we may still need device gyro samples for the stick/mouse
+        // synthesis even when the legacy DS4 motion path is disabled.
+        BOOL needDeviceGyroForMapping = (voidController == _oscController) &&
+            (_mapGyroTo == MapGyroToRightStick || _mapGyroTo == MapGyroToMouse);
+        if(_gyroMode == GyroModeOff && !needDeviceGyroForMapping){
             [self stopTimerForController:voidController];
             return;
         }
@@ -1739,12 +1744,18 @@ static inline int16_t clamp_int16(CGFloat v) {
     // Stop all timers to ensure a clean slate before applying the new setting.
     [self stopTimerForAllControllers];
 
+    // RightStick / Mouse mapping needs device-gyro samples regardless of the
+    // legacy GyroMode dropdown (which only governs the DS4 motion path).
+    BOOL needDeviceGyroForMapping = (_mapGyroTo == MapGyroToRightStick || _mapGyroTo == MapGyroToMouse);
+
     switch(_gyroMode) {
         case AlwaysController:
             // Activate timers only for physical controllers.
             for (VoidController* voidController in _voidControllers.allValues) {
                 [self updateTimerStateForController:voidController];
             }
+            // Even with AlwaysController, the user may want device gyro for stick mapping.
+            if (needDeviceGyroForMapping) [self updateTimerStateForController:self->_oscController];
             break;
 
         case GyroModeAuto:
@@ -1753,6 +1764,7 @@ static inline int16_t clamp_int16(CGFloat v) {
                 for (VoidController* voidController in _voidControllers.allValues) {
                     [self updateTimerStateForController:voidController];
                 }
+                if (needDeviceGyroForMapping) [self updateTimerStateForController:self->_oscController];
             } else {
                 // Otherwise, fall back to the device gyro.
                 [self updateTimerStateForController:self->_oscController];
@@ -1763,9 +1775,10 @@ static inline int16_t clamp_int16(CGFloat v) {
             // Always start the device gyro in this mode.
             [self updateTimerStateForController:self->_oscController];
             break;
-            
+
         case GyroModeOff:
-            // Do nothing, all timers are already stopped.
+            // Legacy: nothing. New: still spin up device gyro if mapping needs it.
+            if (needDeviceGyroForMapping) [self updateTimerStateForController:self->_oscController];
             break;
     }
 }
