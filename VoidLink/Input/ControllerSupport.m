@@ -64,6 +64,12 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     int _gyroMode;
     CGFloat _gyroSensitivity;
     bool _captureMouse;
+
+    // Motion-button gating: counts of currently-held GYRO and GYROPAUSE buttons.
+    // Mutated from the main thread (touch handlers); read from background timer
+    // closures. NSTimer block reads are best-effort — a missed sample is fine.
+    int _motionButtonHoldCount;
+    int _motionButtonPauseCount;
 }
 
 // UPDATE_BUTTON_FLAG(controller, flag, pressed)
@@ -71,6 +77,43 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 ((y) ? [self setButtonFlag:controller flags:x] : [self clearButtonFlag:controller flags:x])
 
 #define MAX_MAGNITUDE(x, y) (abs(x) > abs(y) ? (x) : (y))
+
+// MARK: - Motion-button gating
+
+// YES when motion events should be emitted right now. Legacy behavior
+// (no on-screen GYRO buttons) returns YES. With GYRO buttons present,
+// only emits while at least one GYRO is held and no GYROPAUSE is held.
+- (BOOL) motionEmissionAllowed {
+    if (!self.hasMotionControlButton) return YES;
+    return _motionButtonHoldCount > 0 && _motionButtonPauseCount == 0;
+}
+
+- (void) pushMotionButtonHold {
+    @synchronized (self) { _motionButtonHoldCount++; }
+}
+
+- (void) popMotionButtonHold {
+    @synchronized (self) {
+        if (_motionButtonHoldCount > 0) _motionButtonHoldCount--;
+    }
+}
+
+- (void) pushMotionButtonPause {
+    @synchronized (self) { _motionButtonPauseCount++; }
+}
+
+- (void) popMotionButtonPause {
+    @synchronized (self) {
+        if (_motionButtonPauseCount > 0) _motionButtonPauseCount--;
+    }
+}
+
+- (void) resetMotionButtonHolds {
+    @synchronized (self) {
+        _motionButtonHoldCount = 0;
+        _motionButtonPauseCount = 0;
+    }
+}
 
 -(void) rumble:(unsigned short)controllerNumber lowFreqMotor:(unsigned short)lowFreqMotor highFreqMotor:(unsigned short)highFreqMotor
 {
@@ -133,6 +176,7 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                         NSLog(@"setup device built-in gyro accelTimer");
                         voidController.hasAccelerometer = YES;
                         voidController.accelTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
+                            if (![self motionEmissionAllowed]) return;
                             // Don't send duplicate samples
                             CMAcceleration lastDeviceAccelSample = voidController.lastDeviceAccelSample;
                             CMAcceleration deviceAccelSample = voidController.motionManager.deviceMotion.userAcceleration;
@@ -176,7 +220,7 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                         NSLog(@"setup device built-in gyro gyroTimer");
                         voidController.hasGyroscope = YES;
                         voidController.gyroTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
-                            
+                            if (![self motionEmissionAllowed]) return;
                             // Don't send duplicate samples
                             CMRotationRate lastDeviceGyroSample = voidController.lastDeviceGyroSample;
                             CMRotationRate deviceGyroSample = voidController.motionManager.deviceMotion.rotationRate;
@@ -222,6 +266,7 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                             dispatch_sync(dispatch_get_main_queue(), ^{
                                 voidController.hasAccelerometer = YES;
                                 voidController.accelTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
+                                    if (![self motionEmissionAllowed]) return;
                                     // Don't send duplicate samples
                                     GCAcceleration lastAccelSample = voidController.lastAccelSample;
                                     GCAcceleration accelSample = voidController.gamepad.motion.acceleration;
@@ -255,6 +300,7 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                             {dispatch_async(dispatch_get_main_queue(), ^{
                                 voidController.hasGyroscope = YES;
                                 voidController.gyroTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
+                                    if (![self motionEmissionAllowed]) return;
                                     // Don't send duplicate samples
                                     GCRotationRate lastGyroSample = voidController.lastGyroSample;
                                     GCRotationRate gyroSample = voidController.gamepad.motion.rotationRate;

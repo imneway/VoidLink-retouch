@@ -128,6 +128,15 @@ typedef NS_ENUM(NSInteger, OnScreenControlsLevel) {
 - (void) updateRightTrigger:(unsigned char)input;
 - (void) cancelAllActiveTouches;
 
+// Motion-button forwarders — see ControllerSupport.h. On-screen widgets call
+// these on press / release so we don't need to expose the bare ControllerSupport
+// reference upward.
+- (void) markMotionControlButtonRegistered;
+- (void) pushMotionButtonHold;
+- (void) popMotionButtonHold;
+- (void) pushMotionButtonPause;
+- (void) popMotionButtonPause;
+
 - (id) initWithView:(UIView*)view controllerSup:(ControllerSupport*)controllerSupport streamConfig:(StreamConfiguration*)streamConfig;
 - (BOOL) handleTouchDownEvent:(NSSet*)touches;
 - (BOOL) handleTouchUpEvent:(NSSet*)touches;

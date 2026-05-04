@@ -207,6 +207,14 @@ static float L3_Y;
     [_controllerSupport updateFinished:_controller];
 }
 
+// Motion-button forwarders. Once any GYRO/GYROPAUSE widget is registered,
+// the runtime gating switches on (legacy always-on behavior is suppressed).
+- (void) markMotionControlButtonRegistered { _controllerSupport.hasMotionControlButton = YES; }
+- (void) pushMotionButtonHold { [_controllerSupport pushMotionButtonHold]; }
+- (void) popMotionButtonHold { [_controllerSupport popMotionButtonHold]; }
+- (void) pushMotionButtonPause { [_controllerSupport pushMotionButtonPause]; }
+- (void) popMotionButtonPause { [_controllerSupport popMotionButtonPause]; }
+
 - (void) cancelAllActiveTouches {
     NSMutableSet *activeTouches = [NSMutableSet set];
 

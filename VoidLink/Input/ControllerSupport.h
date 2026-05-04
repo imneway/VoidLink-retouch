@@ -23,6 +23,18 @@
 
 @property (readonly) bool shallDisableGyroHotSwitch;
 
+// Runtime motion-event suspension driven by on-screen GYRO/GYROPAUSE buttons.
+// When `hasMotionControlButton` is YES, motion events emit only while at least
+// one GYRO button is held (and no GYROPAUSE button is held). When NO, the
+// legacy always-on behavior under the user's GyroMode setting is preserved.
+// Designed for "press R2 to aim" patterns — see CommandManager.motionControlButtonCmds.
+@property (atomic, assign) BOOL hasMotionControlButton;
+- (void) pushMotionButtonHold;
+- (void) popMotionButtonHold;
+- (void) pushMotionButtonPause;
+- (void) popMotionButtonPause;
+- (void) resetMotionButtonHolds;
+
 -(id) initWithConfig:(StreamConfiguration*)streamConfig delegate:(id<ControllerSupportDelegate>)delegate;
 -(void) connectionEstablished;
 

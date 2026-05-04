@@ -33,6 +33,12 @@ import UIKit
     @objc func getOnScreenControlsInstance(_ sender: Any) {
         if let controls = sender as? OnScreenControls {
             self.onScreenControls = controls
+            // Tell ControllerSupport that motion-event gating is needed once any
+            // GYRO/GYROPAUSE widget exists. Without this, gyro stays in legacy
+            // always-on mode and the button press wouldn't change anything.
+            if !self.motionControlButtonString.isEmpty {
+                controls.markMotionControlButtonRegistered()
+            }
             print("ClassA received OnScreenControls instance: \(controls)")
         } else {
             print("ClassA received an unknown sender")
@@ -62,6 +68,9 @@ import UIKit
     @objc public var cmdString: String
     private var buttonString: String = ""
     private var touchPadString: String = ""
+    // Motion-control command extracted from cmdString combos (e.g. "OSCR2+GYRO").
+    // Empty when the widget has no motion behavior. See CommandManager.motionControlButtonCmds.
+    private var motionControlButtonString: String = ""
     // super combo key string set
     private var comboButtonStrings: [String] = []
     private var comboKeyTimeIntervalMs: UInt32 = 0
@@ -260,8 +269,10 @@ import UIKit
                 else {self.widgetType = WidgetTypeEnum.button}
                 
                 let touchPadString = Set(comboStrings).intersection(Set(CommandManager.touchPadCmds)).first ?? ""
-                self.comboButtonStrings = comboStrings.filter{$0 != touchPadString}
+                let motionString = Set(comboStrings).intersection(Set(CommandManager.motionControlButtonCmds)).first ?? ""
+                self.comboButtonStrings = comboStrings.filter{$0 != touchPadString && $0 != motionString}
                 self.touchPadString = touchPadString
+                self.motionControlButtonString = motionString
                 self.buttonString = self.comboButtonStrings.first ?? ""
                 
                //  let stickAndMouseTouchpads = ["LSPAD", "RSPAD", "LSVPAD", "RSVPAD", "MOUSEPAD"]
@@ -1595,10 +1606,36 @@ import UIKit
      }
 
     
+    // Per-widget motion-button state — guards against double push or unmatched pop
+    // (touchesCancelled, gesture-suppression cleanup, etc.). Always paired through
+    // these two methods; the underlying ControllerSupport counters stay balanced.
+    private var motionButtonHeld: Bool = false
+
+    private func handleMotionControlButtonDown() {
+        guard !self.motionControlButtonString.isEmpty, !self.motionButtonHeld else { return }
+        switch self.motionControlButtonString {
+        case "GYRO":      self.onScreenControls.pushMotionButtonHold()
+        case "GYROPAUSE": self.onScreenControls.pushMotionButtonPause()
+        default: return
+        }
+        self.motionButtonHeld = true
+    }
+
+    private func handleMotionControlButtonUp() {
+        guard !self.motionControlButtonString.isEmpty, self.motionButtonHeld else { return }
+        switch self.motionControlButtonString {
+        case "GYRO":      self.onScreenControls.popMotionButtonHold()
+        case "GYROPAUSE": self.onScreenControls.popMotionButtonPause()
+        default: break
+        }
+        self.motionButtonHeld = false
+    }
+
     //==== wholeButtonPress visual effect=============================================
     private func handleButtonDown() {
         if !OnScreenWidgetView.editMode && !CommandManager.specialOverlayButtonCmds.contains(self.cmdString) {
             self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)
+            self.handleMotionControlButtonDown()
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -1620,6 +1657,7 @@ import UIKit
     private func handlebuttonUp() {
         if !OnScreenWidgetView.editMode && !CommandManager.specialOverlayButtonCmds.contains(self.cmdString) {
             self.sendComboButtonsUpEvent(comboStrings: self.comboButtonStrings)
+            self.handleMotionControlButtonUp()
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)

@@ -121,6 +121,15 @@ import UIKit
     @objc public static let nonVectorStickPads: [String] = ["LSPAD", "LSPADALT", "RSPAD", "RSPADALT"]
     @objc public static let specialOverlayButtonCmds: [String] = ["SETTINGS", "CMD"]
 
+    // Motion-control command tokens. A widget cmdString containing one of these
+    // gates the runtime gyro emission rather than firing a normal button event.
+    // GYRO       — hold to keep gyro events flowing; release to suspend.
+    // GYROPAUSE  — inverse: hold to pause; release to resume. Useful as an
+    //              emergency-stop overlay when gyro is otherwise always-on.
+    // Combo with regular buttons (e.g. "OSCR2+GYRO") fires R2 to host AND
+    // toggles the gyro at the same time.
+    @objc public static let motionControlButtonCmds: [String] = ["GYRO", "GYROPAUSE"]
+
     // @objc public static let specialGameWidgets: [String] = ["YSRSV", "YSLT", "YSRT", "YSRB", "YSB", "YSRT2", "YSRB2", "YSB2", "YSEM", "YSML", "YSMR", "YSWASD"]
     
     static let keyboardButtonMappings: [String: Int16] = [
