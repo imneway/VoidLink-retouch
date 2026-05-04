@@ -100,9 +100,13 @@ static inline int16_t clamp_int16(CGFloat v) {
 // YES when motion events should be emitted right now. Legacy behavior
 // (no on-screen GYRO buttons) returns YES. With GYRO buttons present,
 // only emits while at least one GYRO is held and no GYROPAUSE is held.
+// Read under the same lock as push/pop to avoid races between the gyro
+// timer (background thread, ~60Hz reads) and touch handlers (main thread).
 - (BOOL) motionEmissionAllowed {
     if (!self.hasMotionControlButton) return YES;
-    return _motionButtonHoldCount > 0 && _motionButtonPauseCount == 0;
+    @synchronized (self) {
+        return _motionButtonHoldCount > 0 && _motionButtonPauseCount == 0;
+    }
 }
 
 - (void) pushMotionButtonHold {

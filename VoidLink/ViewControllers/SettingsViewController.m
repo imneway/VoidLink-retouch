@@ -1905,6 +1905,10 @@ BOOL isCustomResolution(int resolutionSelected) {
 }
 
 - (void) mapGyroToChanged:(UISegmentedControl* )sender {
+    // Persisted to defaults; ControllerSupport snapshots this once at stream
+    // start (updateCommonConfig). Mid-stream changes won't take effect until
+    // the next reconnect — by design, since the gyro tick is wired to the
+    // mode at setup time. Users typically tweak between sessions anyway.
     [[NSUserDefaults standardUserDefaults] setInteger:sender.selectedSegmentIndex forKey:@"mapGyroTo"];
 }
 
