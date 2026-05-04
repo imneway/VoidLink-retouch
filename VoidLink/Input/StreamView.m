@@ -521,14 +521,18 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 }
 
 - (void) reloadOnScreenWidgetViews{
-    
+
     // NSLog(@"reload on screen keyboard buttons here");
 
     // remove all keyboard widget views first
     [self clearOnScreenWidgets];
-    
+    // Reset motion-button gating before re-creating widgets — otherwise a layout
+    // edit that removes all GYRO buttons would leave hasMotionControlButton stuck
+    // at YES, suppressing all gyro emission with no button left to release it.
+    [onScreenControls clearMotionControlButtonRegistration];
+
     // bool customOscEnabled = [self isOscEnabled] && settings.onscreenControls.intValue == OnScreenControlsLevelCustom;
-    
+
     if(![self isOnScreenButtonEnabled]) return;
     
     OSCProfilesManager* profilesManager = [OSCProfilesManager sharedManager: self.bounds];

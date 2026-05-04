@@ -1976,7 +1976,11 @@ import UIKit
             }
                         
             // this will also deal with button events
-            if self.widgetType == WidgetTypeEnum.button && !self.comboButtonStrings.isEmpty {
+            // Pure GYRO / GYROPAUSE widgets have empty comboButtonStrings — without
+            // the motionControlButtonString check, the press would never reach
+            // handleButtonDown and the gyro would never toggle.
+            if self.widgetType == WidgetTypeEnum.button &&
+               (!self.comboButtonStrings.isEmpty || !self.motionControlButtonString.isEmpty) {
                 self.handleButtonDown()
                 self.capturedTouches.union(touches)
                 //self.handleButtonSliding(touches: touches)

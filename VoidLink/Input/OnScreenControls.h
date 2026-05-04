@@ -132,6 +132,7 @@ typedef NS_ENUM(NSInteger, OnScreenControlsLevel) {
 // these on press / release so we don't need to expose the bare ControllerSupport
 // reference upward.
 - (void) markMotionControlButtonRegistered;
+- (void) clearMotionControlButtonRegistration;
 - (void) pushMotionButtonHold;
 - (void) popMotionButtonHold;
 - (void) pushMotionButtonPause;

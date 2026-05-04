@@ -12,6 +12,8 @@
 #import "ControllerSupport.h"
 #import "VoidController.h"
 
+NSString* const VoidGyroSettingsDidChangeNotification = @"VoidGyroSettingsDidChangeNotification";
+
 #import "OnScreenControls.h"
 
 #import "DataManager.h"
@@ -39,7 +41,8 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     id _mouseDisconnectObserver;
     id _keyboardConnectObserver;
     id _keyboardDisconnectObserver;
-    
+    id _gyroSettingsObserver;
+
     NSLock *_controllerStreamLock;
     NSMutableDictionary *_voidControllers;
     id<ControllerSupportDelegate> _delegate;
@@ -136,6 +139,11 @@ static inline int16_t clamp_int16(CGFloat v) {
         _motionButtonHoldCount = 0;
         _motionButtonPauseCount = 0;
     }
+}
+
+- (void) clearMotionControlButtonRegistration {
+    self.hasMotionControlButton = NO;
+    [self resetMotionButtonHolds];
 }
 
 -(void) rumble:(unsigned short)controllerNumber lowFreqMotor:(unsigned short)lowFreqMotor highFreqMotor:(unsigned short)highFreqMotor
@@ -344,7 +352,11 @@ static inline int16_t clamp_int16(CGFloat v) {
                             GCAcceleration emptyAccelSample = {};
                             voidController.lastAccelSample = emptyAccelSample;
                             NSLog(@"setup controller gyro accelTimer");
-                            dispatch_sync(dispatch_get_main_queue(), ^{
+                            // Run on main (NSTimer scheduling needs a runloop). If we're already
+                            // on main, call inline — dispatch_sync(main) from main thread deadlocks.
+                            // Triggered when applyGyroModeSetting reruns from the gyro-settings
+                            // notification observer, which dispatches on mainQueue.
+                            void (^setupAccelTimer)(void) = ^{
                                 voidController.hasAccelerometer = YES;
                                 voidController.accelTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
                                     if (![self motionEmissionAllowed]) return;
@@ -365,10 +377,15 @@ static inline int16_t clamp_int16(CGFloat v) {
                                                                 accelSample.y * -9.80665f * self->_gyroSensitivity,
                                                                 accelSample.z * -9.80665f * self->_gyroSensitivity);
                                 }];
-                            });
+                            };
+                            if ([NSThread isMainThread]) {
+                                setupAccelTimer();
+                            } else {
+                                dispatch_sync(dispatch_get_main_queue(), setupAccelTimer);
+                            }
                         }
                         break;
-                        
+
                     case LI_MOTION_TYPE_GYRO:
                         [voidController.gyroTimer invalidate];
                         voidController.gyroTimer = nil;
@@ -1693,6 +1710,30 @@ static inline int16_t clamp_int16(CGFloat v) {
     _oscController = [[VoidController alloc] init];
     _gyroMode = AlwaysDevice;
 
+    // Live-update gyro routing & sensitivity when the user touches Settings
+    // mid-stream. Without this, mapGyroTo / sensitivity changes would only
+    // take effect on next reconnect.
+    __weak typeof(self) weakSelf = self;
+    _gyroSettingsObserver = [[NSNotificationCenter defaultCenter] addObserverForName:VoidGyroSettingsDidChangeNotification
+                                                                              object:nil
+                                                                               queue:[NSOperationQueue mainQueue]
+                                                                          usingBlock:^(NSNotification * _Nonnull note) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        DataManager* dm = [[DataManager alloc] init];
+        TemporarySettings* s = [dm getSettings];
+        int previousMapGyroTo = strongSelf->_mapGyroTo;
+        strongSelf->_gyroSensitivity = s.gyroSensitivity.floatValue;
+        strongSelf->_mapGyroTo = s.mapGyroTo.intValue;
+        strongSelf->_gyroInvertPitch = s.gyroInvertPitch;
+        strongSelf->_gyroInvertYaw = s.gyroInvertYaw;
+        // Re-evaluate timer state if mapGyroTo flipped between needs/doesn't
+        // need device gyro — otherwise the legacy snapshot path is enough.
+        if (previousMapGyroTo != strongSelf->_mapGyroTo) {
+            [strongSelf applyGyroModeSetting];
+        }
+    }];
+
     [self updateCommonConfig:streamConfig];
     
     for(VoidController* voidController in _voidControllers.allValues){
@@ -1804,6 +1845,7 @@ static inline int16_t clamp_int16(CGFloat v) {
     [[NSNotificationCenter defaultCenter] removeObserver:_mouseDisconnectObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_keyboardConnectObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_keyboardDisconnectObserver];
+    if (_gyroSettingsObserver) [[NSNotificationCenter defaultCenter] removeObserver:_gyroSettingsObserver];
     
     _controllerConnectObserver = nil;
     _controllerDisconnectObserver = nil;

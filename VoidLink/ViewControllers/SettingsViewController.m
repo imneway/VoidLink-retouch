@@ -12,6 +12,7 @@
 #import "SettingsViewController.h"
 #import "TemporarySettings.h"
 #import "DataManager.h"
+#import "ControllerSupport.h"   // VoidGyroSettingsDidChangeNotification
 #import "ThemeManager.h"
 #import "Plot.h"
 
@@ -1911,18 +1912,46 @@ BOOL isCustomResolution(int resolutionSelected) {
 }
 
 - (void) mapGyroToChanged:(UISegmentedControl* )sender {
-    // Persisted to defaults; ControllerSupport snapshots this once at stream
-    // start (updateCommonConfig). Mid-stream changes won't take effect until
-    // the next reconnect — by design, since the gyro tick is wired to the
-    // mode at setup time. Users typically tweak between sessions anyway.
+    // Persisted to defaults + saved to current settings, then ping any active
+    // ControllerSupport so it picks up the change live (no reconnect needed).
     [[NSUserDefaults standardUserDefaults] setInteger:sender.selectedSegmentIndex forKey:@"mapGyroTo"];
+    [self saveAndPostGyroChange];
     [self updateGyroStackVisibility];
+}
+
+// mapGyroTo / gyroInvertPitch / gyroInvertYaw all live in NSUserDefaults and
+// are persisted immediately by their action handlers (setInteger / setBool).
+// Posting the notification triggers ControllerSupport to re-read TemporarySettings
+// (which itself re-reads NSUserDefaults), so the live stream picks up the
+// change without reconnect. gyroSensitivity is in Core Data — its hot reload
+// would require a more expensive [dm saveData] each tick, so it remains
+// reconnect-only for now (next stream restart picks up the value).
+- (void) saveAndPostGyroChange {
+    [[NSNotificationCenter defaultCenter] postNotificationName:VoidGyroSettingsDidChangeNotification object:nil];
 }
 
 // Single source of truth for which gyro-related stacks are visible. Called
 // from emulatedControllerTypeChanged AND mapGyroToChanged so both paths
 // converge on consistent state.
 - (void)updateGyroStackVisibility {
+    // The mapping code paths (Stick/Mouse) require iOS 14+ APIs (CMMotionManager
+    // updates wired through ControllerSupport's @available(14) gate). Hide the
+    // selector + invert switches entirely on older iOS so users don't toggle
+    // a silently-noop control.
+    BOOL mappingSupported = NO;
+    if (@available(iOS 14.0, *)) { mappingSupported = YES; }
+    if (!mappingSupported) {
+        [self setHidden:YES forStack:_mapGyroToStack];
+        [self setHidden:YES forStack:_gyroInvertPitchStack];
+        [self setHidden:YES forStack:_gyroInvertYawStack];
+        // Fall back to legacy behavior for the DS4-only stacks.
+        BOOL legacyXbox = self.emulatedControllerTypeSelector.selectedSegmentIndex == 0;
+        [self setHidden:legacyXbox forStack:_gyroModeStack];
+        [self setHidden:legacyXbox forStack:_gyroSensitivityStack];
+        [touchAndControlSection updateViewForFoldState];
+        return;
+    }
+
     NSInteger ctrlIndex = self.emulatedControllerTypeSelector.selectedSegmentIndex;
     NSInteger mapTo = self.mapGyroToSelector.selectedSegmentIndex;
     BOOL isXboxCtrl = (ctrlIndex == 0);
@@ -1974,10 +2003,12 @@ BOOL isCustomResolution(int resolutionSelected) {
 
 - (void) gyroInvertPitchChanged:(UISwitch* )sender {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"gyroInvertPitch"];
+    [self saveAndPostGyroChange];
 }
 
 - (void) gyroInvertYawChanged:(UISwitch* )sender {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"gyroInvertYaw"];
+    [self saveAndPostGyroChange];
 }
 
 - (void) backgroundSessionTimerSliderMoved:(UISlider* )sender {

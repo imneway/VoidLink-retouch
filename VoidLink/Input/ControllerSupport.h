@@ -34,6 +34,15 @@
 - (void) pushMotionButtonPause;
 - (void) popMotionButtonPause;
 - (void) resetMotionButtonHolds;
+// Call before reloading on-screen widgets so the global hasMotionControlButton
+// flag accurately reflects the new layout. Without this, a previous session's
+// GYRO widgets would keep gyro emission gated behind a hold count of 0.
+- (void) clearMotionControlButtonRegistration;
+
+// Notification posted when gyro-related settings (mapGyroTo, gyroSensitivity,
+// gyroInvertPitch, gyroInvertYaw) change in Settings. ControllerSupport
+// observes it to apply the new values mid-stream without requiring reconnect.
+extern NSString* const VoidGyroSettingsDidChangeNotification;
 
 -(id) initWithConfig:(StreamConfiguration*)streamConfig delegate:(id<ControllerSupportDelegate>)delegate;
 -(void) connectionEstablished;
