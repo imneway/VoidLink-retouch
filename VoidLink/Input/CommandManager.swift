@@ -479,7 +479,8 @@ import UIKit
         let combinedStrings =  [CommandManager.keyboardButtonMappings.keys.map { $0 as String },
                                 CommandManager.oscButtonMappings.keys.map { $0 as String },
                                 CommandManager.mouseButtonMappings.keys.map { $0 as String },
-                                CommandManager.touchPadCmds.map { $0 as String }
+                                CommandManager.touchPadCmds.map { $0 as String },
+                                CommandManager.motionControlButtonCmds.map { $0 as String }
                                 ]
                                 .lazy
                                 .flatMap { $0 }  // 三维展开
