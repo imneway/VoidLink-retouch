@@ -38,6 +38,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) CGFloat minStickOffset; // for OnScreenWidgetView
 @property (nonatomic, assign) CGFloat stickInputScale; // for OnScreenWidgetView ALT pads (0 = use widget default)
 @property (nonatomic, assign) CGFloat stickResponseExponent; // for OnScreenWidgetView ALT pads (<1.0 = use widget default)
+@property (nonatomic, assign) BOOL stickInvertVertical;   // for OnScreenWidgetView stick pads (UI exposed on ALT only)
+@property (nonatomic, assign) BOOL stickInvertHorizontal; // for OnScreenWidgetView stick pads (UI exposed on ALT only)
 @property NSString* widgetShape; // for OnScreenWidgetView
 
 @property (nonatomic, assign) CGFloat oscLayerSizeFactor; // for OnScreenController CALayer

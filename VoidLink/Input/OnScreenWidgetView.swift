@@ -140,6 +140,15 @@ import UIKit
             }
         }
     }
+
+    // Per-axis output flip for stick pads. Useful when a game's camera axis
+    // convention is reversed (e.g. inverted-Y aim, bow scope where tilting
+    // up should pan down). Applied at the source axis so deadband / curve /
+    // clamp all see the post-flip sign — see sendRightStickTouchPadEvent.
+    // UI exposes these only for ALT pads (gated by hasResponseCurveTweak),
+    // but the logic is type-agnostic at runtime.
+    @objc public var stickInvertVertical: Bool = false
+    @objc public var stickInvertHorizontal: Bool = false
     private var l3r3Indicator = CAShapeLayer()
     private let stickBallMaxOffset = 18.0
     @objc public var crossMarkLayer = CAShapeLayer()
@@ -1744,8 +1753,12 @@ import UIKit
     }
 
     private func sendRightStickTouchPadEvent(inputX: CGFloat, inputY: CGFloat){
-        var adjX = inputX
-        var adjY = inputY
+        // Flip on the source axis so the deadband / response-curve / clamp all
+        // operate consistently with the post-flip sign. Flipping after the
+        // post-deadband transform would invert minStickOffset's tie-at-zero
+        // bias, producing -minStickOffset when the finger is exactly centered.
+        var adjX = self.stickInvertHorizontal ? -inputX : inputX
+        var adjY = self.stickInvertVertical ? -inputY : inputY
         if self.touchPadString == "RSPADALT" { // circular clamp for ALT variant
             let mag = hypot(adjX, adjY)
             if mag > stickInputScale && mag > 0 { // clamp in source domain to keep mapping consistent
@@ -1764,8 +1777,8 @@ import UIKit
     }
 
     private func sendLeftStickTouchPadEvent(inputX: CGFloat, inputY: CGFloat){
-        var adjX = inputX
-        var adjY = inputY
+        var adjX = self.stickInvertHorizontal ? -inputX : inputX
+        var adjY = self.stickInvertVertical ? -inputY : inputY
         if self.touchPadString == "LSPADALT" { // circular clamp for ALT variant
             let mag = hypot(adjX, adjY)
             if mag > stickInputScale && mag > 0 {

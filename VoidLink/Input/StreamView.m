@@ -571,6 +571,8 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
                 widgetView.minStickOffset = buttonState.minStickOffset;
                 if (buttonState.stickInputScale > 0) widgetView.stickInputScale = buttonState.stickInputScale;
                 if (buttonState.stickResponseExponent >= 1.0) widgetView.stickResponseExponent = buttonState.stickResponseExponent;
+                widgetView.stickInvertVertical = buttonState.stickInvertVertical;
+                widgetView.stickInvertHorizontal = buttonState.stickInvertHorizontal;
                 widgetView.slideMode = buttonState.slideMode;
                 // Add the widgetView to the view controller's view
                 if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger){

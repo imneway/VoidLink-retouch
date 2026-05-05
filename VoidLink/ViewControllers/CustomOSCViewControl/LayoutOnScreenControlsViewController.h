@@ -88,6 +88,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property (strong, nonatomic) UILabel *stickResponseExponentLabel;
 @property (strong, nonatomic) UISlider *stickResponseExponentSlider;
 @property (strong, nonatomic) UIStackView *stickResponseExponentStack;
+@property (strong, nonatomic) UILabel *stickInvertVerticalLabel;
+@property (strong, nonatomic) UISwitch *stickInvertVerticalSwitch;
+@property (strong, nonatomic) UIStackView *stickInvertVerticalStack;
+@property (strong, nonatomic) UILabel *stickInvertHorizontalLabel;
+@property (strong, nonatomic) UISwitch *stickInvertHorizontalSwitch;
+@property (strong, nonatomic) UIStackView *stickInvertHorizontalStack;
 
 
 

@@ -181,6 +181,8 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
             widgetView.minStickOffset = buttonState.minStickOffset;
             if (buttonState.stickInputScale > 0) widgetView.stickInputScale = buttonState.stickInputScale;
             if (buttonState.stickResponseExponent >= 1.0) widgetView.stickResponseExponent = buttonState.stickResponseExponent;
+            widgetView.stickInvertVertical = buttonState.stickInvertVertical;
+            widgetView.stickInvertHorizontal = buttonState.stickInvertHorizontal;
             widgetView.slideMode = buttonState.slideMode;
             // Add the widgetView to the view controller's view
             if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger && self.streamOverlay){
@@ -791,6 +793,8 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     if (widget.hasResponseCurveTweak && newWidget.hasResponseCurveTweak) {
         newWidget.stickInputScale = widget.stickInputScale;
         newWidget.stickResponseExponent = widget.stickResponseExponent;
+        newWidget.stickInvertVertical = widget.stickInvertVertical;
+        newWidget.stickInvertHorizontal = widget.stickInvertHorizontal;
     }
     [newWidget setVibrationWithStyle:widget.vibrationStyle];
     newWidget.mouseButtonAction = widget.mouseButtonAction;
@@ -949,6 +953,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     self.sensitivityXStack.hidden = self.sensitivityYStack.hidden = !showSensitivityFactorStack;
     self.stickIndicatorOffsetStack.hidden = !showStickIndicatorOffsetStack;
     self.stickInputScaleStack.hidden = self.stickResponseExponentStack.hidden = !showResponseCurveStack;
+    self.stickInvertVerticalStack.hidden = self.stickInvertHorizontalStack.hidden = !showResponseCurveStack;
     self.mouseDownButtonStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"MOUSEPAD"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
     self.decelerationRateStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"TRACKBALL"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
 
@@ -988,6 +993,8 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         [self.stickResponseExponentSlider setValue:self->selectedWidgetView.stickResponseExponent];
         [self autoFitLabel:self.stickResponseExponentLabel];
         [self.stickResponseExponentLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Curve: %.2f", self->selectedWidgetView.stickResponseExponent]];
+        self.stickInvertVerticalSwitch.on = self->selectedWidgetView.stickInvertVertical;
+        self.stickInvertHorizontalSwitch.on = self->selectedWidgetView.stickInvertHorizontal;
     }
     [self autoFitLabel:self.widgetSizeLabel];
     
@@ -1033,6 +1040,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     self.mouseDownButtonStack.hidden = true;
     self.decelerationRateStack.hidden = true;
     self.stickInputScaleStack.hidden = self.stickResponseExponentStack.hidden = true;
+    self.stickInvertVerticalStack.hidden = self.stickInvertHorizontalStack.hidden = true;
     
     self->controllerLayerSelected = true;
     self->selectedControllerLayer = controllerLayer;
@@ -1239,6 +1247,56 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     [self.stickResponseExponentStack.heightAnchor constraintEqualToConstant:20].active = YES;
     self.stickResponseExponentStack.hidden = YES;
     [self.widgetPanelStack addArrangedSubview:self.stickResponseExponentStack];
+
+    // Vertical / horizontal output flip switches. Apply on the host-bound
+    // values only; finger-space indicator visuals stay un-mirrored.
+    self.stickInvertVerticalLabel = [[UILabel alloc] init];
+    self.stickInvertVerticalLabel.font = labelFont;
+    self.stickInvertVerticalLabel.textColor = whiteColor;
+    self.stickInvertVerticalLabel.text = [LocalizationHelper localizedStringForKey:@"Vertical Flip"];
+    [self.stickInvertVerticalLabel.widthAnchor constraintEqualToConstant:160].active = YES;
+
+    self.stickInvertVerticalSwitch = [[UISwitch alloc] init];
+    self.stickInvertVerticalSwitch.onTintColor = sliderTint;
+    [self.stickInvertVerticalSwitch addTarget:self action:@selector(stickInvertVerticalChanged:) forControlEvents:UIControlEventValueChanged];
+
+    self.stickInvertVerticalStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.stickInvertVerticalLabel, self.stickInvertVerticalSwitch]];
+    self.stickInvertVerticalStack.axis = UILayoutConstraintAxisHorizontal;
+    self.stickInvertVerticalStack.translatesAutoresizingMaskIntoConstraints = NO;
+    self.stickInvertVerticalStack.alignment = UIStackViewAlignmentCenter;
+    [self.stickInvertVerticalStack.heightAnchor constraintEqualToConstant:30].active = YES;
+    self.stickInvertVerticalStack.hidden = YES;
+    [self.widgetPanelStack addArrangedSubview:self.stickInvertVerticalStack];
+
+    self.stickInvertHorizontalLabel = [[UILabel alloc] init];
+    self.stickInvertHorizontalLabel.font = labelFont;
+    self.stickInvertHorizontalLabel.textColor = whiteColor;
+    self.stickInvertHorizontalLabel.text = [LocalizationHelper localizedStringForKey:@"Horizontal Flip"];
+    [self.stickInvertHorizontalLabel.widthAnchor constraintEqualToConstant:160].active = YES;
+
+    self.stickInvertHorizontalSwitch = [[UISwitch alloc] init];
+    self.stickInvertHorizontalSwitch.onTintColor = sliderTint;
+    [self.stickInvertHorizontalSwitch addTarget:self action:@selector(stickInvertHorizontalChanged:) forControlEvents:UIControlEventValueChanged];
+
+    self.stickInvertHorizontalStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.stickInvertHorizontalLabel, self.stickInvertHorizontalSwitch]];
+    self.stickInvertHorizontalStack.axis = UILayoutConstraintAxisHorizontal;
+    self.stickInvertHorizontalStack.translatesAutoresizingMaskIntoConstraints = NO;
+    self.stickInvertHorizontalStack.alignment = UIStackViewAlignmentCenter;
+    [self.stickInvertHorizontalStack.heightAnchor constraintEqualToConstant:30].active = YES;
+    self.stickInvertHorizontalStack.hidden = YES;
+    [self.widgetPanelStack addArrangedSubview:self.stickInvertHorizontalStack];
+}
+
+- (void)stickInvertVerticalChanged:(UISwitch* )sender{
+    if(self->selectedWidgetView != nil && self->widgetViewSelected){
+        self->selectedWidgetView.stickInvertVertical = sender.on;
+    }
+}
+
+- (void)stickInvertHorizontalChanged:(UISwitch* )sender{
+    if(self->selectedWidgetView != nil && self->widgetViewSelected){
+        self->selectedWidgetView.stickInvertHorizontal = sender.on;
+    }
 }
 
 - (void)showIndicatorOffset{

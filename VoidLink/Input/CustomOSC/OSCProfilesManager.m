@@ -429,6 +429,8 @@ static CGRect layoutViewBounds;
         buttonState.minStickOffset = widgetView.minStickOffset;
         buttonState.stickInputScale = widgetView.stickInputScale;
         buttonState.stickResponseExponent = widgetView.stickResponseExponent;
+        buttonState.stickInvertVertical = widgetView.stickInvertVertical;
+        buttonState.stickInvertHorizontal = widgetView.stickInvertHorizontal;
         buttonState.slideMode = widgetView.slideMode;
         
         NSData *buttonStateEncoded = [NSKeyedArchiver archivedDataWithRootObject:buttonState requiringSecureCoding:YES error:nil];
