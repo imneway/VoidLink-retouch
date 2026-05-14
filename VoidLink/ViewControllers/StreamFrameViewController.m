@@ -643,9 +643,12 @@ static CGFloat VoidFixedToggleWidth(UIButton *button, NSArray<NSString *> *title
 
 - (void)updateSnapRatioButton {
     if (!_snapRatioButton) {
-        _snapRatioButton = [UIButton buttonWithType:UIButtonTypeSystem];
+        // Custom (not System) buttons: System buttons cross-fade their title
+        // on setTitle:, which looks sluggish for these instant on/off toggles.
+        _snapRatioButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _snapRatioButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
         [_snapRatioButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
+        [_snapRatioButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
         _snapRatioButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
         [_snapRatioButton addTarget:self action:@selector(toggleSnapRatio) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:_snapRatioButton];
@@ -653,9 +656,10 @@ static CGFloat VoidFixedToggleWidth(UIButton *button, NSArray<NSString *> *title
     
     // Create OSC toggle button if not exists
     if (!_oscToggleButton) {
-        _oscToggleButton = [UIButton buttonWithType:UIButtonTypeSystem];
+        _oscToggleButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _oscToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
         [_oscToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
+        [_oscToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
         _oscToggleButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
         [_oscToggleButton addTarget:self action:@selector(toggleOscOnOff) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:_oscToggleButton];
@@ -664,9 +668,10 @@ static CGFloat VoidFixedToggleWidth(UIButton *button, NSArray<NSString *> *title
     // Persistent gyro on/off toggle — independent of any GYRO widget hold
     // gate. Stored in NSUserDefaults so the choice survives app restart.
     if (!_gyroToggleButton) {
-        _gyroToggleButton = [UIButton buttonWithType:UIButtonTypeSystem];
+        _gyroToggleButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _gyroToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
         [_gyroToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
+        [_gyroToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
         _gyroToggleButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
         [_gyroToggleButton addTarget:self action:@selector(toggleGyroOnOff) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:_gyroToggleButton];
