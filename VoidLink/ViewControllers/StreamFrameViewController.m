@@ -628,6 +628,19 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     [self updateSnapRatioButton];
 }
 
+// Fixed button width = widest candidate title + horizontal content insets.
+// Keeps the bottom-right toggles from shifting when their title text changes
+// (e.g. "OSC ON" <-> "OSC OFF"), while staying snug — no extra padding.
+static CGFloat VoidFixedToggleWidth(UIButton *button, NSArray<NSString *> *titles) {
+    CGFloat maxTextW = 0;
+    NSDictionary *attrs = @{NSFontAttributeName: button.titleLabel.font};
+    for (NSString *t in titles) {
+        CGFloat w = [t sizeWithAttributes:attrs].width;
+        if (w > maxTextW) maxTextW = w;
+    }
+    return ceil(maxTextW) + button.contentEdgeInsets.left + button.contentEdgeInsets.right;
+}
+
 - (void)updateSnapRatioButton {
     if (!_snapRatioButton) {
         _snapRatioButton = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -660,7 +673,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     }
 
     // Update titles
-    NSString *snapTitle = _settings.snapScreenRatioMode.integerValue == 0 ? @"16:9" : @"Full Screen";
+    NSString *snapTitle = _settings.snapScreenRatioMode.integerValue == 0 ? @"16:9" : @"FULL";
     [_snapRatioButton setTitle:snapTitle forState:UIControlStateNormal];
 
     // Update OSC button title based ONLY on ON/OFF state, not transparency state
@@ -678,20 +691,25 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 
     if (_snapRatioButton.hidden) return;
 
-    // Layout all three buttons at bottom-right
-    CGSize snapSize = [_snapRatioButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
-    CGSize oscSize = [_oscToggleButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
-    CGSize gyroSize = [_gyroToggleButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
+    // Layout all three buttons at bottom-right. Each gets a fixed width sized
+    // to its widest possible title so toggling text never shifts neighbours.
+    // Order, right -> left: snap ratio, gyro, osc (gyro & osc swapped per UX).
+    CGFloat snapW = VoidFixedToggleWidth(_snapRatioButton, @[@"16:9", @"FULL"]);
+    CGFloat oscW  = VoidFixedToggleWidth(_oscToggleButton,  @[@"OSC ON", @"OSC OFF"]);
+    CGFloat gyroW = VoidFixedToggleWidth(_gyroToggleButton, @[@"GYRO ON", @"GYRO OFF"]);
+    CGFloat btnH  = [_snapRatioButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)].height;
 
-    CGFloat snapX = self.view.bounds.size.width - 24 - snapSize.width;
     CGFloat baseY = self.view.bounds.size.height - 12;
-    _snapRatioButton.frame = CGRectMake(snapX, baseY - snapSize.height, snapSize.width, snapSize.height);
+    CGFloat gap = 8;
 
-    CGFloat oscX = snapX - 8 - oscSize.width;
-    _oscToggleButton.frame = CGRectMake(oscX, baseY - oscSize.height, oscSize.width, oscSize.height);
+    CGFloat snapX = self.view.bounds.size.width - 24 - snapW;
+    _snapRatioButton.frame = CGRectMake(snapX, baseY - btnH, snapW, btnH);
 
-    CGFloat gyroX = oscX - 8 - gyroSize.width;
-    _gyroToggleButton.frame = CGRectMake(gyroX, baseY - gyroSize.height, gyroSize.width, gyroSize.height);
+    CGFloat gyroX = snapX - gap - gyroW;
+    _gyroToggleButton.frame = CGRectMake(gyroX, baseY - btnH, gyroW, btnH);
+
+    CGFloat oscX = gyroX - gap - oscW;
+    _oscToggleButton.frame = CGRectMake(oscX, baseY - btnH, oscW, btnH);
 }
 
 // Toggles the persistent forceGyroEnabled flag. ControllerSupport observes
