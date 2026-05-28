@@ -274,13 +274,22 @@ static float L3_Y;
         if (layer.hidden) continue;
         if (layer.opacity <= 0.0f) continue;
         if (CGRectIsEmpty(layer.bounds)) continue;
-        // Walk the ancestor chain so a hidden parent (e.g. _dPadBackground hidden
-        // while its arrow sublayers leave .hidden = NO) doesn't yield a false hit.
+        // Walk the ancestor chain up to hostLayer. Two reasons:
+        //   1. A hidden/transparent parent (e.g. _dPadBackground hidden while its
+        //      arrow sublayers leave .hidden = NO) must not yield a false hit.
+        //   2. The legacy "hide" paths (hideButtons / hideSticks / …) DETACH layers
+        //      via removeFromSuperlayer but leave them in OSCButtonLayers with a
+        //      stale frame and .hidden = NO. Such a detached layer never chains back
+        //      to hostLayer, so we must reject it — otherwise its stale frame would
+        //      phantom-swallow touchPad touches. `reachedHost` enforces that the
+        //      layer is genuinely still in hostLayer's subtree.
         BOOL ancestorHidden = NO;
-        for (CALayer *ancestor = layer.superlayer; ancestor && ancestor != hostLayer; ancestor = ancestor.superlayer) {
+        BOOL reachedHost = NO;
+        for (CALayer *ancestor = layer.superlayer; ancestor; ancestor = ancestor.superlayer) {
             if (ancestor.hidden || ancestor.opacity <= 0.0f) { ancestorHidden = YES; break; }
+            if (ancestor == hostLayer) { reachedHost = YES; break; }
         }
-        if (ancestorHidden) continue;
+        if (ancestorHidden || !reachedHost) continue;
         CGPoint pointInLayer = [hostLayer convertPoint:point toLayer:layer];
         if ([layer containsPoint:pointInLayer]) return YES;
     }
