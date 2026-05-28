@@ -967,6 +967,24 @@ import UIKit
             // Double-taps are caught by the gesture recognizer attached to superview.
             return nil
         }
+        if widgetType == WidgetTypeEnum.touchPad && !OnScreenWidgetView.editMode {
+            // Pad widgets sit visually below the legacy OSC CALayers (StreamView's
+            // reloadOnScreenWidgetViews slots them between the fullscreen trigger and
+            // the OSC layer band — see the two-pass attach there). Make touch routing
+            // match: if the touch lands inside a visible legacy OSC button rect,
+            // return nil so it falls through to StreamView's touchesBegan, which then
+            // forwards to onScreenControls.handleTouchDownEvent for proper dispatch.
+            //
+            // Same pattern the fullscreen trigger uses above, just gated on overlap
+            // with a real OSC button instead of unconditional. In edit mode we keep
+            // the default behavior so the user can still tap-select and drag pads.
+            if let superview = self.superview {
+                let pointInSuper = self.convert(point, to: superview)
+                if onScreenControls.pointHitsAnyVisibleLegacyOscButton(pointInSuper) {
+                    return nil
+                }
+            }
+        }
         return super.hitTest(point, with: event)
     }
 

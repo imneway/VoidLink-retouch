@@ -252,6 +252,41 @@ static float L3_Y;
     [_deadTouches removeAllObjects];
 }
 
+// Returns YES if `point` (in `_view` coords) falls inside any visible legacy OSC
+// CALayer. "Visible" = self isn't hidden, opacity > 0, no ancestor up to _view.layer
+// is hidden, and the layer is known to OSCButtonLayers. Used by touchPad widgets
+// that sit visually below the OSC layer band to let touches in the overlap area
+// pass through to onScreenControls' own touch dispatch (the pattern mirrors the
+// fullscreen trigger's runtime hitTest=nil behavior, gated on real overlap).
+//
+// Coordinate conversion uses [CALayer convertPoint:toLayer:], which walks the
+// full layer hierarchy — necessary because OSCButtonLayers mixes layers attached
+// directly to `_view.layer` (e.g. _aButton) with sublayers nested one level deep
+// (e.g. _upButton lives inside _dPadBackground). containsPoint: then evaluates
+// in the target layer's local coord space.
+- (BOOL) pointHitsAnyVisibleLegacyOscButton:(CGPoint)point {
+    if (self._level == OnScreenControlsLevelOff) return NO;
+    if (!self.OSCButtonLayers.count) return NO;
+    CALayer *hostLayer = _view.layer;
+    if (!hostLayer) return NO;
+    for (CALayer *layer in self.OSCButtonLayers) {
+        if (!layer) continue;
+        if (layer.hidden) continue;
+        if (layer.opacity <= 0.0f) continue;
+        if (CGRectIsEmpty(layer.bounds)) continue;
+        // Walk the ancestor chain so a hidden parent (e.g. _dPadBackground hidden
+        // while its arrow sublayers leave .hidden = NO) doesn't yield a false hit.
+        BOOL ancestorHidden = NO;
+        for (CALayer *ancestor = layer.superlayer; ancestor && ancestor != hostLayer; ancestor = ancestor.superlayer) {
+            if (ancestor.hidden || ancestor.opacity <= 0.0f) { ancestorHidden = YES; break; }
+        }
+        if (ancestorHidden) continue;
+        CGPoint pointInLayer = [hostLayer convertPoint:point toLayer:layer];
+        if ([layer containsPoint:pointInLayer]) return YES;
+    }
+    return NO;
+}
+
 // sending self as an instance to OnScreenWidgetView
 - (void)sendInstance{
     NSLog(@"OnScreenControls is sending its instance...");

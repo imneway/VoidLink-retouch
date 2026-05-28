@@ -145,6 +145,12 @@ typedef NS_ENUM(NSInteger, OnScreenControlsLevel) {
 - (BOOL) handleTouchDownEvent:(NSSet*)touches;
 - (BOOL) handleTouchUpEvent:(NSSet*)touches;
 - (BOOL) handleTouchMovedEvent:(NSSet*)touches;
+// Returns YES if `point` (in `_view`'s coordinate space — i.e., the streamFrameTopLayerView
+// in runtime, or the layout VC's view in editor) falls inside the frame of any visible
+// legacy OSC CALayer. Used by OnScreenWidgetView.hitTest to let touchPad widgets pass
+// touches through when they overlap an OSC button (the pad layer sits visually below
+// the OSC layer; touch routing has to follow).
+- (BOOL) pointHitsAnyVisibleLegacyOscButton:(CGPoint)point;
 - (void) setLevel:(OnScreenControlsLevel)level;
 - (void) show;
 - (void) setupComplexControls;

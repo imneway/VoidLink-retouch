@@ -607,27 +607,46 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
             }
         }
 
-        // Pass 2 — attach to streamFrameTopLayerView in z-order (bottom → top):
-        //   index 0      : streamView / _scrollView (video)
-        //   index 1      : fullscreen trigger (kept via insertSubview:atIndex:1)
-        //   index 2..    : touchPad widgets (appended after the trigger)
-        //   index N..    : button widgets   (appended last → sit on top of pads)
-        // Each widget still goes through the full setLocation → resize → transparency
-        // → border sequence right after it's attached so the existing ordering
-        // contract ("resize must be called after relocation") is preserved.
+        // Pass 2 — attach to streamFrameTopLayerView so the final sublayer order
+        // (bottom → top) is:
+        //   streamView / _scrollView (video, subviews index 0)
+        //   fullscreen trigger       (insertSubview:atIndex:1)
+        //   touchPad widgets         (insertSubview:aboveSubview:<lower anchor>)
+        //   legacy OSC CALayers      (already in sublayers from onScreenControls.setLevel,
+        //                             appended before reload runs)
+        //   button widgets           (addSubview — appended at the tail of sublayers,
+        //                             which lands above the legacy OSC layers and above
+        //                             every pad)
+        //
+        // Pads need to slip *between* the fullscreen trigger and the legacy OSC layers
+        // so the OSC layer art renders on top of them and so the touchPad's hitTest
+        // passthrough (see OnScreenWidgetView.hitTest for the touchPad branch) routes
+        // overlap touches to onScreenControls.handleTouchDownEvent. insertSubview:above
+        // places the new layer right after the anchor's layer in the parent's sublayers
+        // array, threading past any pure CALayers that were added later — exactly what
+        // the fullscreen trigger's atIndex:1 contract already exploits.
+        //
+        // Each widget still runs the full setLocation → resize → transparency → border
+        // sequence right after attach so the existing ordering contract
+        // ("resize must be called after relocation") is preserved.
 
-        // Fullscreen trigger — same atIndex:1 contract as before.
-        // The stream-rendering view (self in non-AbsoluteTouch, or the wrapping
-        // _scrollView in AbsoluteTouch) is always at index 0 of streamFrameTopLayerView
-        // (see StreamFrameViewController.configZoomGestureAndAddStreamView). Insert
-        // just above it so the fullscreen trigger overlays the video while sitting
-        // below every regular widget appended later. Avoid `aboveSubview:self`,
-        // which raises in AbsoluteTouch mode because self is nested inside _scrollView
-        // and isn't a direct subview of the host.
+        // Anchor that pad widgets slip "just above" in sublayers. Starts as the stream
+        // view container (subviews[0] of streamFrameTopLayerView), gets promoted to the
+        // fullscreen trigger after that's inserted, and then walks up through each pad
+        // so subsequent pads stack newer-on-top within the pad band.
+        UIView* lowerAnchor = self->streamFrameTopLayerView.subviews.firstObject;
+
+        // Fullscreen trigger — same atIndex:1 contract as before. The stream-rendering
+        // view (self in non-AbsoluteTouch, or the wrapping _scrollView in AbsoluteTouch)
+        // is always at index 0 of streamFrameTopLayerView (see
+        // StreamFrameViewController.configZoomGestureAndAddStreamView). Avoid
+        // `aboveSubview:self`, which raises in AbsoluteTouch mode because self is nested
+        // inside _scrollView and isn't a direct subview of the host.
         for (NSUInteger i = 0; i < fullscreenWidgets.count; i++) {
             OnScreenWidgetView* widgetView = fullscreenWidgets[i];
             OnScreenButtonState* buttonState = fullscreenStates[i];
             [self->streamFrameTopLayerView insertSubview:widgetView atIndex:1];
+            lowerAnchor = widgetView; // next pad slips above the fullscreen trigger
             // Runtime sizing comes from edge constraints in changeAndActivateContraints,
             // so storedCenter doesn't drive geometry here — but pin it to the midpoint
             // anyway so anything that later reads storedCenter (e.g., the editor reusing
@@ -638,12 +657,23 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
             [widgetView adjustBorderWithWidth:buttonState.borderWidth];
         }
 
-        // touchPad widgets — appended right after the fullscreen trigger so they
-        // stack above it but below the button widgets that follow.
+        // touchPad widgets — chained "just above" the running lowerAnchor so each new
+        // pad lands right above the previous pad (or above the fullscreen trigger /
+        // stream view if it's the first), keeping the whole pad band below the legacy
+        // OSC CALayer band that was already appended to the parent's sublayers earlier
+        // by onScreenControls.setLevel.
         for (NSUInteger i = 0; i < padWidgets.count; i++) {
             OnScreenWidgetView* widgetView = padWidgets[i];
             OnScreenButtonState* buttonState = padStates[i];
-            [self->streamFrameTopLayerView addSubview:widgetView]; // add keyboard button to the stream frame view. must add it to the target view before setting location.
+            if (lowerAnchor) {
+                [self->streamFrameTopLayerView insertSubview:widgetView aboveSubview:lowerAnchor];
+            } else {
+                // Defensive: streamFrameTopLayerView with no subviews — should never
+                // happen post-setup, but fall back to a safe append so the widget
+                // still attaches and the rest of the configure-resize chain runs.
+                [self->streamFrameTopLayerView addSubview:widgetView];
+            }
+            lowerAnchor = widgetView; // newer pads stack above older pads within the band
             buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
             [widgetView setLocationWithPosition:buttonState.position];
             [widgetView resizeWidgetView]; // resize must be called after relocation

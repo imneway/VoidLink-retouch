@@ -131,10 +131,18 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 
 // Place / re-place a single widget in the editor's view hierarchy so the global
 // z-order contract holds across reload, create, modify, and post-drag re-anchor:
-//     streamOverlay < fullscreenTrigger < touchPad widgets < button widgets < widgetPanelStack < toolbar
-// Runtime mirrors this contract in StreamView.reloadOnScreenWidgetViews. Hit-testing
-// follows the subviews array (not layer.zPosition), so this same ordering lets a
-// button overlapping a pad receive the touch.
+//     streamOverlay < fullscreenTrigger < touchPad widgets < legacy OSC CALayers
+//       < button widgets < widgetPanelStack < toolbar
+// Runtime mirrors this contract in StreamView.reloadOnScreenWidgetViews. The
+// legacy OSC band lives in self.view.layer.sublayers as pure CALayers added by
+// layoutOSC.show — it has no UIView anchor, so we sandwich the pad band against
+// the highest subview *below* it (the fullscreen trigger if present, otherwise
+// the stream overlay), letting insertSubview:above slip the new pad into the
+// sublayers slot right before the legacy CALayers were appended.
+//
+// Editor-only note: pads receive touches normally in edit mode (no hitTest
+// passthrough), so the user can still tap-select and drag them. The visual
+// stacking still matches runtime so the WYSIWYG is honest.
 //
 // Idempotent w.r.t. widgetView already being a subview — insertSubview:above/below
 // just moves it. Caller is responsible for adding widgetView to self.onScreenWidgetViews.
@@ -152,23 +160,37 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         return;
     }
     if (widgetView.widgetType == WidgetTypeEnumTouchPad) {
-        // Find the lowest non-pad widget already in view (the bottom of the button
-        // layer) and slip the pad just below it. self.view.subviews is bottom→top,
-        // so the first WidgetTypeEnumButton hit is the lowest. If there are no
-        // buttons yet, default to the panel anchor so the pad becomes the top of
-        // the widget zone for now — any button added later will be inserted
-        // belowSubview:widgetPanelStack and naturally end up above this pad.
-        UIView* anchor = self.widgetPanelStack;
+        // Find the highest "lower anchor" already in view: the topmost fullscreen
+        // trigger if present, else the stream overlay. self.view.subviews iterates
+        // bottom→top, so we keep updating `anchor` as we encounter qualifying
+        // anchors and let the loop end naturally — that picks the highest one.
+        // Inserting aboveSubview:anchor drops the pad's layer into the sublayers
+        // slot right after the anchor's layer, landing above the fullscreen trigger
+        // but below the legacy OSC CALayers that layoutOSC.show appended later.
+        // Subsequent pads use the previous pad as their anchor so newer-on-top
+        // stacking holds within the pad band.
+        UIView* anchor = self.streamOverlay;
         for (UIView* sv in self.view.subviews) {
             if (sv == widgetView) continue;
             if (![sv isKindOfClass:[OnScreenWidgetView class]]) continue;
             OnScreenWidgetView* w = (OnScreenWidgetView*)sv;
-            if (w.widgetType == WidgetTypeEnumButton) { anchor = sv; break; }
+            if (w.widgetType == WidgetTypeEnumFullscreenTrigger ||
+                w.widgetType == WidgetTypeEnumTouchPad) {
+                anchor = sv;
+            }
         }
-        [self.view insertSubview:widgetView belowSubview:anchor];
+        if (anchor) {
+            [self.view insertSubview:widgetView aboveSubview:anchor];
+        } else {
+            // Defensive (no overlay, no trigger, no other pad yet) — drop just
+            // below the widget panel; any button added later still ends up on top.
+            [self.view insertSubview:widgetView belowSubview:self.widgetPanelStack];
+        }
         return;
     }
     // Default (button / uninitialized) — just below the widget panel as before.
+    // This appends after every pad and after the legacy OSC CALayers in sublayers,
+    // putting buttons at the top of the widget zone.
     [self.view insertSubview:widgetView belowSubview:self.widgetPanelStack];
 }
 
