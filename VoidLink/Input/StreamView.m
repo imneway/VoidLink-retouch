@@ -540,6 +540,25 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 
     if(!OnScreenWidgetView.editMode){ // in edit mode, keyboard widget view will be updated within layoutool view controller.
         BOOL fullscreenTriggerInstantiated = NO;
+
+        // Two-pass build so we can enforce a global z-order on the widget layer
+        // (fullscreenTrigger < touchPad < button) independent of whatever order
+        // widgets happen to live in inside oscProfile.buttonStates. Hit-testing
+        // tracks the subviews array (not zPosition), so the same ordering also
+        // lets a button overlapping a pad receive the touch.
+        //
+        // Pass 1: instantiate + configure every widget, wire the onScreenControls
+        // back-reference, and bucket by widgetType. Pass 2: add to the view
+        // hierarchy + setLocation/resize/adjust in the order fullscreen → pad → button.
+        NSMutableArray<OnScreenWidgetView*>* fullscreenWidgets = [NSMutableArray array];
+        NSMutableArray<OnScreenWidgetView*>* padWidgets = [NSMutableArray array];
+        NSMutableArray<OnScreenWidgetView*>* otherWidgets = [NSMutableArray array];
+        // Track each widget's source buttonState so Pass 2 can read position /
+        // backgroundAlpha / borderWidth without re-unarchiving.
+        NSMutableArray<OnScreenButtonState*>* fullscreenStates = [NSMutableArray array];
+        NSMutableArray<OnScreenButtonState*>* padStates = [NSMutableArray array];
+        NSMutableArray<OnScreenButtonState*>* otherStates = [NSMutableArray array];
+
         for (NSData *buttonStateEncoded in oscProfile.buttonStates) {
             OnScreenButtonState* buttonState = [profilesManager unarchiveButtonStateEncoded:buttonStateEncoded];
             if(buttonState.buttonType == CustomOnScreenWidget){
@@ -574,33 +593,75 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
                 widgetView.stickInvertVertical = buttonState.stickInvertVertical;
                 widgetView.stickInvertHorizontal = buttonState.stickInvertHorizontal;
                 widgetView.slideMode = buttonState.slideMode;
-                // Add the widgetView to the view controller's view
+
                 if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
-                    // The stream-rendering view (self in non-AbsoluteTouch, or the wrapping
-                    // _scrollView in AbsoluteTouch) is always at index 0 of streamFrameTopLayerView
-                    // (see StreamFrameViewController.configZoomGestureAndAddStreamView). Insert
-                    // just above it so the fullscreen trigger overlays the video while sitting
-                    // below every regular widget that gets appended via addSubview later.
-                    // Avoid `aboveSubview:self`, which raises in AbsoluteTouch mode because self
-                    // is nested inside _scrollView and isn't a direct subview of the host.
-                    [self->streamFrameTopLayerView insertSubview:widgetView atIndex:1];
+                    [fullscreenWidgets addObject:widgetView];
+                    [fullscreenStates addObject:buttonState];
+                } else if(widgetView.widgetType == WidgetTypeEnumTouchPad){
+                    [padWidgets addObject:widgetView];
+                    [padStates addObject:buttonState];
                 } else {
-                    [self->streamFrameTopLayerView addSubview:widgetView]; // add keyboard button to the stream frame view. must add it to the target view before setting location.
+                    [otherWidgets addObject:widgetView];
+                    [otherStates addObject:buttonState];
                 }
-                if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
-                    // Runtime sizing comes from edge constraints in changeAndActivateContraints,
-                    // so storedCenter doesn't drive geometry here — but pin it to the midpoint
-                    // anyway so anything that later reads storedCenter (e.g., the editor reusing
-                    // the same OSCProfile) doesn't trip on a stale persisted position.
-                    [widgetView setLocationWithPosition:CGPointMake(CGRectGetMidX(self->streamFrameTopLayerView.bounds), CGRectGetMidY(self->streamFrameTopLayerView.bounds))];
-                } else {
-                    buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
-                    [widgetView setLocationWithPosition:buttonState.position];
-                }
-                [widgetView resizeWidgetView]; // resize must be called after relocation
-                [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
-                [widgetView adjustBorderWithWidth:buttonState.borderWidth];
             }
+        }
+
+        // Pass 2 — attach to streamFrameTopLayerView in z-order (bottom → top):
+        //   index 0      : streamView / _scrollView (video)
+        //   index 1      : fullscreen trigger (kept via insertSubview:atIndex:1)
+        //   index 2..    : touchPad widgets (appended after the trigger)
+        //   index N..    : button widgets   (appended last → sit on top of pads)
+        // Each widget still goes through the full setLocation → resize → transparency
+        // → border sequence right after it's attached so the existing ordering
+        // contract ("resize must be called after relocation") is preserved.
+
+        // Fullscreen trigger — same atIndex:1 contract as before.
+        // The stream-rendering view (self in non-AbsoluteTouch, or the wrapping
+        // _scrollView in AbsoluteTouch) is always at index 0 of streamFrameTopLayerView
+        // (see StreamFrameViewController.configZoomGestureAndAddStreamView). Insert
+        // just above it so the fullscreen trigger overlays the video while sitting
+        // below every regular widget appended later. Avoid `aboveSubview:self`,
+        // which raises in AbsoluteTouch mode because self is nested inside _scrollView
+        // and isn't a direct subview of the host.
+        for (NSUInteger i = 0; i < fullscreenWidgets.count; i++) {
+            OnScreenWidgetView* widgetView = fullscreenWidgets[i];
+            OnScreenButtonState* buttonState = fullscreenStates[i];
+            [self->streamFrameTopLayerView insertSubview:widgetView atIndex:1];
+            // Runtime sizing comes from edge constraints in changeAndActivateContraints,
+            // so storedCenter doesn't drive geometry here — but pin it to the midpoint
+            // anyway so anything that later reads storedCenter (e.g., the editor reusing
+            // the same OSCProfile) doesn't trip on a stale persisted position.
+            [widgetView setLocationWithPosition:CGPointMake(CGRectGetMidX(self->streamFrameTopLayerView.bounds), CGRectGetMidY(self->streamFrameTopLayerView.bounds))];
+            [widgetView resizeWidgetView]; // resize must be called after relocation
+            [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
+            [widgetView adjustBorderWithWidth:buttonState.borderWidth];
+        }
+
+        // touchPad widgets — appended right after the fullscreen trigger so they
+        // stack above it but below the button widgets that follow.
+        for (NSUInteger i = 0; i < padWidgets.count; i++) {
+            OnScreenWidgetView* widgetView = padWidgets[i];
+            OnScreenButtonState* buttonState = padStates[i];
+            [self->streamFrameTopLayerView addSubview:widgetView]; // add keyboard button to the stream frame view. must add it to the target view before setting location.
+            buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
+            [widgetView setLocationWithPosition:buttonState.position];
+            [widgetView resizeWidgetView]; // resize must be called after relocation
+            [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
+            [widgetView adjustBorderWithWidth:buttonState.borderWidth];
+        }
+
+        // Button (and any future non-pad / non-fullscreen) widgets — appended last
+        // so they sit on top of the pad layer.
+        for (NSUInteger i = 0; i < otherWidgets.count; i++) {
+            OnScreenWidgetView* widgetView = otherWidgets[i];
+            OnScreenButtonState* buttonState = otherStates[i];
+            [self->streamFrameTopLayerView addSubview:widgetView]; // add keyboard button to the stream frame view. must add it to the target view before setting location.
+            buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
+            [widgetView setLocationWithPosition:buttonState.position];
+            [widgetView resizeWidgetView]; // resize must be called after relocation
+            [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
+            [widgetView adjustBorderWithWidth:buttonState.borderWidth];
         }
     }
 }

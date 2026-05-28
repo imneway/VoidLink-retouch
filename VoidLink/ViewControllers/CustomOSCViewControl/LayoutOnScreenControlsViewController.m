@@ -129,6 +129,49 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     [self OSCLayoutChanged];    // fades the 'Undo Button' out
 }
 
+// Place / re-place a single widget in the editor's view hierarchy so the global
+// z-order contract holds across reload, create, modify, and post-drag re-anchor:
+//     streamOverlay < fullscreenTrigger < touchPad widgets < button widgets < widgetPanelStack < toolbar
+// Runtime mirrors this contract in StreamView.reloadOnScreenWidgetViews. Hit-testing
+// follows the subviews array (not layer.zPosition), so this same ordering lets a
+// button overlapping a pad receive the touch.
+//
+// Idempotent w.r.t. widgetView already being a subview — insertSubview:above/below
+// just moves it. Caller is responsible for adding widgetView to self.onScreenWidgetViews.
+- (void)insertWidgetInEditorZOrder:(OnScreenWidgetView*)widgetView {
+    if (widgetView.widgetType == WidgetTypeEnumFullscreenTrigger) {
+        if (self.streamOverlay) {
+            // Fullscreen trigger sits just above the stream preview, below every
+            // other widget and the panel — same contract as before this refactor.
+            [self.view insertSubview:widgetView aboveSubview:self.streamOverlay];
+        } else {
+            // No stream overlay yet (shouldn't happen post-viewDidLoad, but stay
+            // defensive) — fall back to the legacy "just below the panel" slot.
+            [self.view insertSubview:widgetView belowSubview:self.widgetPanelStack];
+        }
+        return;
+    }
+    if (widgetView.widgetType == WidgetTypeEnumTouchPad) {
+        // Find the lowest non-pad widget already in view (the bottom of the button
+        // layer) and slip the pad just below it. self.view.subviews is bottom→top,
+        // so the first WidgetTypeEnumButton hit is the lowest. If there are no
+        // buttons yet, default to the panel anchor so the pad becomes the top of
+        // the widget zone for now — any button added later will be inserted
+        // belowSubview:widgetPanelStack and naturally end up above this pad.
+        UIView* anchor = self.widgetPanelStack;
+        for (UIView* sv in self.view.subviews) {
+            if (sv == widgetView) continue;
+            if (![sv isKindOfClass:[OnScreenWidgetView class]]) continue;
+            OnScreenWidgetView* w = (OnScreenWidgetView*)sv;
+            if (w.widgetType == WidgetTypeEnumButton) { anchor = sv; break; }
+        }
+        [self.view insertSubview:widgetView belowSubview:anchor];
+        return;
+    }
+    // Default (button / uninitialized) — just below the widget panel as before.
+    [self.view insertSubview:widgetView belowSubview:self.widgetPanelStack];
+}
+
 - (void)reloadOnScreenWidgetViews{
     NSLog(@"reloadOnScreenWidgets %f", CACurrentMediaTime());
     OnScreenWidgetView.editMode = true;
@@ -154,6 +197,21 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     // _activeCustomOscButtonPositionDict will be updated every time when the osc profile is reloaded
     OSCProfile *oscProfile = [profilesManager getSelectedProfile]; //returns the currently selected OSCProfile
     BOOL fullscreenTriggerInstantiated = NO;
+
+    // Two-pass build to enforce the editor's z-order contract independent of
+    // profile storage order (matches StreamView.reloadOnScreenWidgetViews):
+    //   streamOverlay < fullscreenTrigger < touchPad widgets < button widgets < widgetPanelStack < toolbar
+    // Pass 1: instantiate + configure all widgets, bucket by widgetType.
+    // Pass 2: attach in z-order fullscreen → pad → button via the shared
+    //         insertWidgetInEditorZOrder: helper, then run setLocation /
+    //         resize / adjust which all require a superview.
+    NSMutableArray<OnScreenWidgetView*>* fullscreenWidgets = [NSMutableArray array];
+    NSMutableArray<OnScreenWidgetView*>* padWidgets = [NSMutableArray array];
+    NSMutableArray<OnScreenWidgetView*>* otherWidgets = [NSMutableArray array];
+    NSMutableArray<OnScreenButtonState*>* fullscreenStates = [NSMutableArray array];
+    NSMutableArray<OnScreenButtonState*>* padStates = [NSMutableArray array];
+    NSMutableArray<OnScreenButtonState*>* otherStates = [NSMutableArray array];
+
     for (NSData *buttonStateEncoded in oscProfile.buttonStates) {
         // OnScreenButtonState* buttonState = [NSKeyedUnarchiver unarchivedObjectOfClass:[OnScreenButtonState class] fromData:buttonStateEncoded error:nil];
         OnScreenButtonState* buttonState = [profilesManager unarchiveButtonStateEncoded:buttonStateEncoded];
@@ -184,30 +242,59 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
             widgetView.stickInvertVertical = buttonState.stickInvertVertical;
             widgetView.stickInvertHorizontal = buttonState.stickInvertHorizontal;
             widgetView.slideMode = buttonState.slideMode;
-            // Add the widgetView to the view controller's view
-            if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger && self.streamOverlay){
-                // Fullscreen trigger must sit above the stream overlay but below all other widgets
-                // and the widget panel so editor interactions with other controls are unaffected.
-                [self.view insertSubview:widgetView aboveSubview:self.streamOverlay];
-            } else {
-                [self.view insertSubview:widgetView belowSubview:self.widgetPanelStack];
-            }
+
             if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
-                // Pin the handle to the view midpoint on every reload, ignoring any persisted
-                // position (a stale off-center value would otherwise let a plain tap land on the
-                // trash button via the touchesEnded overlap check, deleting the widget without a
-                // drag). Save path may serialize whatever center the handle ended up at, but this
-                // override makes that data effectively dead — every reload re-anchors here.
-                [widgetView setLocationWithPosition:CGPointMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds))];
+                [fullscreenWidgets addObject:widgetView];
+                [fullscreenStates addObject:buttonState];
+            } else if(widgetView.widgetType == WidgetTypeEnumTouchPad){
+                [padWidgets addObject:widgetView];
+                [padStates addObject:buttonState];
             } else {
-                buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
-                [widgetView setLocationWithPosition:buttonState.position];
+                [otherWidgets addObject:widgetView];
+                [otherStates addObject:buttonState];
             }
-            [widgetView resizeWidgetView]; // resize must be called after relocation
-            [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
-            [widgetView adjustBorderWithWidth:buttonState.borderWidth];
-            [self.onScreenWidgetViews addObject:widgetView];
         }
+    }
+
+    // Pass 2 — attach each bucket in z-order. insertWidgetInEditorZOrder:
+    // picks the correct anchor per widgetType; within a bucket we iterate in
+    // profile order so the relative order of same-type widgets is stable.
+    for (NSUInteger i = 0; i < fullscreenWidgets.count; i++) {
+        OnScreenWidgetView* widgetView = fullscreenWidgets[i];
+        OnScreenButtonState* buttonState = fullscreenStates[i];
+        [self insertWidgetInEditorZOrder:widgetView];
+        // Pin the handle to the view midpoint on every reload, ignoring any persisted
+        // position (a stale off-center value would otherwise let a plain tap land on the
+        // trash button via the touchesEnded overlap check, deleting the widget without a
+        // drag). Save path may serialize whatever center the handle ended up at, but this
+        // override makes that data effectively dead — every reload re-anchors here.
+        [widgetView setLocationWithPosition:CGPointMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds))];
+        [widgetView resizeWidgetView]; // resize must be called after relocation
+        [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
+        [widgetView adjustBorderWithWidth:buttonState.borderWidth];
+        [self.onScreenWidgetViews addObject:widgetView];
+    }
+    for (NSUInteger i = 0; i < padWidgets.count; i++) {
+        OnScreenWidgetView* widgetView = padWidgets[i];
+        OnScreenButtonState* buttonState = padStates[i];
+        [self insertWidgetInEditorZOrder:widgetView];
+        buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
+        [widgetView setLocationWithPosition:buttonState.position];
+        [widgetView resizeWidgetView]; // resize must be called after relocation
+        [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
+        [widgetView adjustBorderWithWidth:buttonState.borderWidth];
+        [self.onScreenWidgetViews addObject:widgetView];
+    }
+    for (NSUInteger i = 0; i < otherWidgets.count; i++) {
+        OnScreenWidgetView* widgetView = otherWidgets[i];
+        OnScreenButtonState* buttonState = otherStates[i];
+        [self insertWidgetInEditorZOrder:widgetView];
+        buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
+        [widgetView setLocationWithPosition:buttonState.position];
+        [widgetView resizeWidgetView]; // resize must be called after relocation
+        [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
+        [widgetView adjustBorderWithWidth:buttonState.borderWidth];
+        [self.onScreenWidgetViews addObject:widgetView];
     }
 }
 
@@ -799,11 +886,9 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     [newWidget setVibrationWithStyle:widget.vibrationStyle];
     newWidget.mouseButtonAction = widget.mouseButtonAction;
     newWidget.slideMode = widget.slideMode;
-    if(newWidget.widgetType == WidgetTypeEnumFullscreenTrigger && self.streamOverlay){
-        [self.view insertSubview:newWidget aboveSubview:self.streamOverlay];
-    } else {
-        [self.view insertSubview:newWidget belowSubview:self.widgetPanelStack];
-    }
+    // Z-order: fullscreenTrigger / touchPad / button each land in their own
+    // layer band — see insertWidgetInEditorZOrder: for the full contract.
+    [self insertWidgetInEditorZOrder:newWidget];
 
     if(createNew){
         if(newWidget.widgetType == WidgetTypeEnumFullscreenTrigger){
@@ -833,12 +918,12 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     widgetView.translatesAutoresizingMaskIntoConstraints = NO; // weird but this is mandatory, or you will find no key views added to the right place
     widgetView.minStickOffset = [widgetInitParams[@"minStickOffsetString"] floatValue];
     [self.onScreenWidgetViews addObject:widgetView];
-    // Add the widgetView to the view controller's view
-    if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger && self.streamOverlay){
-        [self.view insertSubview:widgetView aboveSubview:self.streamOverlay];
+    // Add to the editor view in the right z-order band (see insertWidgetInEditorZOrder:),
+    // then anchor: fullscreen trigger goes to view center, everything else to a spawn slot.
+    [self insertWidgetInEditorZOrder:widgetView];
+    if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
         [widgetView setLocationWithPosition:CGPointMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds))];
     } else {
-        [self.view insertSubview:widgetView belowSubview:self.widgetPanelStack];
         [widgetView setLocationWithPosition:CGPointMake(90, 130)];
     }
     [widgetView resizeWidgetView];
@@ -1706,16 +1791,15 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     // UITouch *touch = [touches anyObject]; // Get the first touch in the set
     _widgetPanelStack.userInteractionEnabled = true;
     
-    // Bring the selected widget to the front of subviews so the trash check below uses an
-    // unobscured layer rect. Fullscreen trigger keeps its low Z-position (above streamOverlay,
-    // below all other widgets) — we re-anchor it there instead of moving it just below the
-    // panel stack like normal widgets.
+    // Re-anchor the just-released widget back into its z-order band. During a
+    // drag, updateGuidelinesForOnScreenWidget: bringSubviewToFront's the widget
+    // so the user can see what they're moving; this restores the per-type
+    // contract: fullscreenTrigger above streamOverlay, touchPad just below the
+    // lowest button (top of the pad layer), button just below the widget panel
+    // (top of the button layer). insertWidgetInEditorZOrder: encapsulates all
+    // three cases.
     if(selectedWidgetView){
-        if(selectedWidgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
-            if(self.streamOverlay) [self.view insertSubview:selectedWidgetView aboveSubview:self.streamOverlay];
-        } else {
-            [self.view insertSubview:selectedWidgetView belowSubview:_widgetPanelStack];
-        }
+        [self insertWidgetInEditorZOrder:selectedWidgetView];
     }
 
     if(!isToolbarHidden
