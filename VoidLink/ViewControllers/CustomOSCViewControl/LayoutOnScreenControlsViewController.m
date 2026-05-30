@@ -504,6 +504,28 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     dispatch_async(dispatch_get_main_queue(), ^{
         [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
     });
+
+    // viewWillBeResized gates handleOrientationChangeForOnScreenWidgets so it only
+    // rebuilds widgets on a genuine interface resize. It is set true just above but
+    // is otherwise cleared only inside updateViewBounds — and a timing race (the
+    // device-orientation notification's handleOrientationChange can fire and
+    // early-return *before* this method sets the flag) can leave it stuck true after
+    // a rotation. Once stuck, every later small tilt passes the guard and runs a
+    // no-save reloadOnScreenWidgetViews that wipes any still-unsaved edit (e.g. a
+    // brand-new widget that was never written to the profile). Clear it
+    // deterministically once the rotation transition finishes, so only genuine
+    // resizes — not subsequent small tilts — can trigger the rebuild.
+    [coordinator animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+        // Coordinator completions fire on the main thread; dispatch_async keeps the
+        // reset explicitly on the main queue (matching the osc_applyLock call above)
+        // and defers it one more hop. deviceOrientationDidChange schedules
+        // handleOrientationChangeForOnScreenWidgets via performSelector:afterDelay:0 at
+        // rotation start, so it runs (and performs the genuine post-rotation reload
+        // while the flag is still true) well before this deferred reset lands.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self->viewWillBeResized = false;
+        });
+    }];
 }
 
 - (void)deviceOrientationDidChange{
