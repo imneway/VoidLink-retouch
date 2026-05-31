@@ -39,6 +39,8 @@
     CGPoint widgetPanelStoredCenter;
     CGPoint latestTouchLocation;
     UIImpactFeedbackGenerator *vibrationGenerator;
+    BOOL rotationUnlocked;          // NO (default) = screen rotation locked while editing
+    UIButton *rotationLockButton;   // top toolbar lock toggle
 }
 
 // MARK: - 方向锁定 持久化Key（与列表页一致）
@@ -98,8 +100,82 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 }
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    // Return the supported interface orientations acoordingly
+    // Default while editing: rotation is LOCKED, so a rotation can't reload the
+    // editor and disturb in-progress edits. Freeze to the orientation we're in
+    // until the user taps the lock button to unlock.
+    if (!rotationUnlocked) {
+        return [self osc_currentInterfaceOrientationMask];
+    }
     return [self getCurrentOrientation]; // 90 Degree rotation not allowed in streaming or app view
+}
+
+- (BOOL)shouldAutorotate {
+    // Honored on iOS < 16; iOS 16+ relies on supportedInterfaceOrientations above.
+    return rotationUnlocked;
+}
+
+// Mask for the single orientation we are currently displayed in, so a locked
+// editor refuses to rotate to any other orientation.
+- (UIInterfaceOrientationMask)osc_currentInterfaceOrientationMask {
+    UIInterfaceOrientation cur = UIInterfaceOrientationUnknown;
+    if (@available(iOS 13.0, *)) {
+        UIWindowScene *scene = self.view.window.windowScene;
+        if (scene) { cur = scene.interfaceOrientation; }
+    }
+    switch (cur) {
+        case UIInterfaceOrientationLandscapeLeft:      return UIInterfaceOrientationMaskLandscapeLeft;
+        case UIInterfaceOrientationLandscapeRight:     return UIInterfaceOrientationMaskLandscapeRight;
+        case UIInterfaceOrientationPortrait:           return UIInterfaceOrientationMaskPortrait;
+        case UIInterfaceOrientationPortraitUpsideDown: return UIInterfaceOrientationMaskPortraitUpsideDown;
+        default: break;
+    }
+    // Fallback before the scene orientation is known: derive from the view bounds.
+    return (self.view.bounds.size.width > self.view.bounds.size.height)
+        ? UIInterfaceOrientationMaskLandscape
+        : UIInterfaceOrientationMaskPortrait;
+}
+
+// Floating lock toggle (top-trailing). Locked by default; tapping unlocks so the
+// user can deliberately rotate, then re-locks. Keeping rotation locked while
+// editing avoids the whole class of "rotation reloads the editor and disturbs /
+// drops in-progress edits" problems.
+- (void)osc_setupRotationLockButton {
+    if (rotationLockButton) { return; }
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
+    btn.translatesAutoresizingMaskIntoConstraints = NO;
+    btn.tintColor = [UIColor whiteColor];
+    btn.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.35];
+    btn.layer.cornerRadius = 18.0;
+    btn.clipsToBounds = YES;
+    [btn addTarget:self action:@selector(osc_toggleRotationLock:) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:btn];
+    [NSLayoutConstraint activateConstraints:@[
+        [btn.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12.0],
+        [btn.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8.0],
+        [btn.widthAnchor constraintEqualToConstant:36.0],
+        [btn.heightAnchor constraintEqualToConstant:36.0],
+    ]];
+    rotationLockButton = btn;
+    [self osc_updateRotationLockButton];
+}
+
+- (void)osc_updateRotationLockButton {
+    if (@available(iOS 13.0, *)) {
+        NSString *symbol = rotationUnlocked ? @"lock.rotation.open" : @"lock.rotation";
+        [rotationLockButton setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
+    }
+    rotationLockButton.accessibilityLabel = rotationUnlocked ? @"屏幕方向已解锁" : @"屏幕方向已锁定";
+    [self.view bringSubviewToFront:rotationLockButton];
+}
+
+- (void)osc_toggleRotationLock:(id)sender {
+    rotationUnlocked = !rotationUnlocked;
+    [self osc_updateRotationLockButton];
+    if (@available(iOS 16.0, *)) {
+        [self setNeedsUpdateOfSupportedInterfaceOrientations];
+    } else {
+        [UIViewController attemptRotationToDeviceOrientation];
+    }
 }
 
 - (void) viewWillDisappear:(BOOL)animated{
@@ -462,6 +538,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     OnScreenWidgetView.editMode = true;
     [self handleMissingToolBarIcon:toolbarRootView];
     [self profileRefresh];
+    [self osc_setupRotationLockButton]; // screen-rotation lock toggle (locked by default)
 }
 
 #pragma mark - Class Helper Functions
@@ -1763,8 +1840,22 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     widgetPanelStoredCenter = _widgetPanelStack.center;
 }
 
+// A touch can reach this view controller's touch handlers through the responder
+// chain even when it actually landed on an OnScreenWidgetView — every widget calls
+// super.touchesBegan/Moved, which propagates the event up to here. In that case the
+// user is dragging that widget (the widget moves itself), so we must NOT also feed
+// the touch to layoutOSC, or a legacy OSC layer (dpad / select / stick …) gets
+// grabbed as layerBeingDragged and dragged to the finger. Walk up from the hit-test
+// view so a touch on a widget's non-interactive label subview still counts.
+- (BOOL)osc_touchLandedOnWidget:(UITouch *)touch {
+    for (UIView *v = touch.view; v != nil; v = v.superview) {
+        if ([v isKindOfClass:[OnScreenWidgetView class]]) return YES;
+    }
+    return NO;
+}
+
 - (void) touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
-    
+
     UITouch* touch = touches.anyObject;
     widgetPanelMovedByTouch = [self widgetPanelTouched:touch];
     if(widgetPanelMovedByTouch){
@@ -1795,13 +1886,26 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
             // 如果点击了widgetPanelStack，不传递给layoutOSC
             return;
         }
+
+        // Touch landed on a widget → it handles its own drag; don't let layoutOSC
+        // grab a legacy OSC layer for it (see osc_touchLandedOnWidget:).
+        if ([self osc_touchLandedOnWidget:touch]) {
+            return;
+        }
     }
     [self.layoutOSC touchesBegan:touches withEvent:event];
 }
 
 - (void) touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
-    
+
     [self handleWidgetPanelMove:touches.anyObject];
+
+    // Touch landed on a widget → it moves itself; don't drag a legacy OSC layer
+    // along with it (see osc_touchLandedOnWidget:). Without this, the bottom-left
+    // dpad/select layer can flash to the finger and follow it during a widget drag.
+    if ([self osc_touchLandedOnWidget:touches.anyObject]) {
+        return;
+    }
 
     // -------- for OSC buttons
     [self.layoutOSC touchesMoved:touches withEvent:event];
