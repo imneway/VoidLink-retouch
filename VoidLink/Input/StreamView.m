@@ -693,6 +693,23 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
             [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
             [widgetView adjustBorderWithWidth:buttonState.borderWidth];
         }
+
+        // Keep the freshly-rebuilt widgets in lockstep with the legacy OSC layers'
+        // obscure-by-alpha state. OnScreenWidgetView.obscuredByAlpha is a STATIC that
+        // survives this reload, while new widgets default to full alpha — so a reload
+        // that happens while the OSC is hidden (right-edge swipe or the OSC ON/OFF
+        // button) leaves the new widgets VISIBLE yet still flagged obscured. The next
+        // tap then drops the tapped widget to 0.02 (it "disappears"), and only an
+        // OSC ON/OFF toggle resynced it. Re-apply the current obscure state to both the
+        // flag and the just-attached widgets so visibility and the flag can't diverge.
+        BOOL oscObscured = [self isOscObscuredByAlpha];
+        [OnScreenWidgetView setObscuredByAlpha:oscObscured];
+        CGFloat widgetViewAlpha = oscObscured ? 0.02f : 1.0f;
+        for (UIView *v in self->streamFrameTopLayerView.subviews) {
+            if ([v isKindOfClass:[OnScreenWidgetView class]]) {
+                v.alpha = widgetViewAlpha;
+            }
+        }
     }
 }
 
