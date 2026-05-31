@@ -257,17 +257,12 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         // Tighten just the spacing so the centered row shrinks enough to clear the Exit
         // (left) and lock (right) buttons. Nothing else is touched — no button or
         // sub-stack can vanish.
-        // The iPad row carries a fixed-width (830pt) constraint AND centerX, so just
-        // changing spacing wouldn't shrink it — it would still overflow in portrait.
-        // Shrink the stack's OWN width to fit the reserved space and tighten spacing to
-        // match. Both are the stack's own properties; the buttons and the nested
-        // sub-stack are never resized, so nothing can disappear.
-        CGFloat buttonsW = (CGFloat)n * kFullSize;                    // six 50pt items
-        CGFloat naturalW = buttonsW + (CGFloat)(n - 1) * kMaxSpacing; // content at the original 70pt spacing
-        CGFloat stackW   = MIN(naturalW, maxStackW);                  // only shrink when it would overflow
-        CGFloat spacing  = MAX(kMinSpacing, (stackW - buttonsW) / (CGFloat)(n - 1));
-        stack.spacing = spacing;
-        [self osc_setFixedDimension:NSLayoutAttributeWidth ofView:stack to:stackW];
+        // Do NOTHING on iPad. Its toolbar is a different, storyboard-ambiguous layout
+        // (a nested Trash sub-stack pinned to the row's centre, plus a fixed 830pt
+        // width) that this runtime reshape can't adjust without hiding the Save button
+        // — two attempts proved that. iPad is wide enough that the row doesn't need
+        // shrinking anyway; leave its storyboard layout completely untouched. (The
+        // iPad portrait Exit/Undo overlap is a separate, storyboard-level fix.)
         return;
     }
 
