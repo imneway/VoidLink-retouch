@@ -813,7 +813,17 @@ const int FrontViewPositionNone = 0xff;
 
 // tested on iOS17.
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    
+
+    // The OSC layout editor's rotation lock overrides the display-orientation setting.
+    // This root VC authoritatively gates orientation (it returns its own mask and does
+    // not delegate to children), so the lock must be honored here. Globals are defined
+    // in LayoutOnScreenControlsViewController.m.
+    extern BOOL gOSCEditorRotationLocked;
+    extern UIInterfaceOrientationMask gOSCEditorLockedMask;
+    if (gOSCEditorRotationLocked) {
+        return gOSCEditorLockedMask;
+    }
+
     DataManager* dataMan = [[DataManager alloc] init];
     Settings *currentSettings = [dataMan retrieveSettings];
 

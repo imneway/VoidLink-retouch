@@ -48,6 +48,14 @@
 static NSString * const kOSCLockedPortraitProfileName = @"OSCLockedPortraitProfileName";
 static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapeProfileName";
 
+// Shared OSC-editor rotation-lock state. SWRevealViewController is the app's ROOT
+// view controller and authoritatively gates interface orientation — it returns its
+// OWN mask and does NOT delegate to its children, so overrides on the editor /
+// StreamFrame are ignored. These globals let the root honor the editor's lock.
+// Defined here; declared `extern` in SWRevealViewController.m.
+BOOL gOSCEditorRotationLocked = NO;
+UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLandscape;
+
 // 根据当前视图 bounds 判断是否横屏
 - (BOOL)osc_isCurrentLandscapeInViewBounds {
     return self.view.bounds.size.width > self.view.bounds.size.height;
@@ -181,15 +189,30 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 - (void)osc_toggleRotationLock:(id)sender {
     rotationUnlocked = !rotationUnlocked;
     [self osc_updateRotationLockButton];
-    // The presenter owns orientation under OverCurrentContext — ask it (and self,
-    // harmless) to re-evaluate so the lock takes effect immediately.
-    UIViewController *owner = self.presentingViewController ?: self;
+    [self osc_publishRotationLockAndRefresh];
+}
+
+// Publish the editor's lock state into the globals that SWRevealViewController (the
+// root, authoritative for orientation) reads, then ask the root to re-evaluate its
+// supported orientations so the lock/unlock takes effect immediately.
+- (void)osc_publishRotationLockAndRefresh {
+    gOSCEditorRotationLocked = !rotationUnlocked;
+    if (gOSCEditorRotationLocked) {
+        gOSCEditorLockedMask = [self osc_currentInterfaceOrientationMask];
+    }
+    UIViewController *root = self.view.window.rootViewController ?: self.presentingViewController;
     if (@available(iOS 16.0, *)) {
-        [owner setNeedsUpdateOfSupportedInterfaceOrientations];
+        [root setNeedsUpdateOfSupportedInterfaceOrientations];
         [self setNeedsUpdateOfSupportedInterfaceOrientations];
     } else {
         [UIViewController attemptRotationToDeviceOrientation];
     }
+}
+
+- (void)dealloc {
+    // Safety net: never leave the whole app stuck in the editor's rotation lock if
+    // this controller is torn down without viewWillDisappear (unusual teardown order).
+    gOSCEditorRotationLocked = NO;
 }
 
 - (void)viewDidLayoutSubviews {
@@ -267,6 +290,15 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     }
     [super viewWillDisappear:animated];
     [[NSNotificationCenter defaultCenter] postNotificationName:@"OscLayoutCloseNotification" object:self];
+    // Release the rotation lock so the app's normal orientation behavior returns
+    // once the editor closes.
+    gOSCEditorRotationLocked = NO;
+    UIViewController *root = self.view.window.rootViewController ?: self.presentingViewController;
+    if (@available(iOS 16.0, *)) {
+        [root setNeedsUpdateOfSupportedInterfaceOrientations];
+    } else {
+        [UIViewController attemptRotationToDeviceOrientation];
+    }
 }
 
 - (CGPoint)denormalizeWidgetPosition:(CGPoint)position {
@@ -570,6 +602,8 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     [super viewDidAppear:animated];
     // 进入编辑界面时按当前方向应用锁定
     [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
+    // Enforce the screen-rotation lock (locked by default) now that we have a window.
+    [self osc_publishRotationLockAndRefresh];
 }
 
 - (void)viewWillAppear:(BOOL)animated{
