@@ -228,6 +228,13 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 // constraint constants + the stack spacing — no storyboard surgery — so the app
 // always launches even if the layout assumptions change.
 - (void)osc_layoutAdaptiveToolbarIfNeeded {
+    // iPhone only. The iPad storyboard lays the toolbar out with a different,
+    // NESTED structure (e.g. the Trash button is wrapped in its own sub-stack), so
+    // blindly resizing toolbarStackView.arrangedSubviews here mangles it (it hid the
+    // Save button). iPad is also wide enough that the fixed row never overflows, so
+    // it doesn't need this adaptive fit at all — leave its storyboard layout intact.
+    if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) { return; }
+
     UIView *bar = self.toolbarRootView;
     UIStackView *stack = self.toolbarStackView;
     if (!bar || !stack) { return; }
