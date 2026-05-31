@@ -2191,7 +2191,42 @@ static CGFloat VoidFixedToggleWidth(UIButton *button, NSArray<NSString *> *title
 }
 
 - (BOOL)shouldAutorotate {
+    if ([self osc_editorRotationLocked]) { return NO; } // honored on iOS < 16
     return YES;
+}
+
+// The OSC layout editor is presented OverCurrentContext, so UIKit consults THIS
+// presenter (not the editor) for orientation. Honor the editor's rotation lock
+// here so locking it actually freezes the screen while editing.
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    if ([self osc_editorRotationLocked]) {
+        return [self osc_lockedOrientationMask];
+    }
+    return [super supportedInterfaceOrientations]; // unchanged default when not locked
+}
+
+- (BOOL)osc_editorRotationLocked {
+    UIViewController *presented = self.presentedViewController;
+    return [presented isKindOfClass:[LayoutOnScreenControlsViewController class]]
+        && [(LayoutOnScreenControlsViewController *)presented isRotationLocked];
+}
+
+- (UIInterfaceOrientationMask)osc_lockedOrientationMask {
+    UIInterfaceOrientation cur = UIInterfaceOrientationUnknown;
+    if (@available(iOS 13.0, *)) {
+        UIWindowScene *scene = self.view.window.windowScene;
+        if (scene) { cur = scene.interfaceOrientation; }
+    }
+    switch (cur) {
+        case UIInterfaceOrientationLandscapeLeft:      return UIInterfaceOrientationMaskLandscapeLeft;
+        case UIInterfaceOrientationLandscapeRight:     return UIInterfaceOrientationMaskLandscapeRight;
+        case UIInterfaceOrientationPortrait:           return UIInterfaceOrientationMaskPortrait;
+        case UIInterfaceOrientationPortraitUpsideDown: return UIInterfaceOrientationMaskPortraitUpsideDown;
+        default: break;
+    }
+    return (self.view.bounds.size.width > self.view.bounds.size.height)
+        ? UIInterfaceOrientationMaskLandscape
+        : UIInterfaceOrientationMaskPortrait;
 }
 
 - (BOOL)prefersPointerLocked {

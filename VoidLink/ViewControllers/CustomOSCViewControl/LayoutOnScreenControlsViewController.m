@@ -139,21 +139,29 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 // user can deliberately rotate, then re-locks. Keeping rotation locked while
 // editing avoids the whole class of "rotation reloads the editor and disturbs /
 // drops in-progress edits" problems.
+// Exposed so the presenter (StreamFrameViewController) — which actually owns the
+// interface orientation, because this editor is presented OverCurrentContext —
+// can honor the lock in its own supportedInterfaceOrientations / shouldAutorotate.
+- (BOOL)isRotationLocked {
+    return !rotationUnlocked;
+}
+
 - (void)osc_setupRotationLockButton {
     if (rotationLockButton) { return; }
+    // Live in the top toolbar bar (not self.view) so it sits in the cyan button
+    // row, stays put across rotations, and reliably receives taps. Mirror the
+    // Exit button: pinned to the trailing edge of the toolbar container.
+    UIView *bar = self.toolbarRootView ?: self.view;
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
     btn.translatesAutoresizingMaskIntoConstraints = NO;
-    btn.tintColor = [UIColor whiteColor];
-    btn.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.35];
-    btn.layer.cornerRadius = 18.0;
-    btn.clipsToBounds = YES;
+    btn.tintColor = [UIColor systemTealColor]; // match the other toolbar buttons
     [btn addTarget:self action:@selector(osc_toggleRotationLock:) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:btn];
+    [bar addSubview:btn];
     [NSLayoutConstraint activateConstraints:@[
-        [btn.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12.0],
-        [btn.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8.0],
-        [btn.widthAnchor constraintEqualToConstant:36.0],
-        [btn.heightAnchor constraintEqualToConstant:36.0],
+        [btn.trailingAnchor constraintEqualToAnchor:bar.trailingAnchor constant:-18.0],
+        [btn.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
+        [btn.widthAnchor constraintEqualToConstant:50.0],
+        [btn.heightAnchor constraintEqualToConstant:50.0],
     ]];
     rotationLockButton = btn;
     [self osc_updateRotationLockButton];
@@ -162,16 +170,21 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 - (void)osc_updateRotationLockButton {
     if (@available(iOS 13.0, *)) {
         NSString *symbol = rotationUnlocked ? @"lock.rotation.open" : @"lock.rotation";
-        [rotationLockButton setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
+        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:25.0 weight:UIImageSymbolWeightSemibold];
+        [rotationLockButton setImage:[UIImage systemImageNamed:symbol withConfiguration:cfg] forState:UIControlStateNormal];
     }
     rotationLockButton.accessibilityLabel = rotationUnlocked ? @"屏幕方向已解锁" : @"屏幕方向已锁定";
-    [self.view bringSubviewToFront:rotationLockButton];
+    if (rotationLockButton.superview) { [rotationLockButton.superview bringSubviewToFront:rotationLockButton]; }
 }
 
 - (void)osc_toggleRotationLock:(id)sender {
     rotationUnlocked = !rotationUnlocked;
     [self osc_updateRotationLockButton];
+    // The presenter owns orientation under OverCurrentContext — ask it (and self,
+    // harmless) to re-evaluate so the lock takes effect immediately.
+    UIViewController *owner = self.presentingViewController ?: self;
     if (@available(iOS 16.0, *)) {
+        [owner setNeedsUpdateOfSupportedInterfaceOrientations];
         [self setNeedsUpdateOfSupportedInterfaceOrientations];
     } else {
         [UIViewController attemptRotationToDeviceOrientation];
