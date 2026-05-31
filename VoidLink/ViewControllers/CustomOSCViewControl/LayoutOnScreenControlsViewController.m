@@ -41,6 +41,7 @@
     UIImpactFeedbackGenerator *vibrationGenerator;
     BOOL rotationUnlocked;          // NO (default) = screen rotation locked while editing
     UIButton *rotationLockButton;   // top toolbar lock toggle
+    CGFloat lastToolbarWidth;       // guards the adaptive-toolbar relayout against loops
 }
 
 // MARK: - 方向锁定 持久化Key（与列表页一致）
@@ -188,6 +189,73 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
         [self setNeedsUpdateOfSupportedInterfaceOrientations];
     } else {
         [UIViewController attemptRotationToDeviceOrientation];
+    }
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    [self osc_layoutAdaptiveToolbarIfNeeded];
+}
+
+// Make the centered toolbar button row fit the current width. The storyboard pins
+// it to a fixed 750pt centered, which is fine in landscape but overflows in
+// portrait and collides with the leading Exit button. Here we shrink the row's
+// width (and, when very tight, the buttons themselves) to fit, reserving room on
+// both ends for the Exit (left) and rotation-lock (right) buttons. We only touch
+// constraint constants + the stack spacing — no storyboard surgery — so the app
+// always launches even if the layout assumptions change.
+- (void)osc_layoutAdaptiveToolbarIfNeeded {
+    UIView *bar = self.toolbarRootView;
+    UIStackView *stack = self.toolbarStackView;
+    if (!bar || !stack) { return; }
+    CGFloat barW = bar.bounds.size.width;
+    if (barW <= 1.0) { return; }
+    if (fabs(barW - lastToolbarWidth) < 0.5) { return; } // width unchanged → avoid a relayout loop
+    lastToolbarWidth = barW;
+
+    NSArray<__kindof UIView *> *buttons = stack.arrangedSubviews;
+    NSUInteger n = buttons.count;
+    if (n == 0) { return; }
+
+    const CGFloat kEndReserve = 76.0;   // ~18 margin + 50 button + 8 gap, for Exit/lock on each end
+    const CGFloat kFullSize   = 50.0;
+    const CGFloat kMinSize    = 24.0;   // low enough that even a 320pt screen clears the Exit button
+    const CGFloat kMinSpacing = 6.0;
+    const CGFloat kMaxSpacing = 70.0;   // original storyboard spacing
+
+    CGFloat maxStackW = MAX(0.0, barW - 2.0 * kEndReserve);
+
+    CGFloat buttonSize, spacing;
+    CGFloat fullNeeded = n * kFullSize + (n - 1) * kMinSpacing;
+    if (fullNeeded <= maxStackW) {
+        // Buttons fit at full size; widen spacing back up toward the original look.
+        buttonSize = kFullSize;
+        spacing = (n > 1) ? ((maxStackW - n * kFullSize) / (CGFloat)(n - 1)) : 0.0;
+        spacing = MIN(kMaxSpacing, MAX(kMinSpacing, spacing));
+    } else {
+        // Too tight (portrait): shrink the buttons, keep minimum spacing.
+        spacing = kMinSpacing;
+        buttonSize = (n > 0) ? ((maxStackW - (n - 1) * kMinSpacing) / (CGFloat)n) : kFullSize;
+        buttonSize = MAX(kMinSize, MIN(kFullSize, buttonSize));
+    }
+    CGFloat stackW = n * buttonSize + (n - 1) * spacing;
+
+    stack.spacing = spacing;
+    [self osc_setFixedDimension:NSLayoutAttributeWidth ofView:stack to:stackW];
+    for (UIView *b in buttons) {
+        [self osc_setFixedDimension:NSLayoutAttributeWidth ofView:b to:buttonSize];
+        [self osc_setFixedDimension:NSLayoutAttributeHeight ofView:b to:buttonSize];
+    }
+}
+
+// Set the constant of a view's own fixed width/height constraint (the kind the
+// storyboard adds as `width = N`). No-op if absent.
+- (void)osc_setFixedDimension:(NSLayoutAttribute)attr ofView:(UIView *)view to:(CGFloat)value {
+    for (NSLayoutConstraint *c in view.constraints) {
+        if (c.firstItem == view && c.secondItem == nil
+            && c.firstAttribute == attr && c.relation == NSLayoutRelationEqual) {
+            c.constant = value;
+        }
     }
 }
 
