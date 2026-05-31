@@ -228,13 +228,6 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 // constraint constants + the stack spacing — no storyboard surgery — so the app
 // always launches even if the layout assumptions change.
 - (void)osc_layoutAdaptiveToolbarIfNeeded {
-    // iPhone only. The iPad storyboard lays the toolbar out with a different,
-    // NESTED structure (e.g. the Trash button is wrapped in its own sub-stack), so
-    // blindly resizing toolbarStackView.arrangedSubviews here mangles it (it hid the
-    // Save button). iPad is also wide enough that the fixed row never overflows, so
-    // it doesn't need this adaptive fit at all — leave its storyboard layout intact.
-    if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) { return; }
-
     UIView *bar = self.toolbarRootView;
     UIStackView *stack = self.toolbarStackView;
     if (!bar || !stack) { return; }
@@ -245,7 +238,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 
     NSArray<__kindof UIView *> *buttons = stack.arrangedSubviews;
     NSUInteger n = buttons.count;
-    if (n == 0) { return; }
+    if (n < 2) { return; }
 
     const CGFloat kEndReserve = 76.0;   // ~18 margin + 50 button + 8 gap, for Exit/lock on each end
     const CGFloat kFullSize   = 50.0;
@@ -255,20 +248,46 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 
     CGFloat maxStackW = MAX(0.0, barW - 2.0 * kEndReserve);
 
+    if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        // iPad uses a DIFFERENT, nested toolbar (e.g. the Trash button is wrapped in
+        // its own sub-stack), so resizing the arranged subviews here mangles it — that
+        // is what hid the Save button. But the row is content-sized (no fixed-width
+        // constraint) and the screen is wide enough to keep every button at full size,
+        // so the only thing that overflows in portrait is the inter-button SPACING.
+        // Tighten just the spacing so the centered row shrinks enough to clear the Exit
+        // (left) and lock (right) buttons. Nothing else is touched — no button or
+        // sub-stack can vanish.
+        // The iPad row carries a fixed-width (830pt) constraint AND centerX, so just
+        // changing spacing wouldn't shrink it — it would still overflow in portrait.
+        // Shrink the stack's OWN width to fit the reserved space and tighten spacing to
+        // match. Both are the stack's own properties; the buttons and the nested
+        // sub-stack are never resized, so nothing can disappear.
+        CGFloat buttonsW = (CGFloat)n * kFullSize;                    // six 50pt items
+        CGFloat naturalW = buttonsW + (CGFloat)(n - 1) * kMaxSpacing; // content at the original 70pt spacing
+        CGFloat stackW   = MIN(naturalW, maxStackW);                  // only shrink when it would overflow
+        CGFloat spacing  = MAX(kMinSpacing, (stackW - buttonsW) / (CGFloat)(n - 1));
+        stack.spacing = spacing;
+        [self osc_setFixedDimension:NSLayoutAttributeWidth ofView:stack to:stackW];
+        return;
+    }
+
+    // iPhone: a FLAT, fixed-width (750pt) row that overflows in portrait and collides
+    // with the Exit button. Shrink the row width — and, when very tight, the buttons
+    // themselves — to fit. Touches only constraint constants + the stack spacing.
     CGFloat buttonSize, spacing;
-    CGFloat fullNeeded = n * kFullSize + (n - 1) * kMinSpacing;
+    CGFloat fullNeeded = (CGFloat)n * kFullSize + (CGFloat)(n - 1) * kMinSpacing;
     if (fullNeeded <= maxStackW) {
         // Buttons fit at full size; widen spacing back up toward the original look.
         buttonSize = kFullSize;
-        spacing = (n > 1) ? ((maxStackW - n * kFullSize) / (CGFloat)(n - 1)) : 0.0;
+        spacing = (maxStackW - (CGFloat)n * kFullSize) / (CGFloat)(n - 1);
         spacing = MIN(kMaxSpacing, MAX(kMinSpacing, spacing));
     } else {
         // Too tight (portrait): shrink the buttons, keep minimum spacing.
         spacing = kMinSpacing;
-        buttonSize = (n > 0) ? ((maxStackW - (n - 1) * kMinSpacing) / (CGFloat)n) : kFullSize;
+        buttonSize = (maxStackW - (CGFloat)(n - 1) * kMinSpacing) / (CGFloat)n;
         buttonSize = MAX(kMinSize, MIN(kFullSize, buttonSize));
     }
-    CGFloat stackW = n * buttonSize + (n - 1) * spacing;
+    CGFloat stackW = (CGFloat)n * buttonSize + (CGFloat)(n - 1) * spacing;
 
     stack.spacing = spacing;
     [self osc_setFixedDimension:NSLayoutAttributeWidth ofView:stack to:stackW];
