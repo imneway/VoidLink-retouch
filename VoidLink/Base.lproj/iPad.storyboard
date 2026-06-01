@@ -1279,7 +1279,7 @@
                             <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="fZU-G0-fgM" userLabel="Toolbar Root View" customClass="ToolBarContainerView">
                                 <rect key="frame" x="0.0" y="24" width="1300" height="50"/>
                                 <subviews>
-                                    <stackView autoresizesSubviews="NO" contentMode="scaleToFill" spacing="70" translatesAutoresizingMaskIntoConstraints="NO" id="YLK-IE-ajS">
+                                    <stackView autoresizesSubviews="NO" contentMode="scaleToFill" spacing="40" translatesAutoresizingMaskIntoConstraints="NO" id="YLK-IE-ajS">
                                         <rect key="frame" x="235" y="0.0" width="830" height="50"/>
                                         <subviews>
                                             <button autoresizesSubviews="NO" opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="F7X-l4-cl3" userLabel="Undo">
@@ -1398,8 +1398,7 @@
                                         </subviews>
                                         <constraints>
                                             <constraint firstItem="EPu-dl-Tv8" firstAttribute="centerY" secondItem="YLK-IE-ajS" secondAttribute="centerY" id="9Du-ZM-F8k"/>
-                                            <constraint firstItem="EPu-dl-Tv8" firstAttribute="centerX" secondItem="YLK-IE-ajS" secondAttribute="centerX" id="9ua-n0-eG4"/>
-                                            <constraint firstAttribute="width" constant="830" id="zzS-yc-O4H"/>
+                                            <constraint firstAttribute="width" constant="500" id="zzS-yc-O4H"/>
                                         </constraints>
                                     </stackView>
                                     <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="hKp-ds-86I" userLabel="Chevron View">
