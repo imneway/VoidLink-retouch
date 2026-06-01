@@ -2384,7 +2384,12 @@ import UIKit
         // confuse the next slide-capture pass.
         capturedTouches.removeAllObjects()
 
-        if OnScreenWidgetView.obscuredByAlpha || superview?.alpha ?? 1.0 < 0.05 {
+        // In the layout editor (editMode) widgets must always stay visible. They must
+        // never inherit the streaming OSC's obscure-by-alpha state — otherwise a touch
+        // cancelled mid-drag (a device tilt cancels active touches) drops the widget to
+        // 0.02 and it "vanishes" while editing. Guard the whole obscure condition with
+        // !editMode (parenthesised: && binds tighter than ||).
+        if (OnScreenWidgetView.obscuredByAlpha || superview?.alpha ?? 1.0 < 0.05) && !OnScreenWidgetView.editMode {
             self.alpha = 0.02
         } else {
             tweakAlpha()
@@ -2581,8 +2586,10 @@ import UIKit
         }
         
         self.handlebuttonUp()
-        // Restore alpha if we highlighted in touchesBegan
-        if restoreAlphaAfterRelease && (OnScreenWidgetView.obscuredByAlpha || self.superview?.alpha ?? 1.0 < 0.05) {
+        // Restore alpha if we highlighted in touchesBegan. Never re-hide a widget while
+        // editing (editMode) — see the touchesCancelled note above; lifting the finger
+        // after positioning a widget would otherwise drop it to 0.02.
+        if restoreAlphaAfterRelease && !OnScreenWidgetView.editMode && (OnScreenWidgetView.obscuredByAlpha || self.superview?.alpha ?? 1.0 < 0.05) {
             self.alpha = 0.02
             restoreAlphaAfterRelease = false
         }
