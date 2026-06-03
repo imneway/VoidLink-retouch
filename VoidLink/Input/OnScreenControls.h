@@ -155,7 +155,10 @@ typedef NS_ENUM(NSInteger, OnScreenControlsLevel) {
 // (e.g. "OSCA" -> the A button) when that widget is pressed / released. Sends no input
 // and no haptics; no-op when OSC is off or the button isn't currently shown, so it can
 // never flash a hidden legacy button. Driven from OnScreenWidgetView.handleButtonDown/Up.
-- (void)mirrorLegacyButtonHighlightForString:(NSString *)buttonString pressed:(BOOL)pressed;
+// NS_SWIFT_NAME pins the Swift signature so the importer's "omit needless words" rule
+// (which would otherwise drop "String" -> mirrorLegacyButtonHighlight(for:pressed:))
+// doesn't drift away from the call sites in OnScreenWidgetView.
+- (void)mirrorLegacyButtonHighlightForString:(NSString *)buttonString pressed:(BOOL)pressed NS_SWIFT_NAME(mirrorLegacyButtonHighlight(forString:pressed:));
 - (void) setLevel:(OnScreenControlsLevel)level;
 - (void) show;
 - (void) setupComplexControls;
