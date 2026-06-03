@@ -81,6 +81,9 @@ static NSSet *validPositionButtonNames;
     NSMutableDictionary *_activeCustomOscButtonPositionDict;
     NSMutableDictionary *_originalControllerLayerOpacityDict;
     BOOL _obscuredByAlpha;
+    // Layer names we mirror-highlighted on behalf of a pressed widget, so the release
+    // path clears exactly those (and only those) even if the button was hidden meanwhile.
+    NSMutableSet<NSString *> *_mirroredButtonNames;
     NSMutableDictionary<NSString *, CAShapeLayer *> *_buttonCenterIndicators;
     NSMutableDictionary<NSString *, CAShapeLayer *> *_buttonCenterIndicatorBases;
 }
@@ -325,6 +328,7 @@ static float L3_Y;
     }
     
     _originalControllerLayerOpacityDict = [[NSMutableDictionary alloc] init];
+    _mirroredButtonNames = [[NSMutableSet alloc] init];
     // we have to retrieve largerStickLR1 setting direct from the database, since streamConfig is invalid in LayoutOnScreenControls
     // DataManager* dataMan = [[DataManager alloc] init];
     _largerStickLR1 = true;
@@ -1291,6 +1295,12 @@ static float L3_Y;
 
 
 - (void)oscButtonTouchDownFeedback:(CALayer* )button{
+    [self oscButtonTouchDownFeedback:button withHaptics:YES];
+}
+
+// Same press visual, with optional haptics. The widget->legacy mirror highlight passes
+// NO so it never double-buzzes (the pressing widget already fired its own haptic).
+- (void)oscButtonTouchDownFeedback:(CALayer* )button withHaptics:(BOOL)haptics{
     [CATransaction begin];
     [CATransaction setDisableActions:YES]; 
     
@@ -1330,7 +1340,7 @@ static float L3_Y;
     }
     // NSLog(@"vibration on: %d",vibraiontOn);
 
-    if(vibraiontOn){
+    if(haptics && vibraiontOn){
         vibrationGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:vibrationStyle];
         [vibrationGenerator prepare];
         [vibrationGenerator impactOccurred];
@@ -1339,6 +1349,74 @@ static float L3_Y;
 
     
     [CATransaction commit];
+}
+
+#pragma mark - Widget -> legacy mirror highlight (visual only)
+
+// Map a custom-widget command token (CommandManager.oscButtonMappings keys) to the
+// legacy OSC CALayer it corresponds to. Buttons only; sticks / touchpads return nil so
+// they are never mirrored.
+- (CALayer *)osc_legacyLayerForButtonString:(NSString *)s {
+    if ([s isEqualToString:@"OSCA"]) return self._aButton;
+    if ([s isEqualToString:@"OSCB"]) return self._bButton;
+    if ([s isEqualToString:@"OSCX"]) return self._xButton;
+    if ([s isEqualToString:@"OSCY"]) return self._yButton;
+    if ([s isEqualToString:@"OSCUP"]) return self._upButton;
+    if ([s isEqualToString:@"OSCDOWN"]) return self._downButton;
+    if ([s isEqualToString:@"OSCLEFT"]) return self._leftButton;
+    if ([s isEqualToString:@"OSCRIGHT"]) return self._rightButton;
+    if ([s isEqualToString:@"OSCL1"] || [s isEqualToString:@"L1"] || [s isEqualToString:@"LB"]) return self._l1Button;
+    if ([s isEqualToString:@"OSCR1"] || [s isEqualToString:@"R1"] || [s isEqualToString:@"RB"]) return self._r1Button;
+    if ([s isEqualToString:@"OSCL2"] || [s isEqualToString:@"L2"] || [s isEqualToString:@"LT"]) return self._l2Button;
+    if ([s isEqualToString:@"OSCR2"] || [s isEqualToString:@"R2"] || [s isEqualToString:@"RT"]) return self._r2Button;
+    // L3/R3 (stick-click) deliberately excluded: the legacy l3/r3 buttons use a
+    // borderWidth toggle (and are a toggle, not a momentary press), not the shared
+    // oscButtonTouchDownFeedback visual — so they can't mirror cleanly. Sticks were
+    // scoped out anyway.
+    if ([s isEqualToString:@"OSCSTART"] || [s isEqualToString:@"OSCPLAY"]) return self._startButton;
+    if ([s isEqualToString:@"OSCSELECT"] || [s isEqualToString:@"OSCBACK"]) return self._selectButton;
+    return nil;
+}
+
+// Single-layer form of the visibility test in pointHitsAnyVisibleLegacyOscButton:. A
+// legacy button counts as shown only when OSC isn't off and the layer plus every
+// ancestor up to the host layer are unhidden / non-transparent and genuinely attached
+// (the legacy hide paths detach layers but leave .hidden = NO).
+- (BOOL)osc_isLegacyLayerVisible:(CALayer *)layer {
+    if (self._level == OnScreenControlsLevelOff) return NO;
+    if (!layer || layer.hidden || layer.opacity <= 0.0f) return NO;
+    if (CGRectIsEmpty(layer.bounds)) return NO;
+    CALayer *hostLayer = _view.layer;
+    if (!hostLayer) return NO;
+    for (CALayer *ancestor = layer.superlayer; ancestor; ancestor = ancestor.superlayer) {
+        if (ancestor.hidden || ancestor.opacity <= 0.0f) return NO;
+        if (ancestor == hostLayer) return YES;
+    }
+    return NO;
+}
+
+// Visual-only mirror of a legacy OSC button's pressed highlight, driven by a custom OSC
+// widget so pressing e.g. an "OSCA" widget also lights the legacy A button. Reuses the
+// exact press / release visuals, fires NO controller event and NO haptics (the widget
+// already did both). No-op when OSC is off or that button isn't shown.
+- (void)mirrorLegacyButtonHighlightForString:(NSString *)buttonString pressed:(BOOL)pressed {
+    CALayer *layer = [self osc_legacyLayerForButtonString:buttonString];
+    if (!layer || layer.name == nil) return;
+    if (pressed) {
+        // Only light a button that's actually shown — never flash a hidden one.
+        if (![self osc_isLegacyLayerVisible:layer]) return;
+        [self oscButtonTouchDownFeedback:layer withHaptics:NO];
+        if (_obscuredByAlpha) { layer.opacity = 1.0; }
+        [_mirroredButtonNames addObject:layer.name];
+    } else {
+        // Clear only buttons WE lit, unconditionally (even if the layer was hidden since
+        // the press) so a mirror highlight can never get stuck, and so we never disturb a
+        // button we didn't light (e.g. one currently held by a real legacy touch).
+        if (![_mirroredButtonNames containsObject:layer.name]) return;
+        [_mirroredButtonNames removeObject:layer.name];
+        layer.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[layer.name] floatValue];
+        layer.shadowOpacity = 0.0;
+    }
 }
 
 

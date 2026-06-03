@@ -151,6 +151,11 @@ typedef NS_ENUM(NSInteger, OnScreenControlsLevel) {
 // touches through when they overlap an OSC button (the pad layer sits visually below
 // the OSC layer; touch routing has to follow).
 - (BOOL) pointHitsAnyVisibleLegacyOscButton:(CGPoint)point;
+// Visual-only: light the legacy OSC button matching a custom widget's command token
+// (e.g. "OSCA" -> the A button) when that widget is pressed / released. Sends no input
+// and no haptics; no-op when OSC is off or the button isn't currently shown, so it can
+// never flash a hidden legacy button. Driven from OnScreenWidgetView.handleButtonDown/Up.
+- (void)mirrorLegacyButtonHighlightForString:(NSString *)buttonString pressed:(BOOL)pressed;
 - (void) setLevel:(OnScreenControlsLevel)level;
 - (void) show;
 - (void) setupComplexControls;

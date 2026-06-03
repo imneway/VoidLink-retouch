@@ -1664,6 +1664,14 @@ import UIKit
         if !OnScreenWidgetView.editMode && !CommandManager.specialOverlayButtonCmds.contains(self.cmdString) {
             self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)
             self.handleMotionControlButtonDown()
+            // Mirror the press onto the matching legacy OSC button(s) — visual only.
+            // Buttons only (touchpads / sticks never run handleButtonDown); a no-op when
+            // the legacy button isn't currently shown (guarded in OnScreenControls).
+            if self.widgetType == WidgetTypeEnum.button {
+                for token in self.comboButtonStrings {
+                    self.onScreenControls.mirrorLegacyButtonHighlight(forString: token, pressed: true)
+                }
+            }
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -1686,6 +1694,12 @@ import UIKit
         if !OnScreenWidgetView.editMode && !CommandManager.specialOverlayButtonCmds.contains(self.cmdString) {
             self.sendComboButtonsUpEvent(comboStrings: self.comboButtonStrings)
             self.handleMotionControlButtonUp()
+            // Release the mirrored legacy-button highlight (visual only; see handleButtonDown).
+            if self.widgetType == WidgetTypeEnum.button {
+                for token in self.comboButtonStrings {
+                    self.onScreenControls.mirrorLegacyButtonHighlight(forString: token, pressed: false)
+                }
+            }
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
