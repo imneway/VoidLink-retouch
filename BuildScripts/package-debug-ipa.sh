@@ -16,6 +16,7 @@ DEST_IPA="$DEST_DIR/Payload.ipa"
 cd "$REPO_ROOT"
 
 xcodebuild \
+  -quiet \
   -project "$REPO_ROOT/VoidLink.xcodeproj" \
   -scheme VoidLink \
   -configuration Debug \
