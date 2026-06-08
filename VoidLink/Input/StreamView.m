@@ -591,7 +591,10 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
                       (buttonState.minStickOffset <= 0 || fabs(buttonState.minStickOffset - 0x7FFE * 0.12) < 8))) {
                     widgetView.minStickOffset = buttonState.minStickOffset;
                 }
-                if (buttonState.stickInputScale > 0) widgetView.stickInputScale = buttonState.stickInputScale;
+                if (buttonState.stickInputScale > 0 &&
+                    !(widgetView.hasAimTweak && fabs(buttonState.stickInputScale - 55) < 0.5)) {
+                    widgetView.stickInputScale = buttonState.stickInputScale;
+                }
                 if (buttonState.stickResponseExponent >= 1.0 &&
                     !(widgetView.hasAimTweak &&
                       (fabs(buttonState.stickResponseExponent - 1.62) < 0.02 ||

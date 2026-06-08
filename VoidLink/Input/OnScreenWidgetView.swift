@@ -221,12 +221,10 @@ import UIKit
 
     private var aimStopTimer: Timer?
     private var aimLastMoveTimestamp: CFTimeInterval = 0
-    private var aimFilteredDelta: CGPoint = .zero
-    private let aimStopDelay: TimeInterval = 0.045
-    private let aimDeadDelta: CGFloat = 0.01
-    private let aimDeltaSmoothing: CGFloat = 0.0
-    private let aimDeltaToStickMultiplier: CGFloat = 1.5167
-    private let aimReferenceStickInputScale: CGFloat = 35.0
+    private var aimAnchorLocation: CGPoint = .zero
+    private var aimHasAnchor = false
+    private let aimStopDelay: TimeInterval = 0.10
+    private let aimDeadOffset: CGFloat = 0.25
     
     // trackball
     private var trackballVelocity: CGPoint = .zero
@@ -349,6 +347,7 @@ import UIKit
                     self.hasResponseCurveTweak = true
                 }
                 if self.touchPadString == "RSPADALT2" {
+                    self.stickInputScale = 35
                     self.stickResponseExponent = 1.0
                     self.minStickOffset = 0
                     self.aimMaxOutputScale = 1.0
@@ -1851,7 +1850,8 @@ import UIKit
     private func resetAimStickState(clearHostStick: Bool) {
         aimStopTimer?.invalidate()
         aimStopTimer = nil
-        aimFilteredDelta = .zero
+        aimAnchorLocation = .zero
+        aimHasAnchor = false
         aimLastMoveTimestamp = 0
         if clearHostStick {
             self.onScreenControls.clearRightStickTouchPadFlag()
@@ -1864,7 +1864,8 @@ import UIKit
             guard let self = self else { return }
             guard self.isAimStickPad, self.pressed else { return }
             if CACurrentMediaTime() - self.aimLastMoveTimestamp >= self.aimStopDelay {
-                self.aimFilteredDelta = .zero
+                self.aimAnchorLocation = self.latestTouchLocation
+                self.aimHasAnchor = true
                 self.offSetX = 0
                 self.offSetY = 0
                 self.onScreenControls.clearRightStickTouchPadFlag()
@@ -1877,53 +1878,54 @@ import UIKit
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    private func sendRightAimStickDeltaEvent(rawDeltaX: CGFloat, rawDeltaY: CGFloat) {
-        let rawDeltaMagnitude = hypot(rawDeltaX, rawDeltaY)
-        guard rawDeltaMagnitude >= aimDeadDelta else {
+    private func applyAimDeadzoneFloor(_ target: CGFloat) -> CGFloat {
+        guard target != 0, minStickOffset > 0 else { return target }
+        return (target >= 0 ? 1.0 : -1.0) * minStickOffset
+            + (stickMaxOffset - minStickOffset) * (target / stickMaxOffset)
+    }
+
+    private func sendRightAimStickOffsetEvent(rawOffsetX: CGFloat, rawOffsetY: CGFloat) {
+        let rawOffsetMagnitude = hypot(rawOffsetX, rawOffsetY)
+        guard rawOffsetMagnitude >= aimDeadOffset else {
             self.offSetX = 0
             self.offSetY = 0
             self.onScreenControls.clearRightStickTouchPadFlag()
             return
         }
 
-        // Baseline intentionally mirrors RSVPAD's delta-to-stick conversion, with only
-        // an RSPADALT2-specific max-output cap and stop-on-idle behavior layered on top.
-        let maxOutput = stickMaxOffset * aimMaxOutputScale
-        let outputMagnitude = min(
-            rawDeltaMagnitude * stickMaxOffset * aimDeltaToStickMultiplier / aimReferenceStickInputScale,
-            maxOutput
-        )
+        self.offSetX = min(max(rawOffsetX, -stickInputScale), stickInputScale)
+        self.offSetY = min(max(rawOffsetY, -stickInputScale), stickInputScale)
 
-        let rawUnitX = rawDeltaX / rawDeltaMagnitude
-        let rawUnitY = rawDeltaY / rawDeltaMagnitude
-        let visualMagnitude = maxOutput > 0 ? min(outputMagnitude / maxOutput, 1) : 0
-        self.offSetX = rawUnitX * stickInputScale * visualMagnitude
-        self.offSetY = rawUnitY * stickInputScale * visualMagnitude
+        let adjX = self.stickInvertHorizontal ? -rawOffsetX : rawOffsetX
+        let adjY = self.stickInvertVertical ? -rawOffsetY : rawOffsetY
+        var targetX = applyAimDeadzoneFloor(self.touchInputToStickInput(input: adjX))
+        var targetY = applyAimDeadzoneFloor(-self.touchInputToStickInput(input: adjY))
 
-        let hostUnitX = (self.stickInvertHorizontal ? -rawDeltaX : rawDeltaX) / rawDeltaMagnitude
-        let hostUnitY = (self.stickInvertVertical ? -rawDeltaY : rawDeltaY) / rawDeltaMagnitude
-        let targetX = hostUnitX * outputMagnitude
-        let targetY = -hostUnitY * outputMagnitude
+        let maxOutputMagnitude = stickMaxOffset * aimMaxOutputScale
+        let outputMagnitude = hypot(targetX, targetY)
+        if outputMagnitude > maxOutputMagnitude && outputMagnitude > 0 {
+            let scale = maxOutputMagnitude / outputMagnitude
+            targetX *= scale
+            targetY *= scale
+        }
         self.onScreenControls.sendRightStickTouchPadEvent(targetX, targetY)
     }
 
     private func handleRightAimStickMove(touch: UITouch) {
         let now = CACurrentMediaTime()
-        self.updateTouchLocation(touch: touch)
+        let currentLocation = touch.location(in: self)
+        self.deltaX = currentLocation.x - self.latestTouchLocation.x
+        self.deltaY = currentLocation.y - self.latestTouchLocation.y
+        self.latestTouchLocation = currentLocation
+        if !aimHasAnchor {
+            aimAnchorLocation = touchBeganLocation
+            aimHasAnchor = true
+        }
         aimLastMoveTimestamp = now
 
-        let deltaX = self.deltaX * self.sensitivityFactorX
-        let deltaY = self.deltaY * self.sensitivityFactorY
-        if aimFilteredDelta == .zero {
-            aimFilteredDelta = CGPoint(x: deltaX, y: deltaY)
-        } else {
-            aimFilteredDelta = CGPoint(
-                x: aimFilteredDelta.x * aimDeltaSmoothing + deltaX * (1.0 - aimDeltaSmoothing),
-                y: aimFilteredDelta.y * aimDeltaSmoothing + deltaY * (1.0 - aimDeltaSmoothing)
-            )
-        }
-
-        self.sendRightAimStickDeltaEvent(rawDeltaX: aimFilteredDelta.x, rawDeltaY: aimFilteredDelta.y)
+        let offsetX = (currentLocation.x - aimAnchorLocation.x) * self.sensitivityFactorX
+        let offsetY = (currentLocation.y - aimAnchorLocation.y) * self.sensitivityFactorY
+        self.sendRightAimStickOffsetEvent(rawOffsetX: offsetX, rawOffsetY: offsetY)
         self.scheduleAimStickStopCheck()
     }
 
