@@ -234,15 +234,14 @@ import UIKit
     private let aimFastBoostFull: CGFloat = 7.0
     private let aimSmoothingSlowAlpha: CGFloat = 0.58
     private let aimSmoothingFastAlpha: CGFloat = 0.86
-    private let aimRelativeJitterDeadzone: CGFloat = 0.12
-    private let aimRelativeMicroFull: CGFloat = 0.85
-    private let aimRelativeGain: CGFloat = 1.35
-    private let aimRelativeAccelerationStart: CGFloat = 160.0
-    private let aimRelativeAccelerationFull: CGFloat = 1250.0
-    private let aimRelativeAccelerationBoost: CGFloat = 2.1
-    private let aimRelativeSmoothingSlowAlpha: CGFloat = 0.32
+    private let aimRelativeJitterDeadzone: CGFloat = 0.05
+    private let aimRelativeVelocityGain: CGFloat = 0.065
+    private let aimRelativeAccelerationStart: CGFloat = 260.0
+    private let aimRelativeAccelerationFull: CGFloat = 1200.0
+    private let aimRelativeAccelerationBoost: CGFloat = 0.9
+    private let aimRelativeSmoothingSlowAlpha: CGFloat = 0.42
     private let aimRelativeSmoothingFastAlpha: CGFloat = 0.90
-    private let aimRelativeVisualGain: CGFloat = 4.0
+    private let aimRelativeVisualGain: CGFloat = 9.0
     
     // trackball
     private var trackballVelocity: CGPoint = .zero
@@ -1993,24 +1992,40 @@ import UIKit
         )
     }
 
-    private func sendRightAimStickRelativeEvent(deltaX: CGFloat, deltaY: CGFloat, elapsed: CFTimeInterval) {
-        let deltaMagnitude = hypot(deltaX, deltaY)
-        guard deltaMagnitude >= aimRelativeJitterDeadzone else {
+    private func decayRelativeAimOutput() {
+        guard aimHasFilteredTarget else {
             self.offSetX = 0
             self.offSetY = 0
-            self.aimFilteredTarget = .zero
-            self.aimHasFilteredTarget = false
             self.onScreenControls.clearRightStickTouchPadFlag()
             return
         }
 
-        let clampedElapsed = min(max(CGFloat(elapsed), 1.0 / 240.0), 1.0 / 20.0)
+        aimFilteredTarget.x *= 0.55
+        aimFilteredTarget.y *= 0.55
+        self.offSetX = 0
+        self.offSetY = 0
+
+        if hypot(aimFilteredTarget.x, aimFilteredTarget.y) < stickMaxOffset * 0.012 {
+            aimFilteredTarget = .zero
+            aimHasFilteredTarget = false
+            self.onScreenControls.clearRightStickTouchPadFlag()
+            return
+        }
+
+        self.onScreenControls.sendRightStickTouchPadEvent(aimFilteredTarget.x, aimFilteredTarget.y)
+    }
+
+    private func sendRightAimStickRelativeEvent(deltaX: CGFloat, deltaY: CGFloat, elapsed: CFTimeInterval) {
+        let deltaMagnitude = hypot(deltaX, deltaY)
+        guard deltaMagnitude >= aimRelativeJitterDeadzone else {
+            decayRelativeAimOutput()
+            return
+        }
+
+        let clampedElapsed = min(max(CGFloat(elapsed), 1.0 / 240.0), 1.0 / 30.0)
         let speed = deltaMagnitude / clampedElapsed
-        let microT = smoothStep((deltaMagnitude - aimRelativeJitterDeadzone) / (aimRelativeMicroFull - aimRelativeJitterDeadzone))
-        let precisionScale = 0.35 + 0.65 * microT
         let speedT = smoothStep((speed - aimRelativeAccelerationStart) / (aimRelativeAccelerationFull - aimRelativeAccelerationStart))
-        let acceleration = 1.0 + aimRelativeAccelerationBoost * speedT
-        let responseScale = aimRelativeGain * precisionScale * acceleration
+        let velocityScale = aimRelativeVelocityGain * (1.0 + aimRelativeAccelerationBoost * speedT)
 
         let visualOffset = clampVector(
             x: deltaX * aimRelativeVisualGain,
@@ -2021,12 +2036,23 @@ import UIKit
         self.offSetY = visualOffset.y
 
         let source = clampVector(
-            x: deltaX * responseScale,
-            y: deltaY * responseScale,
+            x: (deltaX / clampedElapsed) * velocityScale,
+            y: (deltaY / clampedElapsed) * velocityScale,
             radius: stickInputScale
         )
-        let adjX = self.stickInvertHorizontal ? -source.x : source.x
-        let adjY = self.stickInvertVertical ? -source.y : source.y
+        var adjX = self.stickInvertHorizontal ? -source.x : source.x
+        var adjY = self.stickInvertVertical ? -source.y : source.y
+
+        let sourceMagnitude = hypot(adjX, adjY)
+        if sourceMagnitude > 0 {
+            let floorT = smoothStep((speed - 18.0) / 140.0)
+            let floorMagnitude = stickInputScale * (0.018 + 0.045 * floorT)
+            if sourceMagnitude < floorMagnitude {
+                let scale = floorMagnitude / sourceMagnitude
+                adjX *= scale
+                adjY *= scale
+            }
+        }
 
         var targetX = self.touchInputToStickInput(input: adjX)
         var targetY = -self.touchInputToStickInput(input: adjY)
