@@ -471,6 +471,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
             widgetView.minStickOffset = buttonState.minStickOffset;
             if (buttonState.stickInputScale > 0) widgetView.stickInputScale = buttonState.stickInputScale;
             if (buttonState.stickResponseExponent >= 1.0) widgetView.stickResponseExponent = buttonState.stickResponseExponent;
+            if (buttonState.aimMaxOutputScale > 0) widgetView.aimMaxOutputScale = buttonState.aimMaxOutputScale;
             widgetView.stickInvertVertical = buttonState.stickInvertVertical;
             widgetView.stickInvertHorizontal = buttonState.stickInvertHorizontal;
             widgetView.slideMode = buttonState.slideMode;
@@ -1140,6 +1141,9 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         newWidget.stickInvertVertical = widget.stickInvertVertical;
         newWidget.stickInvertHorizontal = widget.stickInvertHorizontal;
     }
+    if (widget.hasAimTweak && newWidget.hasAimTweak) {
+        newWidget.aimMaxOutputScale = widget.aimMaxOutputScale;
+    }
     [newWidget setVibrationWithStyle:widget.vibrationStyle];
     newWidget.mouseButtonAction = widget.mouseButtonAction;
     newWidget.slideMode = widget.slideMode;
@@ -1291,10 +1295,12 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     bool showSensitivityFactorStack = selectedWidgetView.hasSensitivityTweak && !isFullscreenTrigger;
     bool showStickIndicatorOffsetStack = selectedWidgetView.hasStickIndicator && !isFullscreenTrigger;
     bool showResponseCurveStack = selectedWidgetView.hasResponseCurveTweak && !isFullscreenTrigger;
+    bool showAimTweakStack = selectedWidgetView.hasAimTweak && !isFullscreenTrigger;
 
     self.sensitivityXStack.hidden = self.sensitivityYStack.hidden = !showSensitivityFactorStack;
     self.stickIndicatorOffsetStack.hidden = !showStickIndicatorOffsetStack;
     self.stickInputScaleStack.hidden = self.stickResponseExponentStack.hidden = !showResponseCurveStack;
+    self.aimMaxOutputStack.hidden = !showAimTweakStack;
     self.stickInvertVerticalStack.hidden = self.stickInvertHorizontalStack.hidden = !showResponseCurveStack;
     self.mouseDownButtonStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"MOUSEPAD"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
     self.decelerationRateStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"TRACKBALL"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
@@ -1337,6 +1343,11 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         [self.stickResponseExponentLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Curve: %.2f", self->selectedWidgetView.stickResponseExponent]];
         self.stickInvertVerticalSwitch.on = self->selectedWidgetView.stickInvertVertical;
         self.stickInvertHorizontalSwitch.on = self->selectedWidgetView.stickInvertHorizontal;
+    }
+    if(showAimTweakStack){
+        [self.aimMaxOutputSlider setValue:self->selectedWidgetView.aimMaxOutputScale];
+        [self autoFitLabel:self.aimMaxOutputLabel];
+        [self.aimMaxOutputLabel setText:[LocalizationHelper localizedStringForKey:@"Max Output: %.2f", self->selectedWidgetView.aimMaxOutputScale]];
     }
     [self autoFitLabel:self.widgetSizeLabel];
     
@@ -1382,6 +1393,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.mouseDownButtonStack.hidden = true;
     self.decelerationRateStack.hidden = true;
     self.stickInputScaleStack.hidden = self.stickResponseExponentStack.hidden = true;
+    self.aimMaxOutputStack.hidden = true;
     self.stickInvertVerticalStack.hidden = self.stickInvertHorizontalStack.hidden = true;
     
     self->controllerLayerSelected = true;
@@ -1543,6 +1555,13 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     }
 }
 
+- (void)aimMaxOutputSliderMoved:(UISlider* )sender{
+    [self.aimMaxOutputLabel setText:[LocalizationHelper localizedStringForKey:@"Max Output: %.2f", sender.value]];
+    if(self->selectedWidgetView != nil && self->widgetViewSelected){
+        self->selectedWidgetView.aimMaxOutputScale = sender.value;
+    }
+}
+
 - (void)installResponseCurveSliders{
     UIColor* whiteColor = [UIColor whiteColor];
     UIFont* labelFont = [UIFont systemFontOfSize:18];
@@ -1589,6 +1608,26 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     [self.stickResponseExponentStack.heightAnchor constraintEqualToConstant:20].active = YES;
     self.stickResponseExponentStack.hidden = YES;
     [self.widgetPanelStack addArrangedSubview:self.stickResponseExponentStack];
+
+    self.aimMaxOutputLabel = [[UILabel alloc] init];
+    self.aimMaxOutputLabel.font = labelFont;
+    self.aimMaxOutputLabel.textColor = whiteColor;
+    self.aimMaxOutputLabel.text = [LocalizationHelper localizedStringForKey:@"Max Output"];
+    [self.aimMaxOutputLabel.widthAnchor constraintEqualToConstant:160].active = YES;
+
+    self.aimMaxOutputSlider = [[UISlider alloc] init];
+    self.aimMaxOutputSlider.minimumValue = 0.20;
+    self.aimMaxOutputSlider.maximumValue = 1.0;
+    self.aimMaxOutputSlider.value = 0.72;
+    self.aimMaxOutputSlider.tintColor = sliderTint;
+    [self.aimMaxOutputSlider addTarget:self action:@selector(aimMaxOutputSliderMoved:) forControlEvents:UIControlEventValueChanged];
+
+    self.aimMaxOutputStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.aimMaxOutputLabel, self.aimMaxOutputSlider]];
+    self.aimMaxOutputStack.axis = UILayoutConstraintAxisHorizontal;
+    self.aimMaxOutputStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.aimMaxOutputStack.heightAnchor constraintEqualToConstant:20].active = YES;
+    self.aimMaxOutputStack.hidden = YES;
+    [self.widgetPanelStack addArrangedSubview:self.aimMaxOutputStack];
 
     // Vertical / horizontal output flip switches. Apply on the host-bound
     // values only; finger-space indicator visuals stay un-mirrored.

@@ -115,10 +115,10 @@ import UIKit
         "OSCBACK"
     ]
     
-    @objc public static let touchPadCmds: [String] = ["LSVPAD", "RSVPAD", "LSPAD", "LSPADALT", "RSPAD", "RSPADALT", "DS4TOUCH", "MOUSEPAD", "DPAD", "TRACKBALL", "WASDPAD", "ARROWPAD"]
+    @objc public static let touchPadCmds: [String] = ["LSVPAD", "RSVPAD", "LSPAD", "LSPADALT", "RSPAD", "RSPADALT", "RSPADALT2", "DS4TOUCH", "MOUSEPAD", "DPAD", "TRACKBALL", "WASDPAD", "ARROWPAD"]
     @objc public static let directionPads: [String] = ["DPAD", "WASDPAD", "ARROWPAD"]
-    @objc public static let stickTouchPads: [String] = ["LSVPAD", "RSVPAD", "LSPAD", "LSPADALT", "RSPAD", "RSPADALT"]
-    @objc public static let nonVectorStickPads: [String] = ["LSPAD", "LSPADALT", "RSPAD", "RSPADALT"]
+    @objc public static let stickTouchPads: [String] = ["LSVPAD", "RSVPAD", "LSPAD", "LSPADALT", "RSPAD", "RSPADALT", "RSPADALT2"]
+    @objc public static let nonVectorStickPads: [String] = ["LSPAD", "LSPADALT", "RSPAD", "RSPADALT", "RSPADALT2"]
     @objc public static let specialOverlayButtonCmds: [String] = ["SETTINGS", "CMD"]
 
     // Motion-control command tokens. A widget cmdString containing one of these
