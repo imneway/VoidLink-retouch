@@ -468,10 +468,18 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
             widgetView.sensitivityFactorY = buttonState.sensitivityFactorY;
             widgetView.trackballDecelerationRate = buttonState.decelerationRate;
             widgetView.stickIndicatorOffset = buttonState.stickIndicatorOffset;
-            widgetView.minStickOffset = buttonState.minStickOffset;
+            if (!(widgetView.hasAimTweak && buttonState.minStickOffset <= 0)) {
+                widgetView.minStickOffset = buttonState.minStickOffset;
+            }
             if (buttonState.stickInputScale > 0) widgetView.stickInputScale = buttonState.stickInputScale;
-            if (buttonState.stickResponseExponent >= 1.0) widgetView.stickResponseExponent = buttonState.stickResponseExponent;
-            if (buttonState.aimMaxOutputScale > 0) widgetView.aimMaxOutputScale = buttonState.aimMaxOutputScale;
+            if (buttonState.stickResponseExponent >= 1.0 &&
+                !(widgetView.hasAimTweak && fabs(buttonState.stickResponseExponent - 1.62) < 0.02)) {
+                widgetView.stickResponseExponent = buttonState.stickResponseExponent;
+            }
+            if (buttonState.aimMaxOutputScale > 0 &&
+                !(widgetView.hasAimTweak && fabs(buttonState.aimMaxOutputScale - 0.72) < 0.02)) {
+                widgetView.aimMaxOutputScale = buttonState.aimMaxOutputScale;
+            }
             widgetView.stickInvertVertical = buttonState.stickInvertVertical;
             widgetView.stickInvertHorizontal = buttonState.stickInvertHorizontal;
             widgetView.slideMode = buttonState.slideMode;
@@ -1132,7 +1140,9 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     newWidget.sensitivityFactorY = widget.sensitivityFactorY;
     newWidget.trackballDecelerationRate = widget.trackballDecelerationRate;
     newWidget.stickIndicatorOffset = widget.stickIndicatorOffset;
-    newWidget.minStickOffset = [widgetInitParams[@"minStickOffsetString"] floatValue];
+    if ([widgetInitParams[@"minStickOffsetString"] length] > 0 || !newWidget.hasAimTweak) {
+        newWidget.minStickOffset = [widgetInitParams[@"minStickOffsetString"] floatValue];
+    }
     // Only carry response-curve tunables across when both old and new are ALT pads;
     // otherwise the new widget keeps its type-appropriate init defaults.
     if (widget.hasResponseCurveTweak && newWidget.hasResponseCurveTweak) {
@@ -1177,7 +1187,9 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     OnScreenWidgetView* widgetView = [[OnScreenWidgetView alloc] initWithCmdString:widgetInitParams[@"cmdString"] buttonLabel:widgetInitParams[@"buttonLabel"] shape:widgetInitParams[@"shape"]];
     widgetView.guidelineDelegate = (id<OnScreenWidgetGuidelineUpdateDelegate>)self;
     widgetView.translatesAutoresizingMaskIntoConstraints = NO; // weird but this is mandatory, or you will find no key views added to the right place
-    widgetView.minStickOffset = [widgetInitParams[@"minStickOffsetString"] floatValue];
+    if ([widgetInitParams[@"minStickOffsetString"] length] > 0 || !widgetView.hasAimTweak) {
+        widgetView.minStickOffset = [widgetInitParams[@"minStickOffsetString"] floatValue];
+    }
     [self.onScreenWidgetViews addObject:widgetView];
     // Add to the editor view in the right z-order band (see insertWidgetInEditorZOrder:),
     // then anchor: fullscreen trigger goes to view center, everything else to a spawn slot.
@@ -1618,7 +1630,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.aimMaxOutputSlider = [[UISlider alloc] init];
     self.aimMaxOutputSlider.minimumValue = 0.20;
     self.aimMaxOutputSlider.maximumValue = 1.0;
-    self.aimMaxOutputSlider.value = 0.72;
+    self.aimMaxOutputSlider.value = 0.90;
     self.aimMaxOutputSlider.tintColor = sliderTint;
     [self.aimMaxOutputSlider addTarget:self action:@selector(aimMaxOutputSliderMoved:) forControlEvents:UIControlEventValueChanged];
 

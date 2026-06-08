@@ -221,11 +221,12 @@ import UIKit
 
     private var aimStopTimer: Timer?
     private var aimLastMoveTimestamp: CFTimeInterval = 0
-    private var aimFilteredVelocity: CGPoint = .zero
-    private let aimStopDelay: TimeInterval = 0.055
-    private let aimDeadSpeed: CGFloat = 24.0
-    private let aimSpeedRangeMultiplier: CGFloat = 24.0
-    private let aimVelocitySmoothing: CGFloat = 0.24
+    private var aimFilteredDelta: CGPoint = .zero
+    private let aimStopDelay: TimeInterval = 0.045
+    private let aimDeadDelta: CGFloat = 0.03
+    private let aimDeltaSmoothing: CGFloat = 0.08
+    private let aimDeltaToStickMultiplier: CGFloat = 1.5167
+    private let aimReferenceStickInputScale: CGFloat = 35.0
     
     // trackball
     private var trackballVelocity: CGPoint = .zero
@@ -348,8 +349,9 @@ import UIKit
                     self.hasResponseCurveTweak = true
                 }
                 if self.touchPadString == "RSPADALT2" {
-                    self.stickResponseExponent = 1.62
-                    self.aimMaxOutputScale = 0.72
+                    self.stickResponseExponent = 1.12
+                    self.minStickOffset = self.stickMaxOffset * 0.12
+                    self.aimMaxOutputScale = 0.90
                     self.hasAimTweak = true
                 }
             }
@@ -1849,7 +1851,7 @@ import UIKit
     private func resetAimStickState(clearHostStick: Bool) {
         aimStopTimer?.invalidate()
         aimStopTimer = nil
-        aimFilteredVelocity = .zero
+        aimFilteredDelta = .zero
         aimLastMoveTimestamp = 0
         if clearHostStick {
             self.onScreenControls.clearRightStickTouchPadFlag()
@@ -1862,7 +1864,7 @@ import UIKit
             guard let self = self else { return }
             guard self.isAimStickPad, self.pressed else { return }
             if CACurrentMediaTime() - self.aimLastMoveTimestamp >= self.aimStopDelay {
-                self.aimFilteredVelocity = .zero
+                self.aimFilteredDelta = .zero
                 self.offSetX = 0
                 self.offSetY = 0
                 self.onScreenControls.clearRightStickTouchPadFlag()
@@ -1875,30 +1877,42 @@ import UIKit
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    private func sendRightAimStickVelocityEvent(rawVelocityX: CGFloat, rawVelocityY: CGFloat) {
-        let rawSpeed = hypot(rawVelocityX, rawVelocityY)
-        guard rawSpeed >= aimDeadSpeed else {
+    private func sendRightAimStickDeltaEvent(rawDeltaX: CGFloat, rawDeltaY: CGFloat) {
+        let rawDeltaMagnitude = hypot(rawDeltaX, rawDeltaY)
+        guard rawDeltaMagnitude >= aimDeadDelta else {
             self.offSetX = 0
             self.offSetY = 0
             self.onScreenControls.clearRightStickTouchPadFlag()
             return
         }
 
-        let speedForMax = max(stickInputScale * aimSpeedRangeMultiplier, aimDeadSpeed + 1.0)
-        let normalizedSpeed = min(max((rawSpeed - aimDeadSpeed) / (speedForMax - aimDeadSpeed), 0), 1)
-        let exponent = max(stickResponseExponent, 1.0)
-        let curvedSpeed = pow(normalizedSpeed, exponent)
         let maxOutput = stickMaxOffset * aimMaxOutputScale
         let floorOutput = min(max(minStickOffset, 0), maxOutput)
-        let outputMagnitude = floorOutput + (maxOutput - floorOutput) * curvedSpeed
 
-        let rawUnitX = rawVelocityX / rawSpeed
-        let rawUnitY = rawVelocityY / rawSpeed
-        self.offSetX = rawUnitX * stickInputScale * curvedSpeed
-        self.offSetY = rawUnitY * stickInputScale * curvedSpeed
+        // Start from the same per-frame delta model as RSVPAD, then add RSPADALT2-only
+        // shaping: a deadzone floor, a soft curve, a max-output cap, and stop-on-idle.
+        let baseOutput = rawDeltaMagnitude * stickMaxOffset * aimDeltaToStickMultiplier / aimReferenceStickInputScale
+        let clampedBaseOutput = min(max(baseOutput, 0), maxOutput)
 
-        let hostUnitX = (self.stickInvertHorizontal ? -rawVelocityX : rawVelocityX) / rawSpeed
-        let hostUnitY = (self.stickInvertVertical ? -rawVelocityY : rawVelocityY) / rawSpeed
+        let outputMagnitude: CGFloat
+        if floorOutput > 0 && clampedBaseOutput <= floorOutput {
+            outputMagnitude = floorOutput
+        } else if floorOutput < maxOutput {
+            let exponent = max(stickResponseExponent, 1.0)
+            let normalized = min(max((clampedBaseOutput - floorOutput) / (maxOutput - floorOutput), 0), 1)
+            outputMagnitude = floorOutput + (maxOutput - floorOutput) * pow(normalized, exponent)
+        } else {
+            outputMagnitude = maxOutput
+        }
+
+        let rawUnitX = rawDeltaX / rawDeltaMagnitude
+        let rawUnitY = rawDeltaY / rawDeltaMagnitude
+        let visualMagnitude = maxOutput > 0 ? min(outputMagnitude / maxOutput, 1) : 0
+        self.offSetX = rawUnitX * stickInputScale * visualMagnitude
+        self.offSetY = rawUnitY * stickInputScale * visualMagnitude
+
+        let hostUnitX = (self.stickInvertHorizontal ? -rawDeltaX : rawDeltaX) / rawDeltaMagnitude
+        let hostUnitY = (self.stickInvertVertical ? -rawDeltaY : rawDeltaY) / rawDeltaMagnitude
         let targetX = hostUnitX * outputMagnitude
         let targetY = -hostUnitY * outputMagnitude
         self.onScreenControls.sendRightStickTouchPadEvent(targetX, targetY)
@@ -1906,23 +1920,21 @@ import UIKit
 
     private func handleRightAimStickMove(touch: UITouch) {
         let now = CACurrentMediaTime()
-        let previousTimestamp = aimLastMoveTimestamp > 0 ? aimLastMoveTimestamp : now
         self.updateTouchLocation(touch: touch)
-        let dt = max(CGFloat(now - previousTimestamp), CGFloat(1.0 / 120.0))
         aimLastMoveTimestamp = now
 
-        let velocityX = self.deltaX * self.sensitivityFactorX / dt
-        let velocityY = self.deltaY * self.sensitivityFactorY / dt
-        if aimFilteredVelocity == .zero {
-            aimFilteredVelocity = CGPoint(x: velocityX, y: velocityY)
+        let deltaX = self.deltaX * self.sensitivityFactorX
+        let deltaY = self.deltaY * self.sensitivityFactorY
+        if aimFilteredDelta == .zero {
+            aimFilteredDelta = CGPoint(x: deltaX, y: deltaY)
         } else {
-            aimFilteredVelocity = CGPoint(
-                x: aimFilteredVelocity.x * aimVelocitySmoothing + velocityX * (1.0 - aimVelocitySmoothing),
-                y: aimFilteredVelocity.y * aimVelocitySmoothing + velocityY * (1.0 - aimVelocitySmoothing)
+            aimFilteredDelta = CGPoint(
+                x: aimFilteredDelta.x * aimDeltaSmoothing + deltaX * (1.0 - aimDeltaSmoothing),
+                y: aimFilteredDelta.y * aimDeltaSmoothing + deltaY * (1.0 - aimDeltaSmoothing)
             )
         }
 
-        self.sendRightAimStickVelocityEvent(rawVelocityX: aimFilteredVelocity.x, rawVelocityY: aimFilteredVelocity.y)
+        self.sendRightAimStickDeltaEvent(rawDeltaX: aimFilteredDelta.x, rawDeltaY: aimFilteredDelta.y)
         self.scheduleAimStickStopCheck()
     }
 
