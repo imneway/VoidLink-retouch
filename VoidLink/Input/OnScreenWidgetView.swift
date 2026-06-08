@@ -241,10 +241,10 @@ import UIKit
     private let aimSmoothingFastAlpha: CGFloat = 0.86
     private let aimTrackpadNoiseDeadzone: CGFloat = 0.03
     private let aimTrackpadResponseTime: CGFloat = 0.078
-    private let aimTrackpadBaseGain: CGFloat = 5.8
+    private let aimTrackpadBaseGain: CGFloat = 4.4
     private let aimTrackpadFastBoostStart: CGFloat = 110.0
     private let aimTrackpadFastBoostFull: CGFloat = 1050.0
-    private let aimTrackpadFastBoostFactor: CGFloat = 1.85
+    private let aimTrackpadFastBoostFactor: CGFloat = 3.1
     private let aimTrackpadReverseBrake: CGFloat = 0.12
     private let aimTrackpadMaxImpulseTime: CGFloat = 0.16
     private let aimTrackpadOutputSmoothingAlpha: CGFloat = 0.68
@@ -371,8 +371,8 @@ import UIKit
                     self.hasResponseCurveTweak = true
                 }
                 if self.touchPadString == "RSPADALT2" {
-                    self.stickInputScale = 42
-                    self.stickResponseExponent = 1.18
+                    self.stickInputScale = 52
+                    self.stickResponseExponent = 1.36
                     self.minStickOffset = self.stickMaxOffset * 0.06
                     self.aimMaxOutputScale = 0.92
                     self.hasAimTweak = true
