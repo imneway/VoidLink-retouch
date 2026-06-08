@@ -226,22 +226,29 @@ import UIKit
     private var aimHasAnchor = false
     private var aimFilteredTarget: CGPoint = .zero
     private var aimHasFilteredTarget = false
+    private var aimTrackpadDisplayLink: CADisplayLink?
+    private var aimTrackpadImpulse: CGPoint = .zero
+    private var aimTrackpadResidualDelta: CGPoint = .zero
+    private var aimTrackpadLastFrameTimestamp: CFTimeInterval = 0
+    private var aimTrackpadLastOutput: CGPoint = .zero
+    private var aimTrackpadHasOutput = false
     private let aimStopDelay: TimeInterval = 0.08
-    private let aimRelativeStopDelay: TimeInterval = 0.055
     private let aimDeadOffset: CGFloat = 0.16
     private let aimFastBoostFactor: CGFloat = 2.2
     private let aimFastBoostStart: CGFloat = 0.45
     private let aimFastBoostFull: CGFloat = 7.0
     private let aimSmoothingSlowAlpha: CGFloat = 0.58
     private let aimSmoothingFastAlpha: CGFloat = 0.86
-    private let aimRelativeJitterDeadzone: CGFloat = 0.05
-    private let aimRelativeVelocityGain: CGFloat = 0.065
-    private let aimRelativeAccelerationStart: CGFloat = 260.0
-    private let aimRelativeAccelerationFull: CGFloat = 1200.0
-    private let aimRelativeAccelerationBoost: CGFloat = 0.9
-    private let aimRelativeSmoothingSlowAlpha: CGFloat = 0.42
-    private let aimRelativeSmoothingFastAlpha: CGFloat = 0.90
-    private let aimRelativeVisualGain: CGFloat = 9.0
+    private let aimTrackpadNoiseDeadzone: CGFloat = 0.03
+    private let aimTrackpadResponseTime: CGFloat = 0.078
+    private let aimTrackpadBaseGain: CGFloat = 5.8
+    private let aimTrackpadFastBoostStart: CGFloat = 110.0
+    private let aimTrackpadFastBoostFull: CGFloat = 1050.0
+    private let aimTrackpadFastBoostFactor: CGFloat = 1.85
+    private let aimTrackpadReverseBrake: CGFloat = 0.12
+    private let aimTrackpadMaxImpulseTime: CGFloat = 0.16
+    private let aimTrackpadOutputSmoothingAlpha: CGFloat = 0.68
+    private let aimTrackpadStopThreshold: CGFloat = 0.018
     
     // trackball
     private var trackballVelocity: CGPoint = .zero
@@ -458,6 +465,7 @@ import UIKit
     }
 
     deinit {
+        aimTrackpadDisplayLink?.invalidate()
         OnScreenWidgetView.activeInstances.remove(self)
     }
     
@@ -1874,6 +1882,13 @@ import UIKit
     private func resetAimStickState(clearHostStick: Bool) {
         aimStopTimer?.invalidate()
         aimStopTimer = nil
+        aimTrackpadDisplayLink?.invalidate()
+        aimTrackpadDisplayLink = nil
+        aimTrackpadImpulse = .zero
+        aimTrackpadResidualDelta = .zero
+        aimTrackpadLastFrameTimestamp = 0
+        aimTrackpadLastOutput = .zero
+        aimTrackpadHasOutput = false
         aimAnchorLocation = .zero
         aimHasAnchor = false
         aimLastMoveTimestamp = 0
@@ -1885,8 +1900,11 @@ import UIKit
     }
 
     private func scheduleAimStickStopCheck() {
+        if aimRelativeModeEnabled {
+            return
+        }
         aimStopTimer?.invalidate()
-        let stopDelay = aimRelativeModeEnabled ? aimRelativeStopDelay : aimStopDelay
+        let stopDelay = aimStopDelay
         let timer = Timer(timeInterval: stopDelay, repeats: false) { [weak self] _ in
             guard let self = self else { return }
             guard self.isAimStickPad, self.pressed else { return }
@@ -1992,67 +2010,36 @@ import UIKit
         )
     }
 
-    private func decayRelativeAimOutput() {
-        guard aimHasFilteredTarget else {
-            self.offSetX = 0
-            self.offSetY = 0
-            self.onScreenControls.clearRightStickTouchPadFlag()
-            return
-        }
-
-        aimFilteredTarget.x *= 0.55
-        aimFilteredTarget.y *= 0.55
-        self.offSetX = 0
-        self.offSetY = 0
-
-        if hypot(aimFilteredTarget.x, aimFilteredTarget.y) < stickMaxOffset * 0.012 {
-            aimFilteredTarget = .zero
-            aimHasFilteredTarget = false
-            self.onScreenControls.clearRightStickTouchPadFlag()
-            return
-        }
-
-        self.onScreenControls.sendRightStickTouchPadEvent(aimFilteredTarget.x, aimFilteredTarget.y)
+    private func startAimTrackpadDisplayLink() {
+        guard aimTrackpadDisplayLink == nil else { return }
+        aimTrackpadLastFrameTimestamp = CACurrentMediaTime()
+        let displayLink = CADisplayLink(target: self, selector: #selector(handleAimTrackpadDisplayLink(_:)))
+        displayLink.add(to: .main, forMode: .common)
+        aimTrackpadDisplayLink = displayLink
     }
 
-    private func sendRightAimStickRelativeEvent(deltaX: CGFloat, deltaY: CGFloat, elapsed: CFTimeInterval) {
-        let deltaMagnitude = hypot(deltaX, deltaY)
-        guard deltaMagnitude >= aimRelativeJitterDeadzone else {
-            decayRelativeAimOutput()
-            return
+    private func stopAimTrackpadDisplayLink(clearHostStick: Bool) {
+        aimTrackpadDisplayLink?.invalidate()
+        aimTrackpadDisplayLink = nil
+        aimTrackpadLastFrameTimestamp = 0
+        aimTrackpadLastOutput = .zero
+        aimTrackpadHasOutput = false
+        self.offSetX = 0
+        self.offSetY = 0
+        if clearHostStick {
+            self.onScreenControls.clearRightStickTouchPadFlag()
         }
+    }
 
-        let clampedElapsed = min(max(CGFloat(elapsed), 1.0 / 240.0), 1.0 / 30.0)
-        let speed = deltaMagnitude / clampedElapsed
-        let speedT = smoothStep((speed - aimRelativeAccelerationStart) / (aimRelativeAccelerationFull - aimRelativeAccelerationStart))
-        let velocityScale = aimRelativeVelocityGain * (1.0 + aimRelativeAccelerationBoost * speedT)
-
-        let visualOffset = clampVector(
-            x: deltaX * aimRelativeVisualGain,
-            y: deltaY * aimRelativeVisualGain,
-            radius: stickInputScale
-        )
+    private func sendRightAimTrackpadSource(_ source: CGPoint) {
+        let visualOffset = clampVector(x: source.x, y: source.y, radius: stickInputScale)
         self.offSetX = visualOffset.x
         self.offSetY = visualOffset.y
 
-        let source = clampVector(
-            x: (deltaX / clampedElapsed) * velocityScale,
-            y: (deltaY / clampedElapsed) * velocityScale,
-            radius: stickInputScale
-        )
-        var adjX = self.stickInvertHorizontal ? -source.x : source.x
-        var adjY = self.stickInvertVertical ? -source.y : source.y
-
-        let sourceMagnitude = hypot(adjX, adjY)
-        if sourceMagnitude > 0 {
-            let floorT = smoothStep((speed - 18.0) / 140.0)
-            let floorMagnitude = stickInputScale * (0.018 + 0.045 * floorT)
-            if sourceMagnitude < floorMagnitude {
-                let scale = floorMagnitude / sourceMagnitude
-                adjX *= scale
-                adjY *= scale
-            }
-        }
+        let clampedSource = clampVector(x: source.x, y: source.y, radius: stickInputScale)
+        var adjX = self.stickInvertHorizontal ? -clampedSource.x : clampedSource.x
+        var adjY = self.stickInvertVertical ? -clampedSource.y : clampedSource.y
+        applyStickResponseCurve(&adjX, &adjY)
 
         var targetX = self.touchInputToStickInput(input: adjX)
         var targetY = -self.touchInputToStickInput(input: adjY)
@@ -2065,9 +2052,100 @@ import UIKit
             targetY *= scale
         }
 
-        let alpha = aimRelativeSmoothingSlowAlpha + (aimRelativeSmoothingFastAlpha - aimRelativeSmoothingSlowAlpha) * speedT
-        smoothAimTarget(targetX: &targetX, targetY: &targetY, alpha: alpha)
+        let reversed = aimTrackpadHasOutput && (targetX * aimTrackpadLastOutput.x + targetY * aimTrackpadLastOutput.y) < 0
+        let alpha: CGFloat = reversed ? 1.0 : aimTrackpadOutputSmoothingAlpha
+        if aimTrackpadHasOutput {
+            targetX = aimTrackpadLastOutput.x + (targetX - aimTrackpadLastOutput.x) * alpha
+            targetY = aimTrackpadLastOutput.y + (targetY - aimTrackpadLastOutput.y) * alpha
+        } else {
+            aimTrackpadHasOutput = true
+        }
+        aimTrackpadLastOutput = CGPoint(x: targetX, y: targetY)
         self.onScreenControls.sendRightStickTouchPadEvent(targetX, targetY)
+    }
+
+    @objc private func handleAimTrackpadDisplayLink(_ displayLink: CADisplayLink) {
+        guard self.isAimStickPad, self.aimRelativeModeEnabled, self.pressed else {
+            aimTrackpadImpulse = .zero
+            stopAimTrackpadDisplayLink(clearHostStick: true)
+            return
+        }
+
+        let now = displayLink.timestamp
+        let elapsed = aimTrackpadLastFrameTimestamp > 0 ? now - aimTrackpadLastFrameTimestamp : displayLink.duration
+        aimTrackpadLastFrameTimestamp = now
+        let dt = min(max(CGFloat(elapsed), 1.0 / 240.0), 1.0 / 30.0)
+
+        let impulseMagnitude = hypot(aimTrackpadImpulse.x, aimTrackpadImpulse.y)
+        let stopThreshold = stickInputScale * aimTrackpadResponseTime * aimTrackpadStopThreshold
+        guard impulseMagnitude > stopThreshold else {
+            aimTrackpadImpulse = .zero
+            stopAimTrackpadDisplayLink(clearHostStick: true)
+            return
+        }
+
+        let rawSource = CGPoint(
+            x: aimTrackpadImpulse.x / aimTrackpadResponseTime,
+            y: aimTrackpadImpulse.y / aimTrackpadResponseTime
+        )
+        let source = clampVector(x: rawSource.x, y: rawSource.y, radius: stickInputScale)
+        sendRightAimTrackpadSource(source)
+
+        let drain = CGPoint(x: source.x * dt, y: source.y * dt)
+        if hypot(drain.x, drain.y) >= impulseMagnitude {
+            aimTrackpadImpulse = .zero
+        } else {
+            aimTrackpadImpulse.x -= drain.x
+            aimTrackpadImpulse.y -= drain.y
+        }
+    }
+
+    private func sendRightAimStickRelativeEvent(deltaX: CGFloat, deltaY: CGFloat, elapsed: CFTimeInterval) {
+        aimTrackpadResidualDelta.x += deltaX
+        aimTrackpadResidualDelta.y += deltaY
+
+        let deltaMagnitude = hypot(aimTrackpadResidualDelta.x, aimTrackpadResidualDelta.y)
+        guard deltaMagnitude >= aimTrackpadNoiseDeadzone else {
+            return
+        }
+
+        let activeDelta = aimTrackpadResidualDelta
+        aimTrackpadResidualDelta = .zero
+
+        let clampedElapsed = min(max(CGFloat(elapsed), 1.0 / 240.0), 1.0 / 30.0)
+        let speed = deltaMagnitude / clampedElapsed
+        let speedT = smoothStep((speed - aimTrackpadFastBoostStart) / (aimTrackpadFastBoostFull - aimTrackpadFastBoostStart))
+        let gain = aimTrackpadBaseGain * (1.0 + aimTrackpadFastBoostFactor * speedT)
+        let newImpulse = CGPoint(
+            x: activeDelta.x * gain * aimTrackpadResponseTime,
+            y: activeDelta.y * gain * aimTrackpadResponseTime
+        )
+
+        let pendingMagnitude = hypot(aimTrackpadImpulse.x, aimTrackpadImpulse.y)
+        let newMagnitude = hypot(newImpulse.x, newImpulse.y)
+        if pendingMagnitude > 0, newMagnitude > 0 {
+            let alignment = (aimTrackpadImpulse.x * newImpulse.x + aimTrackpadImpulse.y * newImpulse.y) / (pendingMagnitude * newMagnitude)
+            if alignment < 0.65 {
+                let keep = max(alignment, 0.0) * aimTrackpadReverseBrake
+                aimTrackpadImpulse.x *= keep
+                aimTrackpadImpulse.y *= keep
+                aimTrackpadLastOutput = .zero
+                aimTrackpadHasOutput = false
+            }
+        }
+
+        aimTrackpadImpulse.x += newImpulse.x
+        aimTrackpadImpulse.y += newImpulse.y
+
+        let maxImpulse = stickInputScale * aimTrackpadMaxImpulseTime
+        let impulseMagnitude = hypot(aimTrackpadImpulse.x, aimTrackpadImpulse.y)
+        if impulseMagnitude > maxImpulse && impulseMagnitude > 0 {
+            let scale = maxImpulse / impulseMagnitude
+            aimTrackpadImpulse.x *= scale
+            aimTrackpadImpulse.y *= scale
+        }
+
+        startAimTrackpadDisplayLink()
     }
 
     private func handleRightAimStickMove(touch: UITouch) {
