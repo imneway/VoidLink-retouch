@@ -227,15 +227,22 @@ import UIKit
     private var aimFilteredTarget: CGPoint = .zero
     private var aimHasFilteredTarget = false
     private let aimStopDelay: TimeInterval = 0.08
+    private let aimRelativeStopDelay: TimeInterval = 0.055
     private let aimDeadOffset: CGFloat = 0.16
     private let aimFastBoostFactor: CGFloat = 2.2
     private let aimFastBoostStart: CGFloat = 0.45
     private let aimFastBoostFull: CGFloat = 7.0
     private let aimSmoothingSlowAlpha: CGFloat = 0.58
     private let aimSmoothingFastAlpha: CGFloat = 0.86
-    private let aimRelativeImpulseFactor: CGFloat = 3.4
-    private let aimRelativeAnchorFollowSlowAlpha: CGFloat = 0.10
-    private let aimRelativeAnchorFollowFastAlpha: CGFloat = 0.28
+    private let aimRelativeJitterDeadzone: CGFloat = 0.12
+    private let aimRelativeMicroFull: CGFloat = 0.85
+    private let aimRelativeGain: CGFloat = 1.35
+    private let aimRelativeAccelerationStart: CGFloat = 160.0
+    private let aimRelativeAccelerationFull: CGFloat = 1250.0
+    private let aimRelativeAccelerationBoost: CGFloat = 2.1
+    private let aimRelativeSmoothingSlowAlpha: CGFloat = 0.32
+    private let aimRelativeSmoothingFastAlpha: CGFloat = 0.90
+    private let aimRelativeVisualGain: CGFloat = 4.0
     
     // trackball
     private var trackballVelocity: CGPoint = .zero
@@ -1880,10 +1887,11 @@ import UIKit
 
     private func scheduleAimStickStopCheck() {
         aimStopTimer?.invalidate()
-        let timer = Timer(timeInterval: aimStopDelay, repeats: false) { [weak self] _ in
+        let stopDelay = aimRelativeModeEnabled ? aimRelativeStopDelay : aimStopDelay
+        let timer = Timer(timeInterval: stopDelay, repeats: false) { [weak self] _ in
             guard let self = self else { return }
             guard self.isAimStickPad, self.pressed else { return }
-            if CACurrentMediaTime() - self.aimLastMoveTimestamp >= self.aimStopDelay {
+            if CACurrentMediaTime() - self.aimLastMoveTimestamp >= stopDelay {
                 self.aimAnchorLocation = self.latestTouchLocation
                 self.aimHasAnchor = true
                 self.offSetX = 0
@@ -1900,6 +1908,11 @@ import UIKit
         RunLoop.main.add(timer, forMode: .common)
     }
 
+    private func smoothStep(_ value: CGFloat) -> CGFloat {
+        let t = min(max(value, 0.0), 1.0)
+        return t * t * (3.0 - 2.0 * t)
+    }
+
     private func applyAimDeadzoneFloor(targetX: inout CGFloat, targetY: inout CGFloat) {
         guard minStickOffset > 0 else { return }
         let mag = hypot(targetX, targetY)
@@ -1914,6 +1927,10 @@ import UIKit
     private func smoothAimTarget(targetX: inout CGFloat, targetY: inout CGFloat, speed: CGFloat) {
         let speedT = min(max(speed / aimFastBoostFull, 0.0), 1.0)
         let alpha = aimSmoothingSlowAlpha + (aimSmoothingFastAlpha - aimSmoothingSlowAlpha) * speedT
+        smoothAimTarget(targetX: &targetX, targetY: &targetY, alpha: alpha)
+    }
+
+    private func smoothAimTarget(targetX: inout CGFloat, targetY: inout CGFloat, alpha: CGFloat) {
         if !aimHasFilteredTarget {
             aimFilteredTarget = CGPoint(x: targetX, y: targetY)
             aimHasFilteredTarget = true
@@ -1976,32 +1993,61 @@ import UIKit
         )
     }
 
-    private func sendRightAimStickRelativeEvent(rawOffsetX: CGFloat, rawOffsetY: CGFloat, deltaX: CGFloat, deltaY: CGFloat) {
+    private func sendRightAimStickRelativeEvent(deltaX: CGFloat, deltaY: CGFloat, elapsed: CFTimeInterval) {
         let deltaMagnitude = hypot(deltaX, deltaY)
-        let boostT = min(max((deltaMagnitude - aimFastBoostStart) / (aimFastBoostFull - aimFastBoostStart), 0.0), 1.0)
-        let impulseX = deltaX * aimRelativeImpulseFactor
-        let impulseY = deltaY * aimRelativeImpulseFactor
-        let boostedX = rawOffsetX + impulseX + deltaX * aimFastBoostFactor * boostT
-        let boostedY = rawOffsetY + impulseY + deltaY * aimFastBoostFactor * boostT
-        sendRightAimStickOutputEvent(
-            sourceX: boostedX,
-            sourceY: boostedY,
-            visualX: rawOffsetX,
-            visualY: rawOffsetY,
-            speed: deltaMagnitude
-        )
-    }
+        guard deltaMagnitude >= aimRelativeJitterDeadzone else {
+            self.offSetX = 0
+            self.offSetY = 0
+            self.aimFilteredTarget = .zero
+            self.aimHasFilteredTarget = false
+            self.onScreenControls.clearRightStickTouchPadFlag()
+            return
+        }
 
-    private func updateRelativeAimAnchor(toward currentLocation: CGPoint, speed: CGFloat) {
-        let speedT = min(max(speed / aimFastBoostFull, 0.0), 1.0)
-        let alpha = aimRelativeAnchorFollowSlowAlpha + (aimRelativeAnchorFollowFastAlpha - aimRelativeAnchorFollowSlowAlpha) * speedT
-        aimAnchorLocation.x += (currentLocation.x - aimAnchorLocation.x) * alpha
-        aimAnchorLocation.y += (currentLocation.y - aimAnchorLocation.y) * alpha
+        let clampedElapsed = min(max(CGFloat(elapsed), 1.0 / 240.0), 1.0 / 20.0)
+        let speed = deltaMagnitude / clampedElapsed
+        let microT = smoothStep((deltaMagnitude - aimRelativeJitterDeadzone) / (aimRelativeMicroFull - aimRelativeJitterDeadzone))
+        let precisionScale = 0.35 + 0.65 * microT
+        let speedT = smoothStep((speed - aimRelativeAccelerationStart) / (aimRelativeAccelerationFull - aimRelativeAccelerationStart))
+        let acceleration = 1.0 + aimRelativeAccelerationBoost * speedT
+        let responseScale = aimRelativeGain * precisionScale * acceleration
+
+        let visualOffset = clampVector(
+            x: deltaX * aimRelativeVisualGain,
+            y: deltaY * aimRelativeVisualGain,
+            radius: stickInputScale
+        )
+        self.offSetX = visualOffset.x
+        self.offSetY = visualOffset.y
+
+        let source = clampVector(
+            x: deltaX * responseScale,
+            y: deltaY * responseScale,
+            radius: stickInputScale
+        )
+        let adjX = self.stickInvertHorizontal ? -source.x : source.x
+        let adjY = self.stickInvertVertical ? -source.y : source.y
+
+        var targetX = self.touchInputToStickInput(input: adjX)
+        var targetY = -self.touchInputToStickInput(input: adjY)
+
+        let maxOutputMagnitude = stickMaxOffset * aimMaxOutputScale
+        let outputMagnitude = hypot(targetX, targetY)
+        if outputMagnitude > maxOutputMagnitude && outputMagnitude > 0 {
+            let scale = maxOutputMagnitude / outputMagnitude
+            targetX *= scale
+            targetY *= scale
+        }
+
+        let alpha = aimRelativeSmoothingSlowAlpha + (aimRelativeSmoothingFastAlpha - aimRelativeSmoothingSlowAlpha) * speedT
+        smoothAimTarget(targetX: &targetX, targetY: &targetY, alpha: alpha)
+        self.onScreenControls.sendRightStickTouchPadEvent(targetX, targetY)
     }
 
     private func handleRightAimStickMove(touch: UITouch) {
         let now = CACurrentMediaTime()
         let currentLocation = touch.location(in: self)
+        let elapsed = aimLastMoveTimestamp > 0 ? now - aimLastMoveTimestamp : 1.0 / 60.0
         self.deltaX = currentLocation.x - self.latestTouchLocation.x
         self.deltaY = currentLocation.y - self.latestTouchLocation.y
         self.latestTouchLocation = currentLocation
@@ -2011,19 +2057,18 @@ import UIKit
         }
         aimLastMoveTimestamp = now
 
-        let offsetX = (currentLocation.x - aimAnchorLocation.x) * self.sensitivityFactorX
-        let offsetY = (currentLocation.y - aimAnchorLocation.y) * self.sensitivityFactorY
         let scaledDeltaX = self.deltaX * self.sensitivityFactorX
         let scaledDeltaY = self.deltaY * self.sensitivityFactorY
         if aimRelativeModeEnabled {
             self.sendRightAimStickRelativeEvent(
-                rawOffsetX: offsetX,
-                rawOffsetY: offsetY,
                 deltaX: scaledDeltaX,
-                deltaY: scaledDeltaY
+                deltaY: scaledDeltaY,
+                elapsed: elapsed
             )
-            self.updateRelativeAimAnchor(toward: currentLocation, speed: hypot(scaledDeltaX, scaledDeltaY))
+            aimAnchorLocation = currentLocation
         } else {
+            let offsetX = (currentLocation.x - aimAnchorLocation.x) * self.sensitivityFactorX
+            let offsetY = (currentLocation.y - aimAnchorLocation.y) * self.sensitivityFactorY
             self.sendRightAimStickOffsetEvent(
                 rawOffsetX: offsetX,
                 rawOffsetY: offsetY,
