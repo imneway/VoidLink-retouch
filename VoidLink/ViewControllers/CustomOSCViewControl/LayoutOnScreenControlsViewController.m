@@ -492,6 +492,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
                    fabs(buttonState.aimMaxOutputScale - 1.00) < 0.02))) {
                 widgetView.aimMaxOutputScale = buttonState.aimMaxOutputScale;
             }
+            widgetView.aimRelativeModeEnabled = buttonState.aimRelativeModeEnabled;
             widgetView.stickInvertVertical = buttonState.stickInvertVertical;
             widgetView.stickInvertHorizontal = buttonState.stickInvertHorizontal;
             widgetView.slideMode = buttonState.slideMode;
@@ -1324,7 +1325,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.sensitivityXStack.hidden = self.sensitivityYStack.hidden = !showSensitivityFactorStack;
     self.stickIndicatorOffsetStack.hidden = !showStickIndicatorOffsetStack;
     self.stickInputScaleStack.hidden = self.stickResponseExponentStack.hidden = !showResponseCurveStack;
-    self.aimMaxOutputStack.hidden = !showAimTweakStack;
+    self.aimMaxOutputStack.hidden = self.aimRelativeModeStack.hidden = !showAimTweakStack;
     self.stickInvertVerticalStack.hidden = self.stickInvertHorizontalStack.hidden = !showResponseCurveStack;
     self.mouseDownButtonStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"MOUSEPAD"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
     self.decelerationRateStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"TRACKBALL"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
@@ -1372,6 +1373,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         [self.aimMaxOutputSlider setValue:self->selectedWidgetView.aimMaxOutputScale];
         [self autoFitLabel:self.aimMaxOutputLabel];
         [self.aimMaxOutputLabel setText:[LocalizationHelper localizedStringForKey:@"Max Output: %.2f", self->selectedWidgetView.aimMaxOutputScale]];
+        self.aimRelativeModeSwitch.on = self->selectedWidgetView.aimRelativeModeEnabled;
     }
     [self autoFitLabel:self.widgetSizeLabel];
     
@@ -1417,7 +1419,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.mouseDownButtonStack.hidden = true;
     self.decelerationRateStack.hidden = true;
     self.stickInputScaleStack.hidden = self.stickResponseExponentStack.hidden = true;
-    self.aimMaxOutputStack.hidden = true;
+    self.aimMaxOutputStack.hidden = self.aimRelativeModeStack.hidden = true;
     self.stickInvertVerticalStack.hidden = self.stickInvertHorizontalStack.hidden = true;
     
     self->controllerLayerSelected = true;
@@ -1586,6 +1588,12 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     }
 }
 
+- (void)aimRelativeModeChanged:(UISwitch* )sender{
+    if(self->selectedWidgetView != nil && self->widgetViewSelected){
+        self->selectedWidgetView.aimRelativeModeEnabled = sender.on;
+    }
+}
+
 - (void)installResponseCurveSliders{
     UIColor* whiteColor = [UIColor whiteColor];
     UIFont* labelFont = [UIFont systemFontOfSize:18];
@@ -1652,6 +1660,24 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     [self.aimMaxOutputStack.heightAnchor constraintEqualToConstant:20].active = YES;
     self.aimMaxOutputStack.hidden = YES;
     [self.widgetPanelStack addArrangedSubview:self.aimMaxOutputStack];
+
+    self.aimRelativeModeLabel = [[UILabel alloc] init];
+    self.aimRelativeModeLabel.font = labelFont;
+    self.aimRelativeModeLabel.textColor = whiteColor;
+    self.aimRelativeModeLabel.text = [LocalizationHelper localizedStringForKey:@"Relative Aim"];
+    [self.aimRelativeModeLabel.widthAnchor constraintEqualToConstant:160].active = YES;
+
+    self.aimRelativeModeSwitch = [[UISwitch alloc] init];
+    self.aimRelativeModeSwitch.onTintColor = sliderTint;
+    [self.aimRelativeModeSwitch addTarget:self action:@selector(aimRelativeModeChanged:) forControlEvents:UIControlEventValueChanged];
+
+    self.aimRelativeModeStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.aimRelativeModeLabel, self.aimRelativeModeSwitch]];
+    self.aimRelativeModeStack.axis = UILayoutConstraintAxisHorizontal;
+    self.aimRelativeModeStack.translatesAutoresizingMaskIntoConstraints = NO;
+    self.aimRelativeModeStack.alignment = UIStackViewAlignmentCenter;
+    [self.aimRelativeModeStack.heightAnchor constraintEqualToConstant:30].active = YES;
+    self.aimRelativeModeStack.hidden = YES;
+    [self.widgetPanelStack addArrangedSubview:self.aimRelativeModeStack];
 
     // Vertical / horizontal output flip switches. Apply on the host-bound
     // values only; finger-space indicator visuals stay un-mirrored.

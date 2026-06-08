@@ -128,6 +128,7 @@ import UIKit
             aimMaxOutputScale = min(max(aimMaxOutputScale, 0.20), 1.0)
         }
     }
+    @objc public var aimRelativeModeEnabled: Bool = false
 
     
     // for LSVPAD, RSVPAD
@@ -232,6 +233,9 @@ import UIKit
     private let aimFastBoostFull: CGFloat = 7.0
     private let aimSmoothingSlowAlpha: CGFloat = 0.58
     private let aimSmoothingFastAlpha: CGFloat = 0.86
+    private let aimRelativeImpulseFactor: CGFloat = 3.4
+    private let aimRelativeAnchorFollowSlowAlpha: CGFloat = 0.10
+    private let aimRelativeAnchorFollowFastAlpha: CGFloat = 0.28
     
     // trackball
     private var trackballVelocity: CGPoint = .zero
@@ -1921,10 +1925,10 @@ import UIKit
         targetY = aimFilteredTarget.y
     }
 
-    private func sendRightAimStickOffsetEvent(rawOffsetX: CGFloat, rawOffsetY: CGFloat, fastDeltaX: CGFloat, fastDeltaY: CGFloat) {
-        let rawOffsetMagnitude = hypot(rawOffsetX, rawOffsetY)
-        let fastDeltaMagnitude = hypot(fastDeltaX, fastDeltaY)
-        guard rawOffsetMagnitude >= aimDeadOffset || fastDeltaMagnitude >= aimDeadOffset else {
+    private func sendRightAimStickOutputEvent(sourceX: CGFloat, sourceY: CGFloat, visualX: CGFloat, visualY: CGFloat, speed: CGFloat) {
+        let sourceMagnitude = hypot(sourceX, sourceY)
+        let visualMagnitude = hypot(visualX, visualY)
+        guard sourceMagnitude >= aimDeadOffset || visualMagnitude >= aimDeadOffset || speed >= aimDeadOffset else {
             self.offSetX = 0
             self.offSetY = 0
             self.aimFilteredTarget = .zero
@@ -1933,15 +1937,11 @@ import UIKit
             return
         }
 
-        let visualOffset = clampVector(x: rawOffsetX, y: rawOffsetY, radius: stickInputScale)
+        let visualOffset = clampVector(x: visualX, y: visualY, radius: stickInputScale)
         self.offSetX = visualOffset.x
         self.offSetY = visualOffset.y
 
-        let boostT = min(max((fastDeltaMagnitude - aimFastBoostStart) / (aimFastBoostFull - aimFastBoostStart), 0.0), 1.0)
-        let boostedX = rawOffsetX + fastDeltaX * aimFastBoostFactor * boostT
-        let boostedY = rawOffsetY + fastDeltaY * aimFastBoostFactor * boostT
-        let source = clampVector(x: boostedX, y: boostedY, radius: stickInputScale)
-
+        let source = clampVector(x: sourceX, y: sourceY, radius: stickInputScale)
         var adjX = self.stickInvertHorizontal ? -source.x : source.x
         var adjY = self.stickInvertVertical ? -source.y : source.y
         applyStickResponseCurve(&adjX, &adjY)
@@ -1958,8 +1958,45 @@ import UIKit
             targetY *= scale
         }
 
-        smoothAimTarget(targetX: &targetX, targetY: &targetY, speed: fastDeltaMagnitude)
+        smoothAimTarget(targetX: &targetX, targetY: &targetY, speed: speed)
         self.onScreenControls.sendRightStickTouchPadEvent(targetX, targetY)
+    }
+
+    private func sendRightAimStickOffsetEvent(rawOffsetX: CGFloat, rawOffsetY: CGFloat, fastDeltaX: CGFloat, fastDeltaY: CGFloat) {
+        let fastDeltaMagnitude = hypot(fastDeltaX, fastDeltaY)
+        let boostT = min(max((fastDeltaMagnitude - aimFastBoostStart) / (aimFastBoostFull - aimFastBoostStart), 0.0), 1.0)
+        let boostedX = rawOffsetX + fastDeltaX * aimFastBoostFactor * boostT
+        let boostedY = rawOffsetY + fastDeltaY * aimFastBoostFactor * boostT
+        sendRightAimStickOutputEvent(
+            sourceX: boostedX,
+            sourceY: boostedY,
+            visualX: rawOffsetX,
+            visualY: rawOffsetY,
+            speed: fastDeltaMagnitude
+        )
+    }
+
+    private func sendRightAimStickRelativeEvent(rawOffsetX: CGFloat, rawOffsetY: CGFloat, deltaX: CGFloat, deltaY: CGFloat) {
+        let deltaMagnitude = hypot(deltaX, deltaY)
+        let boostT = min(max((deltaMagnitude - aimFastBoostStart) / (aimFastBoostFull - aimFastBoostStart), 0.0), 1.0)
+        let impulseX = deltaX * aimRelativeImpulseFactor
+        let impulseY = deltaY * aimRelativeImpulseFactor
+        let boostedX = rawOffsetX + impulseX + deltaX * aimFastBoostFactor * boostT
+        let boostedY = rawOffsetY + impulseY + deltaY * aimFastBoostFactor * boostT
+        sendRightAimStickOutputEvent(
+            sourceX: boostedX,
+            sourceY: boostedY,
+            visualX: rawOffsetX,
+            visualY: rawOffsetY,
+            speed: deltaMagnitude
+        )
+    }
+
+    private func updateRelativeAimAnchor(toward currentLocation: CGPoint, speed: CGFloat) {
+        let speedT = min(max(speed / aimFastBoostFull, 0.0), 1.0)
+        let alpha = aimRelativeAnchorFollowSlowAlpha + (aimRelativeAnchorFollowFastAlpha - aimRelativeAnchorFollowSlowAlpha) * speedT
+        aimAnchorLocation.x += (currentLocation.x - aimAnchorLocation.x) * alpha
+        aimAnchorLocation.y += (currentLocation.y - aimAnchorLocation.y) * alpha
     }
 
     private func handleRightAimStickMove(touch: UITouch) {
@@ -1976,12 +2013,24 @@ import UIKit
 
         let offsetX = (currentLocation.x - aimAnchorLocation.x) * self.sensitivityFactorX
         let offsetY = (currentLocation.y - aimAnchorLocation.y) * self.sensitivityFactorY
-        self.sendRightAimStickOffsetEvent(
-            rawOffsetX: offsetX,
-            rawOffsetY: offsetY,
-            fastDeltaX: self.deltaX * self.sensitivityFactorX,
-            fastDeltaY: self.deltaY * self.sensitivityFactorY
-        )
+        let scaledDeltaX = self.deltaX * self.sensitivityFactorX
+        let scaledDeltaY = self.deltaY * self.sensitivityFactorY
+        if aimRelativeModeEnabled {
+            self.sendRightAimStickRelativeEvent(
+                rawOffsetX: offsetX,
+                rawOffsetY: offsetY,
+                deltaX: scaledDeltaX,
+                deltaY: scaledDeltaY
+            )
+            self.updateRelativeAimAnchor(toward: currentLocation, speed: hypot(scaledDeltaX, scaledDeltaY))
+        } else {
+            self.sendRightAimStickOffsetEvent(
+                rawOffsetX: offsetX,
+                rawOffsetY: offsetY,
+                fastDeltaX: scaledDeltaX,
+                fastDeltaY: scaledDeltaY
+            )
+        }
         self.scheduleAimStickStopCheck()
     }
 

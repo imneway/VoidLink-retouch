@@ -611,6 +611,7 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
                        fabs(buttonState.aimMaxOutputScale - 1.00) < 0.02))) {
                     widgetView.aimMaxOutputScale = buttonState.aimMaxOutputScale;
                 }
+                widgetView.aimRelativeModeEnabled = buttonState.aimRelativeModeEnabled;
                 widgetView.stickInvertVertical = buttonState.stickInvertVertical;
                 widgetView.stickInvertHorizontal = buttonState.stickInvertHorizontal;
                 widgetView.slideMode = buttonState.slideMode;
