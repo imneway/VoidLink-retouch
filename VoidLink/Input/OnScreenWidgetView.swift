@@ -223,8 +223,8 @@ import UIKit
     private var aimLastMoveTimestamp: CFTimeInterval = 0
     private var aimFilteredDelta: CGPoint = .zero
     private let aimStopDelay: TimeInterval = 0.045
-    private let aimDeadDelta: CGFloat = 0.03
-    private let aimDeltaSmoothing: CGFloat = 0.08
+    private let aimDeadDelta: CGFloat = 0.01
+    private let aimDeltaSmoothing: CGFloat = 0.0
     private let aimDeltaToStickMultiplier: CGFloat = 1.5167
     private let aimReferenceStickInputScale: CGFloat = 35.0
     
@@ -349,9 +349,9 @@ import UIKit
                     self.hasResponseCurveTweak = true
                 }
                 if self.touchPadString == "RSPADALT2" {
-                    self.stickResponseExponent = 1.12
-                    self.minStickOffset = self.stickMaxOffset * 0.12
-                    self.aimMaxOutputScale = 0.90
+                    self.stickResponseExponent = 1.0
+                    self.minStickOffset = 0
+                    self.aimMaxOutputScale = 1.0
                     self.hasAimTweak = true
                 }
             }
@@ -1886,24 +1886,13 @@ import UIKit
             return
         }
 
+        // Baseline intentionally mirrors RSVPAD's delta-to-stick conversion, with only
+        // an RSPADALT2-specific max-output cap and stop-on-idle behavior layered on top.
         let maxOutput = stickMaxOffset * aimMaxOutputScale
-        let floorOutput = min(max(minStickOffset, 0), maxOutput)
-
-        // Start from the same per-frame delta model as RSVPAD, then add RSPADALT2-only
-        // shaping: a deadzone floor, a soft curve, a max-output cap, and stop-on-idle.
-        let baseOutput = rawDeltaMagnitude * stickMaxOffset * aimDeltaToStickMultiplier / aimReferenceStickInputScale
-        let clampedBaseOutput = min(max(baseOutput, 0), maxOutput)
-
-        let outputMagnitude: CGFloat
-        if floorOutput > 0 && clampedBaseOutput <= floorOutput {
-            outputMagnitude = floorOutput
-        } else if floorOutput < maxOutput {
-            let exponent = max(stickResponseExponent, 1.0)
-            let normalized = min(max((clampedBaseOutput - floorOutput) / (maxOutput - floorOutput), 0), 1)
-            outputMagnitude = floorOutput + (maxOutput - floorOutput) * pow(normalized, exponent)
-        } else {
-            outputMagnitude = maxOutput
-        }
+        let outputMagnitude = min(
+            rawDeltaMagnitude * stickMaxOffset * aimDeltaToStickMultiplier / aimReferenceStickInputScale,
+            maxOutput
+        )
 
         let rawUnitX = rawDeltaX / rawDeltaMagnitude
         let rawUnitY = rawDeltaY / rawDeltaMagnitude

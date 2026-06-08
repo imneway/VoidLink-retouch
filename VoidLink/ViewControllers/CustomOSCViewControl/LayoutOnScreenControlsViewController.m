@@ -468,16 +468,21 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
             widgetView.sensitivityFactorY = buttonState.sensitivityFactorY;
             widgetView.trackballDecelerationRate = buttonState.decelerationRate;
             widgetView.stickIndicatorOffset = buttonState.stickIndicatorOffset;
-            if (!(widgetView.hasAimTweak && buttonState.minStickOffset <= 0)) {
+            if (!(widgetView.hasAimTweak &&
+                  (buttonState.minStickOffset <= 0 || fabs(buttonState.minStickOffset - 0x7FFE * 0.12) < 8))) {
                 widgetView.minStickOffset = buttonState.minStickOffset;
             }
             if (buttonState.stickInputScale > 0) widgetView.stickInputScale = buttonState.stickInputScale;
             if (buttonState.stickResponseExponent >= 1.0 &&
-                !(widgetView.hasAimTweak && fabs(buttonState.stickResponseExponent - 1.62) < 0.02)) {
+                !(widgetView.hasAimTweak &&
+                  (fabs(buttonState.stickResponseExponent - 1.62) < 0.02 ||
+                   fabs(buttonState.stickResponseExponent - 1.12) < 0.02))) {
                 widgetView.stickResponseExponent = buttonState.stickResponseExponent;
             }
             if (buttonState.aimMaxOutputScale > 0 &&
-                !(widgetView.hasAimTweak && fabs(buttonState.aimMaxOutputScale - 0.72) < 0.02)) {
+                !(widgetView.hasAimTweak &&
+                  (fabs(buttonState.aimMaxOutputScale - 0.72) < 0.02 ||
+                   fabs(buttonState.aimMaxOutputScale - 0.90) < 0.02))) {
                 widgetView.aimMaxOutputScale = buttonState.aimMaxOutputScale;
             }
             widgetView.stickInvertVertical = buttonState.stickInvertVertical;
@@ -1630,7 +1635,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.aimMaxOutputSlider = [[UISlider alloc] init];
     self.aimMaxOutputSlider.minimumValue = 0.20;
     self.aimMaxOutputSlider.maximumValue = 1.0;
-    self.aimMaxOutputSlider.value = 0.90;
+    self.aimMaxOutputSlider.value = 1.0;
     self.aimMaxOutputSlider.tintColor = sliderTint;
     [self.aimMaxOutputSlider addTarget:self action:@selector(aimMaxOutputSliderMoved:) forControlEvents:UIControlEventValueChanged];
 
