@@ -120,7 +120,7 @@ import UIKit
     // (mild precision) · 1.5–1.8 stronger precision at the cost of mid-range slope.
     @objc public var stickResponseExponent: CGFloat = 1.38
 
-    @objc public var aimMaxOutputScale: CGFloat = 0.72 {
+    @objc public var aimMaxOutputScale: CGFloat = 0.92 {
         didSet {
             if !aimMaxOutputScale.isFinite {
                 aimMaxOutputScale = oldValue
@@ -223,8 +223,15 @@ import UIKit
     private var aimLastMoveTimestamp: CFTimeInterval = 0
     private var aimAnchorLocation: CGPoint = .zero
     private var aimHasAnchor = false
-    private let aimStopDelay: TimeInterval = 0.10
-    private let aimDeadOffset: CGFloat = 0.25
+    private var aimFilteredTarget: CGPoint = .zero
+    private var aimHasFilteredTarget = false
+    private let aimStopDelay: TimeInterval = 0.08
+    private let aimDeadOffset: CGFloat = 0.16
+    private let aimFastBoostFactor: CGFloat = 2.2
+    private let aimFastBoostStart: CGFloat = 0.45
+    private let aimFastBoostFull: CGFloat = 7.0
+    private let aimSmoothingSlowAlpha: CGFloat = 0.58
+    private let aimSmoothingFastAlpha: CGFloat = 0.86
     
     // trackball
     private var trackballVelocity: CGPoint = .zero
@@ -347,10 +354,10 @@ import UIKit
                     self.hasResponseCurveTweak = true
                 }
                 if self.touchPadString == "RSPADALT2" {
-                    self.stickInputScale = 35
-                    self.stickResponseExponent = 1.0
-                    self.minStickOffset = 0
-                    self.aimMaxOutputScale = 1.0
+                    self.stickInputScale = 42
+                    self.stickResponseExponent = 1.18
+                    self.minStickOffset = self.stickMaxOffset * 0.06
+                    self.aimMaxOutputScale = 0.92
                     self.hasAimTweak = true
                 }
             }
@@ -1823,6 +1830,13 @@ import UIKit
         adjY *= scale
     }
 
+    private func clampVector(x: CGFloat, y: CGFloat, radius: CGFloat) -> CGPoint {
+        let mag = hypot(x, y)
+        guard mag > radius, mag > 0 else { return CGPoint(x: x, y: y) }
+        let scale = radius / mag
+        return CGPoint(x: x * scale, y: y * scale)
+    }
+
     private func sendRightStickTouchPadEvent(inputX: CGFloat, inputY: CGFloat){
         // Flip on the source axis so the deadband / response-curve / clamp all
         // operate consistently with the post-flip sign. Flipping after the
@@ -1853,6 +1867,8 @@ import UIKit
         aimAnchorLocation = .zero
         aimHasAnchor = false
         aimLastMoveTimestamp = 0
+        aimFilteredTarget = .zero
+        aimHasFilteredTarget = false
         if clearHostStick {
             self.onScreenControls.clearRightStickTouchPadFlag()
         }
@@ -1868,6 +1884,8 @@ import UIKit
                 self.aimHasAnchor = true
                 self.offSetX = 0
                 self.offSetY = 0
+                self.aimFilteredTarget = .zero
+                self.aimHasFilteredTarget = false
                 self.onScreenControls.clearRightStickTouchPadFlag()
                 if self.widgetType == WidgetTypeEnum.touchPad {
                     self.updateStickIndicator()
@@ -1878,28 +1896,59 @@ import UIKit
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    private func applyAimDeadzoneFloor(_ target: CGFloat) -> CGFloat {
-        guard target != 0, minStickOffset > 0 else { return target }
-        return (target >= 0 ? 1.0 : -1.0) * minStickOffset
-            + (stickMaxOffset - minStickOffset) * (target / stickMaxOffset)
+    private func applyAimDeadzoneFloor(targetX: inout CGFloat, targetY: inout CGFloat) {
+        guard minStickOffset > 0 else { return }
+        let mag = hypot(targetX, targetY)
+        guard mag > 0 else { return }
+        let normalized = min(mag / stickMaxOffset, 1.0)
+        let flooredMag = minStickOffset + (stickMaxOffset - minStickOffset) * normalized
+        let scale = flooredMag / mag
+        targetX *= scale
+        targetY *= scale
     }
 
-    private func sendRightAimStickOffsetEvent(rawOffsetX: CGFloat, rawOffsetY: CGFloat) {
+    private func smoothAimTarget(targetX: inout CGFloat, targetY: inout CGFloat, speed: CGFloat) {
+        let speedT = min(max(speed / aimFastBoostFull, 0.0), 1.0)
+        let alpha = aimSmoothingSlowAlpha + (aimSmoothingFastAlpha - aimSmoothingSlowAlpha) * speedT
+        if !aimHasFilteredTarget {
+            aimFilteredTarget = CGPoint(x: targetX, y: targetY)
+            aimHasFilteredTarget = true
+        } else {
+            aimFilteredTarget.x += (targetX - aimFilteredTarget.x) * alpha
+            aimFilteredTarget.y += (targetY - aimFilteredTarget.y) * alpha
+        }
+        targetX = aimFilteredTarget.x
+        targetY = aimFilteredTarget.y
+    }
+
+    private func sendRightAimStickOffsetEvent(rawOffsetX: CGFloat, rawOffsetY: CGFloat, fastDeltaX: CGFloat, fastDeltaY: CGFloat) {
         let rawOffsetMagnitude = hypot(rawOffsetX, rawOffsetY)
-        guard rawOffsetMagnitude >= aimDeadOffset else {
+        let fastDeltaMagnitude = hypot(fastDeltaX, fastDeltaY)
+        guard rawOffsetMagnitude >= aimDeadOffset || fastDeltaMagnitude >= aimDeadOffset else {
             self.offSetX = 0
             self.offSetY = 0
+            self.aimFilteredTarget = .zero
+            self.aimHasFilteredTarget = false
             self.onScreenControls.clearRightStickTouchPadFlag()
             return
         }
 
-        self.offSetX = min(max(rawOffsetX, -stickInputScale), stickInputScale)
-        self.offSetY = min(max(rawOffsetY, -stickInputScale), stickInputScale)
+        let visualOffset = clampVector(x: rawOffsetX, y: rawOffsetY, radius: stickInputScale)
+        self.offSetX = visualOffset.x
+        self.offSetY = visualOffset.y
 
-        let adjX = self.stickInvertHorizontal ? -rawOffsetX : rawOffsetX
-        let adjY = self.stickInvertVertical ? -rawOffsetY : rawOffsetY
-        var targetX = applyAimDeadzoneFloor(self.touchInputToStickInput(input: adjX))
-        var targetY = applyAimDeadzoneFloor(-self.touchInputToStickInput(input: adjY))
+        let boostT = min(max((fastDeltaMagnitude - aimFastBoostStart) / (aimFastBoostFull - aimFastBoostStart), 0.0), 1.0)
+        let boostedX = rawOffsetX + fastDeltaX * aimFastBoostFactor * boostT
+        let boostedY = rawOffsetY + fastDeltaY * aimFastBoostFactor * boostT
+        let source = clampVector(x: boostedX, y: boostedY, radius: stickInputScale)
+
+        var adjX = self.stickInvertHorizontal ? -source.x : source.x
+        var adjY = self.stickInvertVertical ? -source.y : source.y
+        applyStickResponseCurve(&adjX, &adjY)
+
+        var targetX = self.touchInputToStickInput(input: adjX)
+        var targetY = -self.touchInputToStickInput(input: adjY)
+        applyAimDeadzoneFloor(targetX: &targetX, targetY: &targetY)
 
         let maxOutputMagnitude = stickMaxOffset * aimMaxOutputScale
         let outputMagnitude = hypot(targetX, targetY)
@@ -1908,6 +1957,8 @@ import UIKit
             targetX *= scale
             targetY *= scale
         }
+
+        smoothAimTarget(targetX: &targetX, targetY: &targetY, speed: fastDeltaMagnitude)
         self.onScreenControls.sendRightStickTouchPadEvent(targetX, targetY)
     }
 
@@ -1925,7 +1976,12 @@ import UIKit
 
         let offsetX = (currentLocation.x - aimAnchorLocation.x) * self.sensitivityFactorX
         let offsetY = (currentLocation.y - aimAnchorLocation.y) * self.sensitivityFactorY
-        self.sendRightAimStickOffsetEvent(rawOffsetX: offsetX, rawOffsetY: offsetY)
+        self.sendRightAimStickOffsetEvent(
+            rawOffsetX: offsetX,
+            rawOffsetY: offsetY,
+            fastDeltaX: self.deltaX * self.sensitivityFactorX,
+            fastDeltaY: self.deltaY * self.sensitivityFactorY
+        )
         self.scheduleAimStickStopCheck()
     }
 
