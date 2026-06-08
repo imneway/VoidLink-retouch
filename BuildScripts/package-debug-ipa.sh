@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BUILD_ROOT="$REPO_ROOT/Build"
-PRODUCTS_DIR="$BUILD_ROOT/Products/Debug-iphoneos"
+PRODUCTS_ROOT="$REPO_ROOT/Build/Products"
+PRODUCTS_DIR="$PRODUCTS_ROOT/Debug-iphoneos"
 PAYLOAD_DIR="$PRODUCTS_DIR/Payload"
 APP_NAME="VoidLink.app"
 DSYM_NAME="VoidLink.app.dSYM"
@@ -20,7 +20,7 @@ xcodebuild \
   -scheme VoidLink \
   -configuration Debug \
   -destination 'generic/platform=iOS' \
-  SYMROOT="$BUILD_ROOT" \
+  SYMROOT="$PRODUCTS_ROOT" \
   CODE_SIGNING_ALLOWED=NO \
   build
 
