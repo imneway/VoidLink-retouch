@@ -40,6 +40,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) CGFloat stickResponseExponent; // for OnScreenWidgetView ALT pads (<1.0 = use widget default)
 @property (nonatomic, assign) CGFloat aimMaxOutputScale; // for RSPADALT2 aim pad (0 = use widget default)
 @property (nonatomic, assign) BOOL aimRelativeModeEnabled; // for RSPADALT2 dynamic-anchor relative aim mode
+@property (nonatomic, assign) uint8_t aimTuningVersion; // distinguishes saved user tuning from old migrated defaults
 @property (nonatomic, assign) BOOL stickInvertVertical;   // for OnScreenWidgetView stick pads (UI exposed on ALT only)
 @property (nonatomic, assign) BOOL stickInvertHorizontal; // for OnScreenWidgetView stick pads (UI exposed on ALT only)
 @property NSString* widgetShape; // for OnScreenWidgetView

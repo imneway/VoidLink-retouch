@@ -53,6 +53,7 @@
     [encoder encodeFloat:self.stickResponseExponent forKey:@"stickResponseExponent"];
     [encoder encodeFloat:self.aimMaxOutputScale forKey:@"aimMaxOutputScale"];
     [encoder encodeBool:self.aimRelativeModeEnabled forKey:@"aimRelativeModeEnabled"];
+    [encoder encodeInt:self.aimTuningVersion forKey:@"aimTuningVersion"];
     [encoder encodeBool:self.stickInvertVertical forKey:@"stickInvertVertical"];
     [encoder encodeBool:self.stickInvertHorizontal forKey:@"stickInvertHorizontal"];
 }
@@ -84,6 +85,7 @@
         self.stickResponseExponent = [decoder decodeFloatForKey:@"stickResponseExponent"];
         self.aimMaxOutputScale = [decoder containsValueForKey:@"aimMaxOutputScale"] ? [decoder decodeFloatForKey:@"aimMaxOutputScale"] : 0;
         self.aimRelativeModeEnabled = [decoder containsValueForKey:@"aimRelativeModeEnabled"] ? [decoder decodeBoolForKey:@"aimRelativeModeEnabled"] : NO;
+        self.aimTuningVersion = [decoder containsValueForKey:@"aimTuningVersion"] ? [decoder decodeIntForKey:@"aimTuningVersion"] : 0;
         self.stickInvertVertical = [decoder decodeBoolForKey:@"stickInvertVertical"];
         self.stickInvertHorizontal = [decoder decodeBoolForKey:@"stickInvertHorizontal"];
     }

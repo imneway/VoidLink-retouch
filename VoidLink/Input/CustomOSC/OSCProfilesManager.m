@@ -431,6 +431,7 @@ static CGRect layoutViewBounds;
         buttonState.stickResponseExponent = widgetView.stickResponseExponent;
         buttonState.aimMaxOutputScale = widgetView.aimMaxOutputScale;
         buttonState.aimRelativeModeEnabled = widgetView.aimRelativeModeEnabled;
+        buttonState.aimTuningVersion = widgetView.hasAimTweak ? 1 : 0;
         buttonState.stickInvertVertical = widgetView.stickInvertVertical;
         buttonState.stickInvertHorizontal = widgetView.stickInvertHorizontal;
         buttonState.slideMode = widgetView.slideMode;

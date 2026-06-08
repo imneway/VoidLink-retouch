@@ -18,6 +18,35 @@
 #import "VoidLink-Swift.h"
 #import "ThemeManager.h"
 
+static BOOL RSPADALT2ValueNear(CGFloat value, CGFloat target, CGFloat tolerance) {
+    return fabs(value - target) < tolerance;
+}
+
+static BOOL RSPADALT2ShouldMigrateLegacyAimDefaults(OnScreenWidgetView *widgetView, OnScreenButtonState *buttonState) {
+    if (!widgetView.hasAimTweak || buttonState.aimTuningVersion > 0) {
+        return NO;
+    }
+
+    BOOL legacyFirstPreset =
+        RSPADALT2ValueNear(buttonState.stickInputScale, 55, 0.5) &&
+        RSPADALT2ValueNear(buttonState.stickResponseExponent, 1.62, 0.02) &&
+        RSPADALT2ValueNear(buttonState.aimMaxOutputScale, 0.72, 0.02);
+    BOOL legacyDeadZonePreset =
+        RSPADALT2ValueNear(buttonState.stickInputScale, 55, 0.5) &&
+        RSPADALT2ValueNear(buttonState.stickResponseExponent, 1.12, 0.02) &&
+        RSPADALT2ValueNear(buttonState.aimMaxOutputScale, 0.90, 0.02);
+    BOOL legacyRSVPADPreset =
+        RSPADALT2ValueNear(buttonState.stickInputScale, 55, 0.5) &&
+        RSPADALT2ValueNear(buttonState.stickResponseExponent, 1.00, 0.02) &&
+        RSPADALT2ValueNear(buttonState.aimMaxOutputScale, 1.00, 0.02);
+    BOOL legacyCumulativePreset =
+        RSPADALT2ValueNear(buttonState.stickInputScale, 35, 0.5) &&
+        RSPADALT2ValueNear(buttonState.stickResponseExponent, 1.00, 0.02) &&
+        RSPADALT2ValueNear(buttonState.aimMaxOutputScale, 1.00, 0.02);
+
+    return legacyFirstPreset || legacyDeadZonePreset || legacyRSVPADPreset || legacyCumulativePreset;
+}
+
 @interface LayoutOnScreenControlsViewController ()
 
 @end
@@ -468,29 +497,18 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
             widgetView.sensitivityFactorY = buttonState.sensitivityFactorY;
             widgetView.trackballDecelerationRate = buttonState.decelerationRate;
             widgetView.stickIndicatorOffset = buttonState.stickIndicatorOffset;
-            if (!(widgetView.hasAimTweak &&
-                  (buttonState.minStickOffset <= 0 || fabs(buttonState.minStickOffset - 0x7FFE * 0.12) < 8))) {
+            BOOL migrateLegacyAimDefaults = RSPADALT2ShouldMigrateLegacyAimDefaults(widgetView, buttonState);
+            if (!migrateLegacyAimDefaults) {
                 widgetView.minStickOffset = buttonState.minStickOffset;
-            }
-            if (buttonState.stickInputScale > 0 &&
-                !(widgetView.hasAimTweak &&
-                  (fabs(buttonState.stickInputScale - 35) < 0.5 ||
-                   fabs(buttonState.stickInputScale - 55) < 0.5))) {
-                widgetView.stickInputScale = buttonState.stickInputScale;
-            }
-            if (buttonState.stickResponseExponent >= 1.0 &&
-                !(widgetView.hasAimTweak &&
-                  (fabs(buttonState.stickResponseExponent - 1.00) < 0.02 ||
-                   fabs(buttonState.stickResponseExponent - 1.62) < 0.02 ||
-                   fabs(buttonState.stickResponseExponent - 1.12) < 0.02))) {
-                widgetView.stickResponseExponent = buttonState.stickResponseExponent;
-            }
-            if (buttonState.aimMaxOutputScale > 0 &&
-                !(widgetView.hasAimTweak &&
-                  (fabs(buttonState.aimMaxOutputScale - 0.72) < 0.02 ||
-                   fabs(buttonState.aimMaxOutputScale - 0.90) < 0.02 ||
-                   fabs(buttonState.aimMaxOutputScale - 1.00) < 0.02))) {
-                widgetView.aimMaxOutputScale = buttonState.aimMaxOutputScale;
+                if (buttonState.stickInputScale > 0) {
+                    widgetView.stickInputScale = buttonState.stickInputScale;
+                }
+                if (buttonState.stickResponseExponent >= 1.0) {
+                    widgetView.stickResponseExponent = buttonState.stickResponseExponent;
+                }
+                if (buttonState.aimMaxOutputScale > 0) {
+                    widgetView.aimMaxOutputScale = buttonState.aimMaxOutputScale;
+                }
             }
             widgetView.aimRelativeModeEnabled = buttonState.aimRelativeModeEnabled;
             widgetView.stickInvertVertical = buttonState.stickInvertVertical;
