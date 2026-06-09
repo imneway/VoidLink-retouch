@@ -267,13 +267,13 @@ import UIKit
     private let aimTrackpadReferenceResponseTime: CGFloat = 0.06
     private let aimTrackpadReverseBrake: CGFloat = 0.12
     private let aimTrackpadMaxImpulseTime: CGFloat = 0.42
-    private let aimTrackpadOutputSmoothingSlowAlpha: CGFloat = 0.62
-    private let aimTrackpadOutputSmoothingFastAlpha: CGFloat = 0.92
+    private let aimTrackpadOutputSmoothingSlowAlpha: CGFloat = 0.64
+    private let aimTrackpadOutputSmoothingFastAlpha: CGFloat = 0.98
     private let aimTrackpadOutputSmoothingSlowSource: CGFloat = 0.8
-    private let aimTrackpadOutputSmoothingFastSource: CGFloat = 12.0
+    private let aimTrackpadOutputSmoothingFastSource: CGFloat = 7.0
     private let aimTrackpadTremorSourceThreshold: CGFloat = 2.4
     private let aimTrackpadTremorAlignmentThreshold: CGFloat = 0.35
-    private let aimTrackpadTremorAlpha: CGFloat = 0.45
+    private let aimTrackpadTremorAlpha: CGFloat = 0.50
     private let aimTrackpadStopThreshold: CGFloat = 0.003
     
     // trackball
@@ -1852,6 +1852,13 @@ import UIKit
         if target < -stickMaxOffset {target = -stickMaxOffset}
         return target
     }
+
+    private func stickInputToTouchInput(input: CGFloat) -> CGFloat {
+        var source = input * stickInputScale / stickMaxOffset
+        if source > stickInputScale { source = stickInputScale }
+        if source < -stickInputScale { source = -stickInputScale }
+        return source
+    }
     
     private func touchInputToStickBallCoord(input: CGFloat) -> CGFloat {
         if input > stickInputScale {
@@ -2071,14 +2078,16 @@ import UIKit
         }
     }
 
-    private func sendRightAimTrackpadSource(_ source: CGPoint) {
+    private func sendRightAimTrackpadSource(_ source: CGPoint) -> CGPoint {
         let visualOffset = clampVector(x: source.x, y: source.y, radius: stickInputScale)
         self.offSetX = visualOffset.x
         self.offSetY = visualOffset.y
 
         let clampedSource = clampVector(x: source.x, y: source.y, radius: stickInputScale)
-        let adjX = self.stickInvertHorizontal ? -clampedSource.x : clampedSource.x
-        let adjY = self.stickInvertVertical ? -clampedSource.y : clampedSource.y
+        let signX: CGFloat = self.stickInvertHorizontal ? -1.0 : 1.0
+        let signY: CGFloat = self.stickInvertVertical ? -1.0 : 1.0
+        let adjX = clampedSource.x * signX
+        let adjY = clampedSource.y * signY
 
         var targetX = self.touchInputToStickInput(input: adjX)
         var targetY = -self.touchInputToStickInput(input: adjY)
@@ -2113,6 +2122,10 @@ import UIKit
         }
         aimTrackpadLastOutput = CGPoint(x: targetX, y: targetY)
         self.onScreenControls.sendRightStickTouchPadEvent(targetX, targetY)
+
+        let sentSourceX = self.stickInputToTouchInput(input: targetX) * signX
+        let sentSourceY = self.stickInputToTouchInput(input: -targetY) * signY
+        return clampVector(x: sentSourceX, y: sentSourceY, radius: stickInputScale)
     }
 
     @objc private func handleAimTrackpadDisplayLink(_ displayLink: CADisplayLink) {
@@ -2141,9 +2154,9 @@ import UIKit
             y: aimTrackpadImpulse.y / responseTime
         )
         let source = clampVector(x: rawSource.x, y: rawSource.y, radius: stickInputScale)
-        sendRightAimTrackpadSource(source)
+        let sentSource = sendRightAimTrackpadSource(source)
 
-        let drain = CGPoint(x: source.x * dt, y: source.y * dt)
+        let drain = CGPoint(x: sentSource.x * dt, y: sentSource.y * dt)
         if hypot(drain.x, drain.y) >= impulseMagnitude {
             aimTrackpadImpulse = .zero
         } else {
