@@ -22,21 +22,8 @@ static BOOL RSPADALT2ValueNear(CGFloat value, CGFloat target, CGFloat tolerance)
     return fabs(value - target) < tolerance;
 }
 
-static BOOL RSPADALT2ShouldUseCurrentAimDefaults(OnScreenWidgetView *widgetView, OnScreenButtonState *buttonState) {
-    if (!widgetView.hasAimTweak) {
-        return NO;
-    }
-
-    BOOL relativeV3FirstPreset =
-        buttonState.aimTuningVersion == 1 &&
-        RSPADALT2ValueNear(buttonState.stickInputScale, 42, 0.5) &&
-        RSPADALT2ValueNear(buttonState.stickResponseExponent, 1.18, 0.02) &&
-        RSPADALT2ValueNear(buttonState.aimMaxOutputScale, 0.92, 0.02);
-    if (relativeV3FirstPreset) {
-        return YES;
-    }
-
-    if (buttonState.aimTuningVersion > 0) {
+static BOOL RSPADALT2ShouldMigrateLegacyAimDefaults(OnScreenWidgetView *widgetView, OnScreenButtonState *buttonState) {
+    if (!widgetView.hasAimTweak || buttonState.aimTuningVersion > 0) {
         return NO;
     }
 
@@ -84,26 +71,6 @@ static BOOL RSPADALT2ShouldUseCurrentAimDefaults(OnScreenWidgetView *widgetView,
     BOOL rotationUnlocked;          // NO (default) = screen rotation locked while editing
     UIButton *rotationLockButton;   // top toolbar lock toggle
     CGFloat lastToolbarWidth;       // guards the adaptive-toolbar relayout against loops
-}
-
-- (BOOL)selectedWidgetUsesAimPadTuning {
-    return self->selectedWidgetView != nil &&
-        [self->selectedWidgetView.cmdString containsString:@"RSPADALT2"];
-}
-
-- (NSString *)stickInputScaleLabelTextForValue:(CGFloat)value {
-    NSString *format = [self selectedWidgetUsesAimPadTuning] ? @"Aim Range: %.0f" : @"Stick Range: %.0f";
-    return [LocalizationHelper localizedStringForKey:format, value];
-}
-
-- (NSString *)stickResponseLabelTextForValue:(CGFloat)value {
-    NSString *format = [self selectedWidgetUsesAimPadTuning] ? @"Micro Curve: %.2f" : @"Stick Curve: %.2f";
-    return [LocalizationHelper localizedStringForKey:format, value];
-}
-
-- (NSString *)aimMaxOutputLabelTextForValue:(CGFloat)value {
-    NSString *format = [self selectedWidgetUsesAimPadTuning] ? @"Peak Output: %.2f" : @"Max Output: %.2f";
-    return [LocalizationHelper localizedStringForKey:format, value];
 }
 
 // MARK: - 方向锁定 持久化Key（与列表页一致）
@@ -530,8 +497,8 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
             widgetView.sensitivityFactorY = buttonState.sensitivityFactorY;
             widgetView.trackballDecelerationRate = buttonState.decelerationRate;
             widgetView.stickIndicatorOffset = buttonState.stickIndicatorOffset;
-            BOOL useCurrentAimDefaults = RSPADALT2ShouldUseCurrentAimDefaults(widgetView, buttonState);
-            if (!useCurrentAimDefaults) {
+            BOOL migrateLegacyAimDefaults = RSPADALT2ShouldMigrateLegacyAimDefaults(widgetView, buttonState);
+            if (!migrateLegacyAimDefaults) {
                 widgetView.minStickOffset = buttonState.minStickOffset;
                 if (buttonState.stickInputScale > 0) {
                     widgetView.stickInputScale = buttonState.stickInputScale;
@@ -1413,18 +1380,17 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     if(showResponseCurveStack){
         [self.stickInputScaleSlider setValue:self->selectedWidgetView.stickInputScale];
         [self autoFitLabel:self.stickInputScaleLabel];
-        [self.stickInputScaleLabel setText:[self stickInputScaleLabelTextForValue:self->selectedWidgetView.stickInputScale]];
+        [self.stickInputScaleLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Range: %.0f", self->selectedWidgetView.stickInputScale]];
         [self.stickResponseExponentSlider setValue:self->selectedWidgetView.stickResponseExponent];
         [self autoFitLabel:self.stickResponseExponentLabel];
-        [self.stickResponseExponentLabel setText:[self stickResponseLabelTextForValue:self->selectedWidgetView.stickResponseExponent]];
+        [self.stickResponseExponentLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Curve: %.2f", self->selectedWidgetView.stickResponseExponent]];
         self.stickInvertVerticalSwitch.on = self->selectedWidgetView.stickInvertVertical;
         self.stickInvertHorizontalSwitch.on = self->selectedWidgetView.stickInvertHorizontal;
     }
     if(showAimTweakStack){
         [self.aimMaxOutputSlider setValue:self->selectedWidgetView.aimMaxOutputScale];
         [self autoFitLabel:self.aimMaxOutputLabel];
-        [self.aimMaxOutputLabel setText:[self aimMaxOutputLabelTextForValue:self->selectedWidgetView.aimMaxOutputScale]];
-        self.aimRelativeModeLabel.text = [LocalizationHelper localizedStringForKey:@"Trackpad Aim"];
+        [self.aimMaxOutputLabel setText:[LocalizationHelper localizedStringForKey:@"Max Output: %.2f", self->selectedWidgetView.aimMaxOutputScale]];
         self.aimRelativeModeSwitch.on = self->selectedWidgetView.aimRelativeModeEnabled;
     }
     [self autoFitLabel:self.widgetSizeLabel];
@@ -1620,21 +1586,21 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 }
 
 - (void)stickInputScaleSliderMoved:(UISlider* )sender{
-    [self.stickInputScaleLabel setText:[self stickInputScaleLabelTextForValue:sender.value]];
+    [self.stickInputScaleLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Range: %.0f", sender.value]];
     if(self->selectedWidgetView != nil && self->widgetViewSelected){
         self->selectedWidgetView.stickInputScale = sender.value;
     }
 }
 
 - (void)stickResponseExponentSliderMoved:(UISlider* )sender{
-    [self.stickResponseExponentLabel setText:[self stickResponseLabelTextForValue:sender.value]];
+    [self.stickResponseExponentLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Curve: %.2f", sender.value]];
     if(self->selectedWidgetView != nil && self->widgetViewSelected){
         self->selectedWidgetView.stickResponseExponent = sender.value;
     }
 }
 
 - (void)aimMaxOutputSliderMoved:(UISlider* )sender{
-    [self.aimMaxOutputLabel setText:[self aimMaxOutputLabelTextForValue:sender.value]];
+    [self.aimMaxOutputLabel setText:[LocalizationHelper localizedStringForKey:@"Max Output: %.2f", sender.value]];
     if(self->selectedWidgetView != nil && self->widgetViewSelected){
         self->selectedWidgetView.aimMaxOutputScale = sender.value;
     }
