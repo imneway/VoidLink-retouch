@@ -259,7 +259,6 @@ import UIKit
     private var mousePointerMoved: Bool
     private var twoTouchesDetected: Bool
 
-    private var aimStopTimer: Timer?
     private var aimLastMoveTimestamp: CFTimeInterval = 0
     private var aimAnchorLocation: CGPoint = .zero
     private var aimHasAnchor = false
@@ -270,7 +269,6 @@ import UIKit
     private var aimTrackpadLastOutput: CGPoint = .zero
     private var aimTrackpadHasOutput = false
     private var aimRelativeModeWasActive = false
-    private let aimStopDelay: TimeInterval = 0.08
     private let aimTrackpadNoiseDeadzone: CGFloat = 0.03
     private let aimTrackpadReferenceResponseTime: CGFloat = 0.06
     private let aimTrackpadReverseBrake: CGFloat = 0.12
@@ -320,7 +318,10 @@ import UIKit
     }
 
     private var shouldShowRuntimeStickIndicator: Bool {
-        return self.touchPadString != "RSPADALT2"
+        if self.isAimStickPad {
+            return !self.isAimRelativeModeActive
+        }
+        return true
     }
 
     private func highlightAlpha(for backgroundAlpha: CGFloat) -> CGFloat {
@@ -1497,6 +1498,20 @@ import UIKit
         }
         CATransaction.commit()
     }
+
+    private func hideStickIndicatorImmediately() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        self.crossMarkLayer.isHidden = true
+        self.stickBallLayer.isHidden = true
+        self.altBackgroundLayer.isHidden = true
+        self.altPointerLayer.isHidden = true
+        self.altBackgroundLayer.opacity = 0.0
+        self.altPointerLayer.opacity = 0.0
+        self.altBackgroundLayer.setAffineTransform(.identity)
+        self.altPointerLayer.setAffineTransform(.identity)
+        CATransaction.commit()
+    }
     
     //================================================================================================
     
@@ -1936,7 +1951,7 @@ import UIKit
         // vertical input must be inverted
         targetX = (targetX >= 0 ? 1.0 : -1.0) * self.minStickOffset + (self.stickMaxOffset - self.minStickOffset) * (targetX/self.stickMaxOffset)
         targetY = (targetY >= 0 ? 1.0 : -1.0) * self.minStickOffset + (self.stickMaxOffset - self.minStickOffset) * (targetY/self.stickMaxOffset)
-        if self.isAimStickPad {
+        if self.isAimStickPad && self.isAimRelativeModeActive {
             let maxOutputMagnitude = stickMaxOffset * aimMaxOutputScale
             let outputMagnitude = hypot(targetX, targetY)
             if outputMagnitude > maxOutputMagnitude && outputMagnitude > 0 {
@@ -1957,8 +1972,6 @@ import UIKit
     }
 
     private func resetAimStickState(clearHostStick: Bool) {
-        aimStopTimer?.invalidate()
-        aimStopTimer = nil
         aimTrackpadDisplayLink?.invalidate()
         aimTrackpadDisplayLink = nil
         aimTrackpadImpulse = .zero
@@ -1973,30 +1986,6 @@ import UIKit
         if clearHostStick {
             self.onScreenControls.clearRightStickTouchPadFlag()
         }
-    }
-
-    private func scheduleAimStickStopCheck() {
-        if isAimRelativeModeActive {
-            return
-        }
-        aimStopTimer?.invalidate()
-        let stopDelay = aimStopDelay
-        let timer = Timer(timeInterval: stopDelay, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
-            guard self.isAimStickPad, self.pressed else { return }
-            if CACurrentMediaTime() - self.aimLastMoveTimestamp >= stopDelay {
-                self.aimAnchorLocation = self.latestTouchLocation
-                self.aimHasAnchor = true
-                self.offSetX = 0
-                self.offSetY = 0
-                self.onScreenControls.clearRightStickTouchPadFlag()
-                if self.widgetType == WidgetTypeEnum.touchPad && self.shouldShowRuntimeStickIndicator {
-                    self.updateStickIndicator()
-                }
-            }
-        }
-        aimStopTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func smoothStep(_ value: CGFloat) -> CGFloat {
@@ -2165,16 +2154,26 @@ import UIKit
         aimLastMoveTimestamp = now
 
         let relativeAimActive = self.isAimRelativeModeActive
+        let previousRelativeAimActive = aimRelativeModeWasActive
         let scaledDeltaX = self.deltaX * (relativeAimActive ? self.aimSensitivityFactorX : self.sensitivityFactorX)
         let scaledDeltaY = self.deltaY * (relativeAimActive ? self.aimSensitivityFactorY : self.sensitivityFactorY)
-        if aimRelativeModeWasActive && !relativeAimActive {
+        if previousRelativeAimActive && !relativeAimActive {
             aimTrackpadImpulse = .zero
             aimTrackpadResidualDelta = .zero
             stopAimTrackpadDisplayLink(clearHostStick: false)
-        } else if !aimRelativeModeWasActive && relativeAimActive {
+            aimAnchorLocation = currentLocation
+            touchBeganLocation = currentLocation
+            if let superLayer = self.layer.superlayer {
+                touchBeganPosInSuperLayer = superLayer.convert(currentLocation, from: self.layer)
+            }
+            if widgetType == WidgetTypeEnum.touchPad {
+                showStickIndicator()
+            }
+        } else if !previousRelativeAimActive && relativeAimActive {
             aimTrackpadResidualDelta = .zero
             aimTrackpadLastOutput = .zero
             aimTrackpadHasOutput = false
+            hideStickIndicatorImmediately()
         }
         aimRelativeModeWasActive = relativeAimActive
 
@@ -2193,7 +2192,6 @@ import UIKit
                 inputY: self.offSetY * self.sensitivityFactorY
             )
         }
-        self.scheduleAimStickStopCheck()
     }
 
     private func sendLeftStickTouchPadEvent(inputX: CGFloat, inputY: CGFloat){
@@ -2732,7 +2730,7 @@ import UIKit
                 if self.isAimStickPad {
                     resetAimStickState(clearHostStick: false)
                 }
-                if shouldShowRuntimeStickIndicator {
+                if shouldShowRuntimeStickIndicator || self.isAimStickPad {
                     resetStickBallPositionAndHideIndicator()
                 }
             case "LSVPAD":
@@ -2898,7 +2896,7 @@ import UIKit
                 if self.isAimStickPad {
                     resetAimStickState(clearHostStick: false)
                 }
-                if widgetType == WidgetTypeEnum.touchPad && shouldShowRuntimeStickIndicator {self.resetStickBallPositionAndHideIndicator()}
+                if widgetType == WidgetTypeEnum.touchPad && (shouldShowRuntimeStickIndicator || self.isAimStickPad) {self.resetStickBallPositionAndHideIndicator()}
                 // 对于 Alt 版本，恢复相关控件透明度
                 if self.isRightAltStickPad && !OnScreenWidgetView.obscuredByAlpha {
                     self.restoreControlsOpacity()
