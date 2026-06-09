@@ -628,6 +628,15 @@ static BOOL RSPADALT2ShouldMigrateLegacyAimDefaults(OnScreenWidgetView *widgetVi
                     if (buttonState.aimMaxOutputScale > 0) {
                         widgetView.aimMaxOutputScale = buttonState.aimMaxOutputScale;
                     }
+                    if (buttonState.aimTuningVersion >= 2 && buttonState.aimTrackpadGain > 0) {
+                        widgetView.aimTrackpadGain = buttonState.aimTrackpadGain;
+                    }
+                    if (buttonState.aimTuningVersion >= 2) {
+                        widgetView.aimTrackpadDeadzoneCompensation = buttonState.aimTrackpadDeadzoneCompensation;
+                    }
+                    if (buttonState.aimTuningVersion >= 2 && buttonState.aimTrackpadResponseDuration > 0) {
+                        widgetView.aimTrackpadResponseDuration = buttonState.aimTrackpadResponseDuration;
+                    }
                 }
                 widgetView.aimRelativeModeEnabled = buttonState.aimRelativeModeEnabled;
                 widgetView.stickInvertVertical = buttonState.stickInvertVertical;

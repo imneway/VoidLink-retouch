@@ -128,6 +128,30 @@ import UIKit
             aimMaxOutputScale = min(max(aimMaxOutputScale, 0.20), 1.0)
         }
     }
+    @objc public var aimTrackpadGain: CGFloat = 5.2 {
+        didSet {
+            if !aimTrackpadGain.isFinite {
+                aimTrackpadGain = oldValue
+            }
+            aimTrackpadGain = min(max(aimTrackpadGain, 1.0), 10.0)
+        }
+    }
+    @objc public var aimTrackpadDeadzoneCompensation: CGFloat = 0.16 {
+        didSet {
+            if !aimTrackpadDeadzoneCompensation.isFinite {
+                aimTrackpadDeadzoneCompensation = oldValue
+            }
+            aimTrackpadDeadzoneCompensation = min(max(aimTrackpadDeadzoneCompensation, 0.0), 0.35)
+        }
+    }
+    @objc public var aimTrackpadResponseDuration: CGFloat = 0.06 {
+        didSet {
+            if !aimTrackpadResponseDuration.isFinite {
+                aimTrackpadResponseDuration = oldValue
+            }
+            aimTrackpadResponseDuration = min(max(aimTrackpadResponseDuration, 0.03), 0.14)
+        }
+    }
     @objc public var aimRelativeModeEnabled: Bool = false
 
     
@@ -240,13 +264,9 @@ import UIKit
     private let aimSmoothingSlowAlpha: CGFloat = 0.58
     private let aimSmoothingFastAlpha: CGFloat = 0.86
     private let aimTrackpadNoiseDeadzone: CGFloat = 0.03
-    private let aimTrackpadResponseTime: CGFloat = 0.078
-    private let aimTrackpadBaseGain: CGFloat = 5.8
-    private let aimTrackpadFastBoostStart: CGFloat = 110.0
-    private let aimTrackpadFastBoostFull: CGFloat = 1050.0
-    private let aimTrackpadFastBoostFactor: CGFloat = 1.85
+    private let aimTrackpadReferenceResponseTime: CGFloat = 0.06
     private let aimTrackpadReverseBrake: CGFloat = 0.12
-    private let aimTrackpadMaxImpulseTime: CGFloat = 0.16
+    private let aimTrackpadMaxImpulseTime: CGFloat = 0.36
     private let aimTrackpadOutputSmoothingAlpha: CGFloat = 0.68
     private let aimTrackpadStopThreshold: CGFloat = 0.018
     
@@ -375,6 +395,9 @@ import UIKit
                     self.stickResponseExponent = 1.18
                     self.minStickOffset = self.stickMaxOffset * 0.06
                     self.aimMaxOutputScale = 0.92
+                    self.aimTrackpadGain = 5.2
+                    self.aimTrackpadDeadzoneCompensation = 0.16
+                    self.aimTrackpadResponseDuration = 0.06
                     self.hasAimTweak = true
                 }
             }
@@ -1941,6 +1964,17 @@ import UIKit
         targetY *= scale
     }
 
+    private func applyTrackpadDeadzoneCompensation(targetX: inout CGFloat, targetY: inout CGFloat) {
+        guard aimTrackpadDeadzoneCompensation > 0 else { return }
+        let mag = hypot(targetX, targetY)
+        guard mag > 0 else { return }
+        let floorMagnitude = stickMaxOffset * aimTrackpadDeadzoneCompensation
+        guard mag < floorMagnitude else { return }
+        let scale = floorMagnitude / mag
+        targetX *= scale
+        targetY *= scale
+    }
+
     private func smoothAimTarget(targetX: inout CGFloat, targetY: inout CGFloat, speed: CGFloat) {
         let speedT = min(max(speed / aimFastBoostFull, 0.0), 1.0)
         let alpha = aimSmoothingSlowAlpha + (aimSmoothingFastAlpha - aimSmoothingSlowAlpha) * speedT
@@ -2037,12 +2071,12 @@ import UIKit
         self.offSetY = visualOffset.y
 
         let clampedSource = clampVector(x: source.x, y: source.y, radius: stickInputScale)
-        var adjX = self.stickInvertHorizontal ? -clampedSource.x : clampedSource.x
-        var adjY = self.stickInvertVertical ? -clampedSource.y : clampedSource.y
-        applyStickResponseCurve(&adjX, &adjY)
+        let adjX = self.stickInvertHorizontal ? -clampedSource.x : clampedSource.x
+        let adjY = self.stickInvertVertical ? -clampedSource.y : clampedSource.y
 
         var targetX = self.touchInputToStickInput(input: adjX)
         var targetY = -self.touchInputToStickInput(input: adjY)
+        applyTrackpadDeadzoneCompensation(targetX: &targetX, targetY: &targetY)
 
         let maxOutputMagnitude = stickMaxOffset * aimMaxOutputScale
         let outputMagnitude = hypot(targetX, targetY)
@@ -2077,7 +2111,8 @@ import UIKit
         let dt = min(max(CGFloat(elapsed), 1.0 / 240.0), 1.0 / 30.0)
 
         let impulseMagnitude = hypot(aimTrackpadImpulse.x, aimTrackpadImpulse.y)
-        let stopThreshold = stickInputScale * aimTrackpadResponseTime * aimTrackpadStopThreshold
+        let responseTime = aimTrackpadResponseDuration
+        let stopThreshold = stickInputScale * responseTime * aimTrackpadStopThreshold
         guard impulseMagnitude > stopThreshold else {
             aimTrackpadImpulse = .zero
             stopAimTrackpadDisplayLink(clearHostStick: true)
@@ -2085,8 +2120,8 @@ import UIKit
         }
 
         let rawSource = CGPoint(
-            x: aimTrackpadImpulse.x / aimTrackpadResponseTime,
-            y: aimTrackpadImpulse.y / aimTrackpadResponseTime
+            x: aimTrackpadImpulse.x / responseTime,
+            y: aimTrackpadImpulse.y / responseTime
         )
         let source = clampVector(x: rawSource.x, y: rawSource.y, radius: stickInputScale)
         sendRightAimTrackpadSource(source)
@@ -2100,7 +2135,7 @@ import UIKit
         }
     }
 
-    private func sendRightAimStickRelativeEvent(deltaX: CGFloat, deltaY: CGFloat, elapsed: CFTimeInterval) {
+    private func sendRightAimStickRelativeEvent(deltaX: CGFloat, deltaY: CGFloat, elapsed _: CFTimeInterval) {
         aimTrackpadResidualDelta.x += deltaX
         aimTrackpadResidualDelta.y += deltaY
 
@@ -2112,13 +2147,9 @@ import UIKit
         let activeDelta = aimTrackpadResidualDelta
         aimTrackpadResidualDelta = .zero
 
-        let clampedElapsed = min(max(CGFloat(elapsed), 1.0 / 240.0), 1.0 / 30.0)
-        let speed = deltaMagnitude / clampedElapsed
-        let speedT = smoothStep((speed - aimTrackpadFastBoostStart) / (aimTrackpadFastBoostFull - aimTrackpadFastBoostStart))
-        let gain = aimTrackpadBaseGain * (1.0 + aimTrackpadFastBoostFactor * speedT)
         let newImpulse = CGPoint(
-            x: activeDelta.x * gain * aimTrackpadResponseTime,
-            y: activeDelta.y * gain * aimTrackpadResponseTime
+            x: activeDelta.x * aimTrackpadGain * aimTrackpadReferenceResponseTime,
+            y: activeDelta.y * aimTrackpadGain * aimTrackpadReferenceResponseTime
         )
 
         let pendingMagnitude = hypot(aimTrackpadImpulse.x, aimTrackpadImpulse.y)

@@ -509,6 +509,15 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
                 if (buttonState.aimMaxOutputScale > 0) {
                     widgetView.aimMaxOutputScale = buttonState.aimMaxOutputScale;
                 }
+                if (buttonState.aimTuningVersion >= 2 && buttonState.aimTrackpadGain > 0) {
+                    widgetView.aimTrackpadGain = buttonState.aimTrackpadGain;
+                }
+                if (buttonState.aimTuningVersion >= 2) {
+                    widgetView.aimTrackpadDeadzoneCompensation = buttonState.aimTrackpadDeadzoneCompensation;
+                }
+                if (buttonState.aimTuningVersion >= 2 && buttonState.aimTrackpadResponseDuration > 0) {
+                    widgetView.aimTrackpadResponseDuration = buttonState.aimTrackpadResponseDuration;
+                }
             }
             widgetView.aimRelativeModeEnabled = buttonState.aimRelativeModeEnabled;
             widgetView.stickInvertVertical = buttonState.stickInvertVertical;
@@ -1184,6 +1193,10 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     }
     if (widget.hasAimTweak && newWidget.hasAimTweak) {
         newWidget.aimMaxOutputScale = widget.aimMaxOutputScale;
+        newWidget.aimTrackpadGain = widget.aimTrackpadGain;
+        newWidget.aimTrackpadDeadzoneCompensation = widget.aimTrackpadDeadzoneCompensation;
+        newWidget.aimTrackpadResponseDuration = widget.aimTrackpadResponseDuration;
+        newWidget.aimRelativeModeEnabled = widget.aimRelativeModeEnabled;
     }
     [newWidget setVibrationWithStyle:widget.vibrationStyle];
     newWidget.mouseButtonAction = widget.mouseButtonAction;
@@ -1344,6 +1357,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.stickIndicatorOffsetStack.hidden = !showStickIndicatorOffsetStack;
     self.stickInputScaleStack.hidden = self.stickResponseExponentStack.hidden = !showResponseCurveStack;
     self.aimMaxOutputStack.hidden = self.aimRelativeModeStack.hidden = !showAimTweakStack;
+    self.aimResponseTimeStack.hidden = !(showAimTweakStack && selectedWidgetView.aimRelativeModeEnabled);
     self.stickInvertVerticalStack.hidden = self.stickInvertHorizontalStack.hidden = !showResponseCurveStack;
     self.mouseDownButtonStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"MOUSEPAD"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
     self.decelerationRateStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"TRACKBALL"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
@@ -1378,20 +1392,13 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         [self->selectedWidgetView updateStickIndicator];
     }
     if(showResponseCurveStack){
-        [self.stickInputScaleSlider setValue:self->selectedWidgetView.stickInputScale];
-        [self autoFitLabel:self.stickInputScaleLabel];
-        [self.stickInputScaleLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Range: %.0f", self->selectedWidgetView.stickInputScale]];
-        [self.stickResponseExponentSlider setValue:self->selectedWidgetView.stickResponseExponent];
-        [self autoFitLabel:self.stickResponseExponentLabel];
-        [self.stickResponseExponentLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Curve: %.2f", self->selectedWidgetView.stickResponseExponent]];
+        [self configureAimResponseSlidersForSelectedWidget];
         self.stickInvertVerticalSwitch.on = self->selectedWidgetView.stickInvertVertical;
         self.stickInvertHorizontalSwitch.on = self->selectedWidgetView.stickInvertHorizontal;
     }
     if(showAimTweakStack){
-        [self.aimMaxOutputSlider setValue:self->selectedWidgetView.aimMaxOutputScale];
-        [self autoFitLabel:self.aimMaxOutputLabel];
-        [self.aimMaxOutputLabel setText:[LocalizationHelper localizedStringForKey:@"Max Output: %.2f", self->selectedWidgetView.aimMaxOutputScale]];
         self.aimRelativeModeSwitch.on = self->selectedWidgetView.aimRelativeModeEnabled;
+        [self configureAimResponseSlidersForSelectedWidget];
     }
     [self autoFitLabel:self.widgetSizeLabel];
     
@@ -1437,7 +1444,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.mouseDownButtonStack.hidden = true;
     self.decelerationRateStack.hidden = true;
     self.stickInputScaleStack.hidden = self.stickResponseExponentStack.hidden = true;
-    self.aimMaxOutputStack.hidden = self.aimRelativeModeStack.hidden = true;
+    self.aimMaxOutputStack.hidden = self.aimResponseTimeStack.hidden = self.aimRelativeModeStack.hidden = true;
     self.stickInvertVerticalStack.hidden = self.stickInvertHorizontalStack.hidden = true;
     
     self->controllerLayerSelected = true;
@@ -1585,30 +1592,105 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     return;
 }
 
+- (BOOL)isSelectedRelativeAimWidget {
+    return self->selectedWidgetView != nil &&
+        self->selectedWidgetView.hasAimTweak &&
+        self->selectedWidgetView.aimRelativeModeEnabled;
+}
+
+- (void)configureAimResponseSlidersForSelectedWidget {
+    if(self->selectedWidgetView == nil || !self->widgetViewSelected) return;
+
+    BOOL relativeAim = [self isSelectedRelativeAimWidget];
+    if(relativeAim){
+        self.stickInputScaleSlider.minimumValue = 1.0;
+        self.stickInputScaleSlider.maximumValue = 10.0;
+        [self.stickInputScaleSlider setValue:self->selectedWidgetView.aimTrackpadGain];
+        [self autoFitLabel:self.stickInputScaleLabel];
+        [self.stickInputScaleLabel setText:[LocalizationHelper localizedStringForKey:@"Trackpad Gain: %.2f", self->selectedWidgetView.aimTrackpadGain]];
+
+        self.stickResponseExponentSlider.minimumValue = 0.0;
+        self.stickResponseExponentSlider.maximumValue = 0.35;
+        [self.stickResponseExponentSlider setValue:self->selectedWidgetView.aimTrackpadDeadzoneCompensation];
+        [self autoFitLabel:self.stickResponseExponentLabel];
+        [self.stickResponseExponentLabel setText:[LocalizationHelper localizedStringForKey:@"Deadzone: %.2f", self->selectedWidgetView.aimTrackpadDeadzoneCompensation]];
+
+        self.aimResponseTimeStack.hidden = NO;
+        self.aimResponseTimeSlider.minimumValue = 0.03;
+        self.aimResponseTimeSlider.maximumValue = 0.14;
+        [self.aimResponseTimeSlider setValue:self->selectedWidgetView.aimTrackpadResponseDuration];
+        [self autoFitLabel:self.aimResponseTimeLabel];
+        [self.aimResponseTimeLabel setText:[LocalizationHelper localizedStringForKey:@"Response Time: %.3fs", self->selectedWidgetView.aimTrackpadResponseDuration]];
+
+        [self.aimMaxOutputLabel setText:[LocalizationHelper localizedStringForKey:@"Peak Output: %.2f", self->selectedWidgetView.aimMaxOutputScale]];
+    }
+    else{
+        self.stickInputScaleSlider.minimumValue = 30;
+        self.stickInputScaleSlider.maximumValue = 120;
+        [self.stickInputScaleSlider setValue:self->selectedWidgetView.stickInputScale];
+        [self autoFitLabel:self.stickInputScaleLabel];
+        [self.stickInputScaleLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Range: %.0f", self->selectedWidgetView.stickInputScale]];
+
+        self.stickResponseExponentSlider.minimumValue = 1.0;
+        self.stickResponseExponentSlider.maximumValue = 2.5;
+        [self.stickResponseExponentSlider setValue:self->selectedWidgetView.stickResponseExponent];
+        [self autoFitLabel:self.stickResponseExponentLabel];
+        [self.stickResponseExponentLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Curve: %.2f", self->selectedWidgetView.stickResponseExponent]];
+
+        self.aimResponseTimeStack.hidden = YES;
+        [self.aimMaxOutputLabel setText:[LocalizationHelper localizedStringForKey:@"Max Output: %.2f", self->selectedWidgetView.aimMaxOutputScale]];
+    }
+
+    [self.aimMaxOutputSlider setValue:self->selectedWidgetView.aimMaxOutputScale];
+    [self autoFitLabel:self.aimMaxOutputLabel];
+}
+
 - (void)stickInputScaleSliderMoved:(UISlider* )sender{
-    [self.stickInputScaleLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Range: %.0f", sender.value]];
     if(self->selectedWidgetView != nil && self->widgetViewSelected){
-        self->selectedWidgetView.stickInputScale = sender.value;
+        if([self isSelectedRelativeAimWidget]){
+            self->selectedWidgetView.aimTrackpadGain = sender.value;
+            [self.stickInputScaleLabel setText:[LocalizationHelper localizedStringForKey:@"Trackpad Gain: %.2f", self->selectedWidgetView.aimTrackpadGain]];
+        }
+        else{
+            self->selectedWidgetView.stickInputScale = sender.value;
+            [self.stickInputScaleLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Range: %.0f", sender.value]];
+        }
     }
 }
 
 - (void)stickResponseExponentSliderMoved:(UISlider* )sender{
-    [self.stickResponseExponentLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Curve: %.2f", sender.value]];
     if(self->selectedWidgetView != nil && self->widgetViewSelected){
-        self->selectedWidgetView.stickResponseExponent = sender.value;
+        if([self isSelectedRelativeAimWidget]){
+            self->selectedWidgetView.aimTrackpadDeadzoneCompensation = sender.value;
+            [self.stickResponseExponentLabel setText:[LocalizationHelper localizedStringForKey:@"Deadzone: %.2f", self->selectedWidgetView.aimTrackpadDeadzoneCompensation]];
+        }
+        else{
+            self->selectedWidgetView.stickResponseExponent = sender.value;
+            [self.stickResponseExponentLabel setText:[LocalizationHelper localizedStringForKey:@"Stick Curve: %.2f", sender.value]];
+        }
     }
 }
 
 - (void)aimMaxOutputSliderMoved:(UISlider* )sender{
-    [self.aimMaxOutputLabel setText:[LocalizationHelper localizedStringForKey:@"Max Output: %.2f", sender.value]];
     if(self->selectedWidgetView != nil && self->widgetViewSelected){
         self->selectedWidgetView.aimMaxOutputScale = sender.value;
+        NSString *labelKey = [self isSelectedRelativeAimWidget] ? @"Peak Output: %.2f" : @"Max Output: %.2f";
+        [self.aimMaxOutputLabel setText:[LocalizationHelper localizedStringForKey:labelKey, self->selectedWidgetView.aimMaxOutputScale]];
+    }
+}
+
+- (void)aimResponseTimeSliderMoved:(UISlider* )sender{
+    if(self->selectedWidgetView != nil && self->widgetViewSelected){
+        self->selectedWidgetView.aimTrackpadResponseDuration = sender.value;
+        [self.aimResponseTimeLabel setText:[LocalizationHelper localizedStringForKey:@"Response Time: %.3fs", self->selectedWidgetView.aimTrackpadResponseDuration]];
     }
 }
 
 - (void)aimRelativeModeChanged:(UISwitch* )sender{
     if(self->selectedWidgetView != nil && self->widgetViewSelected){
         self->selectedWidgetView.aimRelativeModeEnabled = sender.on;
+        [self configureAimResponseSlidersForSelectedWidget];
+        [self autoFitStack:self.widgetPanelStack];
     }
 }
 
@@ -1678,6 +1760,26 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     [self.aimMaxOutputStack.heightAnchor constraintEqualToConstant:20].active = YES;
     self.aimMaxOutputStack.hidden = YES;
     [self.widgetPanelStack addArrangedSubview:self.aimMaxOutputStack];
+
+    self.aimResponseTimeLabel = [[UILabel alloc] init];
+    self.aimResponseTimeLabel.font = labelFont;
+    self.aimResponseTimeLabel.textColor = whiteColor;
+    self.aimResponseTimeLabel.text = [LocalizationHelper localizedStringForKey:@"Response Time"];
+    [self.aimResponseTimeLabel.widthAnchor constraintEqualToConstant:160].active = YES;
+
+    self.aimResponseTimeSlider = [[UISlider alloc] init];
+    self.aimResponseTimeSlider.minimumValue = 0.03;
+    self.aimResponseTimeSlider.maximumValue = 0.14;
+    self.aimResponseTimeSlider.value = 0.06;
+    self.aimResponseTimeSlider.tintColor = sliderTint;
+    [self.aimResponseTimeSlider addTarget:self action:@selector(aimResponseTimeSliderMoved:) forControlEvents:UIControlEventValueChanged];
+
+    self.aimResponseTimeStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.aimResponseTimeLabel, self.aimResponseTimeSlider]];
+    self.aimResponseTimeStack.axis = UILayoutConstraintAxisHorizontal;
+    self.aimResponseTimeStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.aimResponseTimeStack.heightAnchor constraintEqualToConstant:20].active = YES;
+    self.aimResponseTimeStack.hidden = YES;
+    [self.widgetPanelStack addArrangedSubview:self.aimResponseTimeStack];
 
     self.aimRelativeModeLabel = [[UILabel alloc] init];
     self.aimRelativeModeLabel.font = labelFont;

@@ -52,6 +52,9 @@
     [encoder encodeFloat:self.stickInputScale forKey:@"stickInputScale"];
     [encoder encodeFloat:self.stickResponseExponent forKey:@"stickResponseExponent"];
     [encoder encodeFloat:self.aimMaxOutputScale forKey:@"aimMaxOutputScale"];
+    [encoder encodeFloat:self.aimTrackpadGain forKey:@"aimTrackpadGain"];
+    [encoder encodeFloat:self.aimTrackpadDeadzoneCompensation forKey:@"aimTrackpadDeadzoneCompensation"];
+    [encoder encodeFloat:self.aimTrackpadResponseDuration forKey:@"aimTrackpadResponseDuration"];
     [encoder encodeBool:self.aimRelativeModeEnabled forKey:@"aimRelativeModeEnabled"];
     [encoder encodeInt:self.aimTuningVersion forKey:@"aimTuningVersion"];
     [encoder encodeBool:self.stickInvertVertical forKey:@"stickInvertVertical"];
@@ -84,6 +87,9 @@
         self.stickInputScale = [decoder decodeFloatForKey:@"stickInputScale"];
         self.stickResponseExponent = [decoder decodeFloatForKey:@"stickResponseExponent"];
         self.aimMaxOutputScale = [decoder containsValueForKey:@"aimMaxOutputScale"] ? [decoder decodeFloatForKey:@"aimMaxOutputScale"] : 0;
+        self.aimTrackpadGain = [decoder containsValueForKey:@"aimTrackpadGain"] ? [decoder decodeFloatForKey:@"aimTrackpadGain"] : 0;
+        self.aimTrackpadDeadzoneCompensation = [decoder containsValueForKey:@"aimTrackpadDeadzoneCompensation"] ? [decoder decodeFloatForKey:@"aimTrackpadDeadzoneCompensation"] : 0;
+        self.aimTrackpadResponseDuration = [decoder containsValueForKey:@"aimTrackpadResponseDuration"] ? [decoder decodeFloatForKey:@"aimTrackpadResponseDuration"] : 0;
         self.aimRelativeModeEnabled = [decoder containsValueForKey:@"aimRelativeModeEnabled"] ? [decoder decodeBoolForKey:@"aimRelativeModeEnabled"] : NO;
         self.aimTuningVersion = [decoder containsValueForKey:@"aimTuningVersion"] ? [decoder decodeIntForKey:@"aimTuningVersion"] : 0;
         self.stickInvertVertical = [decoder decodeBoolForKey:@"stickInvertVertical"];
