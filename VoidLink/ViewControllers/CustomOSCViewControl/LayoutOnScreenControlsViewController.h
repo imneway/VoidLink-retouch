@@ -78,6 +78,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property (strong, nonatomic) IBOutlet UISlider *sensitivityYSlider;
 @property (strong, nonatomic) IBOutlet UIStackView *sensitivityYStack;
 @property (strong, nonatomic) UIStackView *sensitivityXYStack;
+@property (strong, nonatomic) UILabel *aimSensitivityXLabel;
+@property (strong, nonatomic) UISlider *aimSensitivityXSlider;
+@property (strong, nonatomic) UIStackView *aimSensitivityXStack;
+@property (strong, nonatomic) UILabel *aimSensitivityYLabel;
+@property (strong, nonatomic) UISlider *aimSensitivityYSlider;
+@property (strong, nonatomic) UIStackView *aimSensitivityYStack;
+@property (strong, nonatomic) UIStackView *aimSensitivityXYStack;
 
 @property (strong, nonatomic) IBOutlet UIStackView *decelerationRateStack;
 @property (strong, nonatomic) IBOutlet UILabel *decelerationRateLabel;
@@ -90,6 +97,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property (strong, nonatomic) UILabel *stickResponseExponentLabel;
 @property (strong, nonatomic) UISlider *stickResponseExponentSlider;
 @property (strong, nonatomic) UIStackView *stickResponseExponentStack;
+@property (strong, nonatomic) UILabel *aimTrackpadGainLabel;
+@property (strong, nonatomic) UISlider *aimTrackpadGainSlider;
+@property (strong, nonatomic) UIStackView *aimTrackpadGainStack;
+@property (strong, nonatomic) UILabel *aimDeadzoneLabel;
+@property (strong, nonatomic) UISlider *aimDeadzoneSlider;
+@property (strong, nonatomic) UIStackView *aimDeadzoneStack;
 @property (strong, nonatomic) UILabel *aimMaxOutputLabel;
 @property (strong, nonatomic) UISlider *aimMaxOutputSlider;
 @property (strong, nonatomic) UIStackView *aimMaxOutputStack;
