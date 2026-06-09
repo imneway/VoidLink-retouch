@@ -267,7 +267,13 @@ import UIKit
     private let aimTrackpadReferenceResponseTime: CGFloat = 0.06
     private let aimTrackpadReverseBrake: CGFloat = 0.12
     private let aimTrackpadMaxImpulseTime: CGFloat = 0.42
-    private let aimTrackpadOutputSmoothingAlpha: CGFloat = 0.86
+    private let aimTrackpadOutputSmoothingSlowAlpha: CGFloat = 0.62
+    private let aimTrackpadOutputSmoothingFastAlpha: CGFloat = 0.92
+    private let aimTrackpadOutputSmoothingSlowSource: CGFloat = 0.8
+    private let aimTrackpadOutputSmoothingFastSource: CGFloat = 12.0
+    private let aimTrackpadTremorSourceThreshold: CGFloat = 2.4
+    private let aimTrackpadTremorAlignmentThreshold: CGFloat = 0.35
+    private let aimTrackpadTremorAlpha: CGFloat = 0.45
     private let aimTrackpadStopThreshold: CGFloat = 0.003
     
     // trackball
@@ -2086,8 +2092,19 @@ import UIKit
             targetY *= scale
         }
 
-        let reversed = aimTrackpadHasOutput && (targetX * aimTrackpadLastOutput.x + targetY * aimTrackpadLastOutput.y) < 0
-        let alpha: CGFloat = reversed ? 1.0 : aimTrackpadOutputSmoothingAlpha
+        let sourceMagnitude = hypot(clampedSource.x, clampedSource.y)
+        let smoothingT = smoothStep((sourceMagnitude - aimTrackpadOutputSmoothingSlowSource) / (aimTrackpadOutputSmoothingFastSource - aimTrackpadOutputSmoothingSlowSource))
+        var alpha = aimTrackpadOutputSmoothingSlowAlpha + (aimTrackpadOutputSmoothingFastAlpha - aimTrackpadOutputSmoothingSlowAlpha) * smoothingT
+        let targetMagnitude = hypot(targetX, targetY)
+        let lastOutputMagnitude = hypot(aimTrackpadLastOutput.x, aimTrackpadLastOutput.y)
+        if aimTrackpadHasOutput, targetMagnitude > 0, lastOutputMagnitude > 0 {
+            let alignment = (targetX * aimTrackpadLastOutput.x + targetY * aimTrackpadLastOutput.y) / (targetMagnitude * lastOutputMagnitude)
+            if alignment < 0 {
+                alpha = 1.0
+            } else if sourceMagnitude < aimTrackpadTremorSourceThreshold && alignment < aimTrackpadTremorAlignmentThreshold {
+                alpha = min(alpha, aimTrackpadTremorAlpha)
+            }
+        }
         if aimTrackpadHasOutput {
             targetX = aimTrackpadLastOutput.x + (targetX - aimTrackpadLastOutput.x) * alpha
             targetY = aimTrackpadLastOutput.y + (targetY - aimTrackpadLastOutput.y) * alpha
@@ -2649,7 +2666,15 @@ import UIKit
                 }
                 if widgetType == WidgetTypeEnum.touchPad {updateStickIndicator()}
             case "RSPADALT2":
-                self.handleRightAimStickMove(touch: touches.first!)
+                if let touch = touches.first {
+                    if self.aimRelativeModeEnabled, let coalescedTouches = event?.coalescedTouches(for: touch), !coalescedTouches.isEmpty {
+                        for coalescedTouch in coalescedTouches {
+                            self.handleRightAimStickMove(touch: coalescedTouch)
+                        }
+                    } else {
+                        self.handleRightAimStickMove(touch: touch)
+                    }
+                }
                 if widgetType == WidgetTypeEnum.touchPad {updateStickIndicator()}
             case "LSVPAD":
                 DispatchQueue.global(qos: .userInteractive).async {
