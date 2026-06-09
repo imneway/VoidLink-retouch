@@ -423,6 +423,8 @@ static CGRect layoutViewBounds;
         buttonState.mouseButtonAction = widgetView.mouseButtonAction;
         buttonState.sensitivityFactorX = widgetView.sensitivityFactorX;
         buttonState.sensitivityFactorY = widgetView.sensitivityFactorY;
+        buttonState.aimSensitivityFactorX = widgetView.aimSensitivityFactorX;
+        buttonState.aimSensitivityFactorY = widgetView.aimSensitivityFactorY;
         buttonState.decelerationRate = widgetView.trackballDecelerationRate;
         buttonState.stickIndicatorOffset = widgetView.stickIndicatorOffset;
         buttonState.widgetShape = widgetView.shape;

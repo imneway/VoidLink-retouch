@@ -77,6 +77,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (strong, nonatomic) IBOutlet UILabel *sensitivityYLabel;
 @property (strong, nonatomic) IBOutlet UISlider *sensitivityYSlider;
 @property (strong, nonatomic) IBOutlet UIStackView *sensitivityYStack;
+@property (strong, nonatomic) UIStackView *sensitivityXYStack;
 
 @property (strong, nonatomic) IBOutlet UIStackView *decelerationRateStack;
 @property (strong, nonatomic) IBOutlet UILabel *decelerationRateLabel;
@@ -104,6 +105,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (strong, nonatomic) UILabel *stickInvertHorizontalLabel;
 @property (strong, nonatomic) UISwitch *stickInvertHorizontalSwitch;
 @property (strong, nonatomic) UIStackView *stickInvertHorizontalStack;
+@property (strong, nonatomic) UIStackView *stickInvertAxisStack;
 @property (strong, nonatomic) UILabel *doubleTapStickClickLabel;
 @property (strong, nonatomic) UISwitch *doubleTapStickClickSwitch;
 @property (strong, nonatomic) UIStackView *doubleTapStickClickStack;

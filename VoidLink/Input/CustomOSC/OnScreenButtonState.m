@@ -42,6 +42,8 @@
     [encoder encodeFloat:self.heightFactor forKey:@"heightFactor"];
     [encoder encodeFloat:self.sensitivityFactorX forKey:@"sensitivityFactorX"];
     [encoder encodeFloat:self.sensitivityFactorY forKey:@"sensitivityFactorY"];
+    [encoder encodeFloat:self.aimSensitivityFactorX forKey:@"aimSensitivityFactorX"];
+    [encoder encodeFloat:self.aimSensitivityFactorY forKey:@"aimSensitivityFactorY"];
     [encoder encodeFloat:self.decelerationRate forKey:@"decelerationRate"];
     [encoder encodeFloat:self.stickIndicatorOffset forKey:@"stickIndicatorOffset"];
     [encoder encodeFloat:self.oscLayerSizeFactor forKey:@"oscLayerSizeFactor"];
@@ -79,6 +81,8 @@
         self.sensitivityFactorX = self.sensitivityFactorX == 0 ? 1.0 : self.sensitivityFactorX;
         self.sensitivityFactorY = [decoder decodeFloatForKey:@"sensitivityFactorY"];
         self.sensitivityFactorY = self.sensitivityFactorY == 0 ? 1.0 : self.sensitivityFactorY;
+        self.aimSensitivityFactorX = [decoder containsValueForKey:@"aimSensitivityFactorX"] ? [decoder decodeFloatForKey:@"aimSensitivityFactorX"] : 0;
+        self.aimSensitivityFactorY = [decoder containsValueForKey:@"aimSensitivityFactorY"] ? [decoder decodeFloatForKey:@"aimSensitivityFactorY"] : 0;
         self.decelerationRate = [decoder decodeFloatForKey:@"decelerationRate"];
         self.stickIndicatorOffset = [decoder decodeFloatForKey:@"stickIndicatorOffset"];
         self.oscLayerSizeFactor = [decoder decodeFloatForKey:@"oscLayerSizeFactor"];

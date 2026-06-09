@@ -210,6 +210,8 @@ import UIKit
     // this is for all stick pads and mouse Pad
     @objc public var sensitivityFactorX: CGFloat = 1.0
     @objc public var sensitivityFactorY: CGFloat = 1.0
+    @objc public var aimSensitivityFactorX: CGFloat = 1.0
+    @objc public var aimSensitivityFactorY: CGFloat = 1.0
 
     // check quick double tap:
     private var quickDoubleTapDetected: Bool
@@ -472,6 +474,8 @@ import UIKit
         self.stickIndicatorOffset = 95
         self.sensitivityFactorX = 1.0
         self.sensitivityFactorY = 1.0
+        self.aimSensitivityFactorX = 1.0
+        self.aimSensitivityFactorY = 1.0
         self.capturedTouches = NSMutableSet()
         self.pointerIdDict = [:]
         self.pointerIdPool = []
@@ -2160,9 +2164,9 @@ import UIKit
         }
         aimLastMoveTimestamp = now
 
-        let scaledDeltaX = self.deltaX * self.sensitivityFactorX
-        let scaledDeltaY = self.deltaY * self.sensitivityFactorY
         let relativeAimActive = self.isAimRelativeModeActive
+        let scaledDeltaX = self.deltaX * (relativeAimActive ? self.aimSensitivityFactorX : self.sensitivityFactorX)
+        let scaledDeltaY = self.deltaY * (relativeAimActive ? self.aimSensitivityFactorY : self.sensitivityFactorY)
         if aimRelativeModeWasActive && !relativeAimActive {
             aimTrackpadImpulse = .zero
             aimTrackpadResidualDelta = .zero

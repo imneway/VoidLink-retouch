@@ -629,6 +629,8 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
                 widgetView.mouseButtonAction = buttonState.mouseButtonAction;
                 widgetView.sensitivityFactorX = buttonState.sensitivityFactorX;
                 widgetView.sensitivityFactorY = buttonState.sensitivityFactorY;
+                widgetView.aimSensitivityFactorX = buttonState.aimSensitivityFactorX > 0 ? buttonState.aimSensitivityFactorX : widgetView.sensitivityFactorX;
+                widgetView.aimSensitivityFactorY = buttonState.aimSensitivityFactorY > 0 ? buttonState.aimSensitivityFactorY : widgetView.sensitivityFactorY;
                 widgetView.trackballDecelerationRate = buttonState.decelerationRate;
                 widgetView.stickIndicatorOffset = buttonState.stickIndicatorOffset;
                 BOOL migrateLegacyAimDefaults = RSPADALT2ShouldMigrateLegacyAimDefaults(widgetView, buttonState) ||

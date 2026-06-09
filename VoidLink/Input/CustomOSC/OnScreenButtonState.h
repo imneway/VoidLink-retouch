@@ -33,6 +33,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) CGFloat borderWidth; // for OnScreenWidgetView
 @property (nonatomic, assign) CGFloat sensitivityFactorX; // for OnScreenWidgetView
 @property (nonatomic, assign) CGFloat sensitivityFactorY; // for OnScreenWidgetView
+@property (nonatomic, assign) CGFloat aimSensitivityFactorX; // for RSPADALT2 Relative Aim
+@property (nonatomic, assign) CGFloat aimSensitivityFactorY; // for RSPADALT2 Relative Aim
 @property (nonatomic, assign) CGFloat decelerationRate; // for OnScreenWidgetView
 @property (nonatomic, assign) CGFloat stickIndicatorOffset; // for OnScreenWidgetView
 @property (nonatomic, assign) CGFloat minStickOffset; // for OnScreenWidgetView
