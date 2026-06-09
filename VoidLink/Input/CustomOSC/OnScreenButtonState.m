@@ -56,6 +56,7 @@
     [encoder encodeFloat:self.aimTrackpadDeadzoneCompensation forKey:@"aimTrackpadDeadzoneCompensation"];
     [encoder encodeFloat:self.aimTrackpadResponseDuration forKey:@"aimTrackpadResponseDuration"];
     [encoder encodeBool:self.aimRelativeModeEnabled forKey:@"aimRelativeModeEnabled"];
+    [encoder encodeObject:self.aimRelativeActivationButton forKey:@"aimRelativeActivationButton"];
     [encoder encodeInt:self.aimTuningVersion forKey:@"aimTuningVersion"];
     [encoder encodeBool:self.stickInvertVertical forKey:@"stickInvertVertical"];
     [encoder encodeBool:self.stickInvertHorizontal forKey:@"stickInvertHorizontal"];
@@ -91,6 +92,12 @@
         self.aimTrackpadDeadzoneCompensation = [decoder containsValueForKey:@"aimTrackpadDeadzoneCompensation"] ? [decoder decodeFloatForKey:@"aimTrackpadDeadzoneCompensation"] : 0;
         self.aimTrackpadResponseDuration = [decoder containsValueForKey:@"aimTrackpadResponseDuration"] ? [decoder decodeFloatForKey:@"aimTrackpadResponseDuration"] : 0;
         self.aimRelativeModeEnabled = [decoder containsValueForKey:@"aimRelativeModeEnabled"] ? [decoder decodeBoolForKey:@"aimRelativeModeEnabled"] : NO;
+        if ([decoder containsValueForKey:@"aimRelativeActivationButton"]) {
+            self.aimRelativeActivationButton = [decoder decodeObjectForKey:@"aimRelativeActivationButton"];
+        }
+        if (self.aimRelativeActivationButton.length == 0) {
+            self.aimRelativeActivationButton = self.aimRelativeModeEnabled ? @"ON" : @"OFF";
+        }
         self.aimTuningVersion = [decoder containsValueForKey:@"aimTuningVersion"] ? [decoder decodeIntForKey:@"aimTuningVersion"] : 0;
         self.stickInvertVertical = [decoder decodeBoolForKey:@"stickInvertVertical"];
         self.stickInvertHorizontal = [decoder decodeBoolForKey:@"stickInvertHorizontal"];

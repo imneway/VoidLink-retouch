@@ -130,6 +130,88 @@ import UIKit
     // toggles the gyro at the same time.
     @objc public static let motionControlButtonCmds: [String] = ["GYRO", "GYROPAUSE"]
 
+    @objc public static let aimRelativeActivationOff = "OFF"
+    @objc public static let aimRelativeActivationOn = "ON"
+    @objc public static let aimRelativeActivationControllerButtons: [String] = [
+        "OSCA", "OSCB", "OSCX", "OSCY",
+        "OSCL1", "OSCR1", "OSCL2", "OSCR2",
+        "OSCL3", "OSCR3",
+        "OSCSTART", "OSCSELECT",
+        "OSCUP", "OSCDOWN", "OSCLEFT", "OSCRIGHT"
+    ]
+    @objc public static let aimRelativeActivationOptions: [String] =
+        [aimRelativeActivationOn, aimRelativeActivationOff] + aimRelativeActivationControllerButtons
+
+    @objc(aimRelativeActivationTitleForCommand:)
+    public static func aimRelativeActivationTitle(for command: String) -> String {
+        switch normalizedAimRelativeActivationCommand(command) {
+        case aimRelativeActivationOn: return "Turn ON"
+        case aimRelativeActivationOff: return "Turn OFF"
+        case "OSCA": return "A"
+        case "OSCB": return "B"
+        case "OSCX": return "X"
+        case "OSCY": return "Y"
+        case "OSCL1": return "L1"
+        case "OSCR1": return "R1"
+        case "OSCL2": return "L2 / LT"
+        case "OSCR2": return "R2 / RT"
+        case "OSCL3": return "L3"
+        case "OSCR3": return "R3"
+        case "OSCSTART": return "Start"
+        case "OSCSELECT": return "Select"
+        case "OSCUP": return "D-Pad Up"
+        case "OSCDOWN": return "D-Pad Down"
+        case "OSCLEFT": return "D-Pad Left"
+        case "OSCRIGHT": return "D-Pad Right"
+        default: return "Turn OFF"
+        }
+    }
+
+    @objc(normalizedAimRelativeActivationCommand:)
+    public static func normalizedAimRelativeActivationCommand(_ command: String?) -> String {
+        let raw = (command ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        switch raw {
+        case "", aimRelativeActivationOff, "TURN OFF":
+            return aimRelativeActivationOff
+        case aimRelativeActivationOn, "TURN ON":
+            return aimRelativeActivationOn
+        case "A":
+            return "OSCA"
+        case "B":
+            return "OSCB"
+        case "X":
+            return "OSCX"
+        case "Y":
+            return "OSCY"
+        case "L1", "LB":
+            return "OSCL1"
+        case "R1", "RB":
+            return "OSCR1"
+        case "L2", "LT":
+            return "OSCL2"
+        case "R2", "RT":
+            return "OSCR2"
+        case "L3", "LS":
+            return "OSCL3"
+        case "R3", "RS":
+            return "OSCR3"
+        case "START", "PLAY", "OSCPLAY":
+            return "OSCSTART"
+        case "SELECT", "BACK", "OSCBACK":
+            return "OSCSELECT"
+        case "UP":
+            return "OSCUP"
+        case "DOWN":
+            return "OSCDOWN"
+        case "LEFT":
+            return "OSCLEFT"
+        case "RIGHT":
+            return "OSCRIGHT"
+        default:
+            return aimRelativeActivationOptions.contains(raw) ? raw : aimRelativeActivationOff
+        }
+    }
+
     // @objc public static let specialGameWidgets: [String] = ["YSRSV", "YSLT", "YSRT", "YSRB", "YSB", "YSRT2", "YSRB2", "YSB2", "YSEM", "YSML", "YSMR", "YSWASD"]
     
     static let keyboardButtonMappings: [String: Int16] = [

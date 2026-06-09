@@ -210,6 +210,68 @@ static float L3_Y;
     [_controllerSupport updateFinished:_controller];
 }
 
+- (int)controllerButtonFlagForString:(NSString *)buttonString {
+    NSString *s = [[buttonString stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] uppercaseString];
+    if ([s isEqualToString:@"OSCA"] || [s isEqualToString:@"A"]) return A_FLAG;
+    if ([s isEqualToString:@"OSCB"] || [s isEqualToString:@"B"]) return B_FLAG;
+    if ([s isEqualToString:@"OSCX"] || [s isEqualToString:@"X"]) return X_FLAG;
+    if ([s isEqualToString:@"OSCY"] || [s isEqualToString:@"Y"]) return Y_FLAG;
+    if ([s isEqualToString:@"OSCL1"] || [s isEqualToString:@"L1"] || [s isEqualToString:@"LB"]) return LB_FLAG;
+    if ([s isEqualToString:@"OSCR1"] || [s isEqualToString:@"R1"] || [s isEqualToString:@"RB"]) return RB_FLAG;
+    if ([s isEqualToString:@"OSCL3"] || [s isEqualToString:@"L3"] || [s isEqualToString:@"LS"]) return LS_CLK_FLAG;
+    if ([s isEqualToString:@"OSCR3"] || [s isEqualToString:@"R3"] || [s isEqualToString:@"RS"]) return RS_CLK_FLAG;
+    if ([s isEqualToString:@"OSCSTART"] || [s isEqualToString:@"OSCPLAY"] || [s isEqualToString:@"START"] || [s isEqualToString:@"PLAY"]) return PLAY_FLAG;
+    if ([s isEqualToString:@"OSCSELECT"] || [s isEqualToString:@"OSCBACK"] || [s isEqualToString:@"SELECT"] || [s isEqualToString:@"BACK"]) return BACK_FLAG;
+    if ([s isEqualToString:@"OSCUP"] || [s isEqualToString:@"UP"]) return UP_FLAG;
+    if ([s isEqualToString:@"OSCDOWN"] || [s isEqualToString:@"DOWN"]) return DOWN_FLAG;
+    if ([s isEqualToString:@"OSCLEFT"] || [s isEqualToString:@"LEFT"]) return LEFT_FLAG;
+    if ([s isEqualToString:@"OSCRIGHT"] || [s isEqualToString:@"RIGHT"]) return RIGHT_FLAG;
+    if ([s isEqualToString:@"DS4TCHBTN"]) return TOUCHPAD_FLAG;
+    if ([s isEqualToString:@"PADDLE1"]) return PADDLE1_FLAG;
+    if ([s isEqualToString:@"PADDLE2"]) return PADDLE2_FLAG;
+    if ([s isEqualToString:@"PADDLE3"]) return PADDLE3_FLAG;
+    if ([s isEqualToString:@"PADDLE4"]) return PADDLE4_FLAG;
+    if ([s isEqualToString:@"MISC"]) return MISC_FLAG;
+    return 0;
+}
+
+- (BOOL)isControllerButtonPressedForString:(NSString *)buttonString {
+    NSString *s = [[buttonString stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] uppercaseString];
+    if (s.length == 0 || _controller == nil) return NO;
+
+    @synchronized(_controller) {
+        VoidController *merged = _controller.mergedWithController;
+        if ([s isEqualToString:@"OSCL2"] || [s isEqualToString:@"L2"] || [s isEqualToString:@"LT"]) {
+            if (_controller.lastLeftTrigger > 0) return YES;
+            if (merged != nil) {
+                @synchronized(merged) {
+                    return merged.lastLeftTrigger > 0;
+                }
+            }
+            return NO;
+        }
+        if ([s isEqualToString:@"OSCR2"] || [s isEqualToString:@"R2"] || [s isEqualToString:@"RT"]) {
+            if (_controller.lastRightTrigger > 0) return YES;
+            if (merged != nil) {
+                @synchronized(merged) {
+                    return merged.lastRightTrigger > 0;
+                }
+            }
+            return NO;
+        }
+
+        int flag = [self controllerButtonFlagForString:s];
+        if (flag == 0) return NO;
+        if ((_controller.lastButtonFlags & flag) != 0) return YES;
+        if (merged != nil) {
+            @synchronized(merged) {
+                return (merged.lastButtonFlags & flag) != 0;
+            }
+        }
+        return NO;
+    }
+}
+
 // Motion-button forwarders. Once any GYRO/GYROPAUSE widget is registered,
 // the runtime gating switches on (legacy always-on behavior is suppressed).
 - (void) markGyroToggleButtonRegistered { _controllerSupport.hasGyroToggleButton = YES; }

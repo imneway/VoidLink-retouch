@@ -536,6 +536,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
                 }
             }
             widgetView.aimRelativeModeEnabled = buttonState.aimRelativeModeEnabled;
+            widgetView.aimRelativeActivationButton = buttonState.aimRelativeActivationButton;
             widgetView.stickInvertVertical = buttonState.stickInvertVertical;
             widgetView.stickInvertHorizontal = buttonState.stickInvertHorizontal;
             widgetView.slideMode = buttonState.slideMode;
@@ -1213,6 +1214,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         newWidget.aimTrackpadDeadzoneCompensation = widget.aimTrackpadDeadzoneCompensation;
         newWidget.aimTrackpadResponseDuration = widget.aimTrackpadResponseDuration;
         newWidget.aimRelativeModeEnabled = widget.aimRelativeModeEnabled;
+        newWidget.aimRelativeActivationButton = widget.aimRelativeActivationButton;
     }
     [newWidget setVibrationWithStyle:widget.vibrationStyle];
     newWidget.mouseButtonAction = widget.mouseButtonAction;
@@ -1413,7 +1415,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         self.stickInvertHorizontalSwitch.on = self->selectedWidgetView.stickInvertHorizontal;
     }
     if(showAimTweakStack){
-        self.aimRelativeModeSwitch.on = self->selectedWidgetView.aimRelativeModeEnabled;
+        [self updateAimRelativeModeButtonTitle];
         [self configureAimResponseSlidersForSelectedWidget];
     }
     [self autoFitLabel:self.widgetSizeLabel];
@@ -1702,12 +1704,36 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     }
 }
 
-- (void)aimRelativeModeChanged:(UISwitch* )sender{
-    if(self->selectedWidgetView != nil && self->widgetViewSelected){
-        self->selectedWidgetView.aimRelativeModeEnabled = sender.on;
-        [self configureAimResponseSlidersForSelectedWidget];
-        [self autoFitStack:self.widgetPanelStack];
+- (void)updateAimRelativeModeButtonTitle {
+    if(self->selectedWidgetView == nil || !self->widgetViewSelected) return;
+    NSString *title = [CommandManager aimRelativeActivationTitleForCommand:self->selectedWidgetView.aimRelativeActivationButton];
+    [self.aimRelativeModeButton setTitle:title forState:UIControlStateNormal];
+}
+
+- (void)aimRelativeModeButtonTapped:(UIButton* )sender{
+    if(self->selectedWidgetView == nil || !self->widgetViewSelected) return;
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Relative Aim"]
+                                                                   message:nil
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    NSArray<NSString *> *options = CommandManager.aimRelativeActivationOptions;
+    for(NSString *option in options){
+        NSString *title = [CommandManager aimRelativeActivationTitleForCommand:option];
+        UIAlertAction *action = [UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+            self->selectedWidgetView.aimRelativeActivationButton = option;
+            [self updateAimRelativeModeButtonTitle];
+            [self configureAimResponseSlidersForSelectedWidget];
+            [self autoFitStack:self.widgetPanelStack];
+        }];
+        [alert addAction:action];
     }
+    [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+    UIPopoverPresentationController *popover = alert.popoverPresentationController;
+    if(popover){
+        popover.sourceView = sender;
+        popover.sourceRect = sender.bounds;
+    }
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)installResponseCurveSliders{
@@ -1803,11 +1829,13 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.aimRelativeModeLabel.text = [LocalizationHelper localizedStringForKey:@"Relative Aim"];
     [self.aimRelativeModeLabel.widthAnchor constraintEqualToConstant:160].active = YES;
 
-    self.aimRelativeModeSwitch = [[UISwitch alloc] init];
-    self.aimRelativeModeSwitch.onTintColor = sliderTint;
-    [self.aimRelativeModeSwitch addTarget:self action:@selector(aimRelativeModeChanged:) forControlEvents:UIControlEventValueChanged];
+    self.aimRelativeModeButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.aimRelativeModeButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentRight;
+    self.aimRelativeModeButton.tintColor = sliderTint;
+    [self.aimRelativeModeButton setTitleColor:whiteColor forState:UIControlStateNormal];
+    [self.aimRelativeModeButton addTarget:self action:@selector(aimRelativeModeButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
 
-    self.aimRelativeModeStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.aimRelativeModeLabel, self.aimRelativeModeSwitch]];
+    self.aimRelativeModeStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.aimRelativeModeLabel, self.aimRelativeModeButton]];
     self.aimRelativeModeStack.axis = UILayoutConstraintAxisHorizontal;
     self.aimRelativeModeStack.translatesAutoresizingMaskIntoConstraints = NO;
     self.aimRelativeModeStack.alignment = UIStackViewAlignmentCenter;

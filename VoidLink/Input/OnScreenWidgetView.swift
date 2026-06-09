@@ -153,6 +153,16 @@ import UIKit
         }
     }
     @objc public var aimRelativeModeEnabled: Bool = false
+    @objc public var aimRelativeActivationButton: String = CommandManager.aimRelativeActivationOff {
+        didSet {
+            let normalized = CommandManager.normalizedAimRelativeActivationCommand(aimRelativeActivationButton)
+            if aimRelativeActivationButton != normalized {
+                aimRelativeActivationButton = normalized
+                return
+            }
+            aimRelativeModeEnabled = normalized != CommandManager.aimRelativeActivationOff
+        }
+    }
 
     
     // for LSVPAD, RSVPAD
@@ -256,6 +266,7 @@ import UIKit
     private var aimTrackpadLastFrameTimestamp: CFTimeInterval = 0
     private var aimTrackpadLastOutput: CGPoint = .zero
     private var aimTrackpadHasOutput = false
+    private var aimRelativeModeWasActive = false
     private let aimStopDelay: TimeInterval = 0.08
     private let aimDeadOffset: CGFloat = 0.16
     private let aimFastBoostFactor: CGFloat = 2.2
@@ -1902,6 +1913,14 @@ import UIKit
         self.onScreenControls.sendRightStickTouchPadEvent(targetX, targetY)
     }
 
+    private var isAimRelativeModeActive: Bool {
+        guard aimRelativeModeEnabled else { return false }
+        let activation = CommandManager.normalizedAimRelativeActivationCommand(aimRelativeActivationButton)
+        if activation == CommandManager.aimRelativeActivationOn { return true }
+        if activation == CommandManager.aimRelativeActivationOff { return false }
+        return self.onScreenControls.isControllerButtonPressed(forString: activation)
+    }
+
     private func resetAimStickState(clearHostStick: Bool) {
         aimStopTimer?.invalidate()
         aimStopTimer = nil
@@ -1912,6 +1931,7 @@ import UIKit
         aimTrackpadLastFrameTimestamp = 0
         aimTrackpadLastOutput = .zero
         aimTrackpadHasOutput = false
+        aimRelativeModeWasActive = false
         aimAnchorLocation = .zero
         aimHasAnchor = false
         aimLastMoveTimestamp = 0
@@ -1923,7 +1943,7 @@ import UIKit
     }
 
     private func scheduleAimStickStopCheck() {
-        if aimRelativeModeEnabled {
+        if isAimRelativeModeActive {
             return
         }
         aimStopTimer?.invalidate()
@@ -2058,6 +2078,7 @@ import UIKit
         aimTrackpadLastFrameTimestamp = 0
         aimTrackpadLastOutput = .zero
         aimTrackpadHasOutput = false
+        aimRelativeModeWasActive = false
         self.offSetX = 0
         self.offSetY = 0
         if clearHostStick {
@@ -2099,7 +2120,7 @@ import UIKit
     }
 
     @objc private func handleAimTrackpadDisplayLink(_ displayLink: CADisplayLink) {
-        guard self.isAimStickPad, self.aimRelativeModeEnabled, self.pressed else {
+        guard self.isAimStickPad, self.isAimRelativeModeActive, self.pressed else {
             aimTrackpadImpulse = .zero
             stopAimTrackpadDisplayLink(clearHostStick: true)
             return
@@ -2194,7 +2215,19 @@ import UIKit
 
         let scaledDeltaX = self.deltaX * self.sensitivityFactorX
         let scaledDeltaY = self.deltaY * self.sensitivityFactorY
-        if aimRelativeModeEnabled {
+        let relativeAimActive = self.isAimRelativeModeActive
+        if aimRelativeModeWasActive && !relativeAimActive {
+            aimTrackpadImpulse = .zero
+            aimTrackpadResidualDelta = .zero
+            stopAimTrackpadDisplayLink(clearHostStick: false)
+        } else if !aimRelativeModeWasActive && relativeAimActive {
+            aimTrackpadResidualDelta = .zero
+            aimTrackpadLastOutput = .zero
+            aimTrackpadHasOutput = false
+        }
+        aimRelativeModeWasActive = relativeAimActive
+
+        if relativeAimActive {
             self.sendRightAimStickRelativeEvent(
                 deltaX: scaledDeltaX,
                 deltaY: scaledDeltaY,

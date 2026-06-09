@@ -655,6 +655,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
                     }
                 }
                 widgetView.aimRelativeModeEnabled = buttonState.aimRelativeModeEnabled;
+                widgetView.aimRelativeActivationButton = buttonState.aimRelativeActivationButton;
                 widgetView.stickInvertVertical = buttonState.stickInvertVertical;
                 widgetView.stickInvertHorizontal = buttonState.stickInvertHorizontal;
                 widgetView.slideMode = buttonState.slideMode;
