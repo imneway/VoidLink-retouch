@@ -128,15 +128,15 @@ import UIKit
             aimMaxOutputScale = min(max(aimMaxOutputScale, 0.20), 1.0)
         }
     }
-    @objc public var aimTrackpadGain: CGFloat = 5.2 {
+    @objc public var aimTrackpadGain: CGFloat = 2.8 {
         didSet {
             if !aimTrackpadGain.isFinite {
                 aimTrackpadGain = oldValue
             }
-            aimTrackpadGain = min(max(aimTrackpadGain, 1.0), 10.0)
+            aimTrackpadGain = min(max(aimTrackpadGain, 0.5), 10.0)
         }
     }
-    @objc public var aimTrackpadDeadzoneCompensation: CGFloat = 0.16 {
+    @objc public var aimTrackpadDeadzoneCompensation: CGFloat = 0 {
         didSet {
             if !aimTrackpadDeadzoneCompensation.isFinite {
                 aimTrackpadDeadzoneCompensation = oldValue
@@ -144,7 +144,7 @@ import UIKit
             aimTrackpadDeadzoneCompensation = min(max(aimTrackpadDeadzoneCompensation, 0.0), 0.35)
         }
     }
-    @objc public var aimTrackpadResponseDuration: CGFloat = 0.06 {
+    @objc public var aimTrackpadResponseDuration: CGFloat = 0.075 {
         didSet {
             if !aimTrackpadResponseDuration.isFinite {
                 aimTrackpadResponseDuration = oldValue
@@ -266,9 +266,9 @@ import UIKit
     private let aimTrackpadNoiseDeadzone: CGFloat = 0.03
     private let aimTrackpadReferenceResponseTime: CGFloat = 0.06
     private let aimTrackpadReverseBrake: CGFloat = 0.12
-    private let aimTrackpadMaxImpulseTime: CGFloat = 0.36
-    private let aimTrackpadOutputSmoothingAlpha: CGFloat = 0.68
-    private let aimTrackpadStopThreshold: CGFloat = 0.018
+    private let aimTrackpadMaxImpulseTime: CGFloat = 0.42
+    private let aimTrackpadOutputSmoothingAlpha: CGFloat = 0.86
+    private let aimTrackpadStopThreshold: CGFloat = 0.003
     
     // trackball
     private var trackballVelocity: CGPoint = .zero
@@ -395,9 +395,9 @@ import UIKit
                     self.stickResponseExponent = 1.18
                     self.minStickOffset = self.stickMaxOffset * 0.06
                     self.aimMaxOutputScale = 0.92
-                    self.aimTrackpadGain = 5.2
-                    self.aimTrackpadDeadzoneCompensation = 0.16
-                    self.aimTrackpadResponseDuration = 0.06
+                    self.aimTrackpadGain = 2.8
+                    self.aimTrackpadDeadzoneCompensation = 0
+                    self.aimTrackpadResponseDuration = 0.075
                     self.hasAimTweak = true
                 }
             }

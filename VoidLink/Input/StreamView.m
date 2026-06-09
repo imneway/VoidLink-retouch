@@ -59,6 +59,21 @@ static BOOL RSPADALT2ShouldMigrateLegacyAimDefaults(OnScreenWidgetView *widgetVi
     return legacyFirstPreset || legacyDeadZonePreset || legacyRSVPADPreset || legacyCumulativePreset;
 }
 
+static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetView, OnScreenButtonState *buttonState) {
+    if (!widgetView.hasAimTweak || buttonState.aimTuningVersion != 2) {
+        return NO;
+    }
+
+    BOOL previousLinearDefault =
+        RSPADALT2ValueNear(buttonState.aimTrackpadGain, 5.20, 0.05) &&
+        (RSPADALT2ValueNear(buttonState.aimTrackpadDeadzoneCompensation, 0.16, 0.02) ||
+         RSPADALT2ValueNear(buttonState.aimTrackpadDeadzoneCompensation, 0.00, 0.005)) &&
+        RSPADALT2ValueNear(buttonState.aimTrackpadResponseDuration, 0.060, 0.005) &&
+        RSPADALT2ValueNear(buttonState.aimMaxOutputScale, 0.92, 0.02);
+
+    return previousLinearDefault;
+}
+
 /*
  Stream Video has been moved out of this class to _renderView in StreamFrameViewController.
  */
@@ -616,7 +631,8 @@ static BOOL RSPADALT2ShouldMigrateLegacyAimDefaults(OnScreenWidgetView *widgetVi
                 widgetView.sensitivityFactorY = buttonState.sensitivityFactorY;
                 widgetView.trackballDecelerationRate = buttonState.decelerationRate;
                 widgetView.stickIndicatorOffset = buttonState.stickIndicatorOffset;
-                BOOL migrateLegacyAimDefaults = RSPADALT2ShouldMigrateLegacyAimDefaults(widgetView, buttonState);
+                BOOL migrateLegacyAimDefaults = RSPADALT2ShouldMigrateLegacyAimDefaults(widgetView, buttonState) ||
+                    RSPADALT2ShouldMigrateLinearAimDefaults(widgetView, buttonState);
                 if (!migrateLegacyAimDefaults) {
                     widgetView.minStickOffset = buttonState.minStickOffset;
                     if (buttonState.stickInputScale > 0) {

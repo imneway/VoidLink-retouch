@@ -434,7 +434,7 @@ static CGRect layoutViewBounds;
         buttonState.aimTrackpadDeadzoneCompensation = widgetView.aimTrackpadDeadzoneCompensation;
         buttonState.aimTrackpadResponseDuration = widgetView.aimTrackpadResponseDuration;
         buttonState.aimRelativeModeEnabled = widgetView.aimRelativeModeEnabled;
-        buttonState.aimTuningVersion = widgetView.hasAimTweak ? 2 : 0;
+        buttonState.aimTuningVersion = widgetView.hasAimTweak ? 3 : 0;
         buttonState.stickInvertVertical = widgetView.stickInvertVertical;
         buttonState.stickInvertHorizontal = widgetView.stickInvertHorizontal;
         buttonState.slideMode = widgetView.slideMode;
