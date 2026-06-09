@@ -47,6 +47,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) uint8_t aimTuningVersion; // distinguishes saved user tuning from old migrated defaults
 @property (nonatomic, assign) BOOL stickInvertVertical;   // for OnScreenWidgetView stick pads (UI exposed on ALT only)
 @property (nonatomic, assign) BOOL stickInvertHorizontal; // for OnScreenWidgetView stick pads (UI exposed on ALT only)
+@property (nonatomic, assign) BOOL doubleTapStickClickEnabled; // for ALT stick pads quick L3/R3 double tap
 @property NSString* widgetShape; // for OnScreenWidgetView
 
 @property (nonatomic, assign) CGFloat oscLayerSizeFactor; // for OnScreenController CALayer

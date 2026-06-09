@@ -438,6 +438,7 @@ static CGRect layoutViewBounds;
         buttonState.aimTuningVersion = widgetView.hasAimTweak ? 3 : 0;
         buttonState.stickInvertVertical = widgetView.stickInvertVertical;
         buttonState.stickInvertHorizontal = widgetView.stickInvertHorizontal;
+        buttonState.doubleTapStickClickEnabled = widgetView.doubleTapStickClickEnabled;
         buttonState.slideMode = widgetView.slideMode;
         
         NSData *buttonStateEncoded = [NSKeyedArchiver archivedDataWithRootObject:buttonState requiringSecureCoding:YES error:nil];

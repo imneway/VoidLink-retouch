@@ -658,6 +658,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
                 widgetView.aimRelativeActivationButton = buttonState.aimRelativeActivationButton;
                 widgetView.stickInvertVertical = buttonState.stickInvertVertical;
                 widgetView.stickInvertHorizontal = buttonState.stickInvertHorizontal;
+                widgetView.doubleTapStickClickEnabled = buttonState.doubleTapStickClickEnabled;
                 widgetView.slideMode = buttonState.slideMode;
 
                 if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger){

@@ -106,6 +106,8 @@ import UIKit
     @objc public var hasSensitivityTweak: Bool = false
     @objc public var hasResponseCurveTweak: Bool = false
     @objc public var hasAimTweak: Bool = false
+    @objc public var hasDoubleTapStickClickTweak: Bool = false
+    @objc public var doubleTapStickClickEnabled: Bool = true
     
     // for all stick pads
     @objc public var minStickOffset: CGFloat = 0
@@ -211,6 +213,7 @@ import UIKit
 
     // check quick double tap:
     private var quickDoubleTapDetected: Bool
+    private var quickDoubleTapComboHeld: Bool = false
     private var touchTapTimeInterval: TimeInterval
     private var touchTapTimeStamp: TimeInterval
     private let QUICK_TAP_TIME_INTERVAL = 0.2
@@ -258,8 +261,6 @@ import UIKit
     private var aimLastMoveTimestamp: CFTimeInterval = 0
     private var aimAnchorLocation: CGPoint = .zero
     private var aimHasAnchor = false
-    private var aimFilteredTarget: CGPoint = .zero
-    private var aimHasFilteredTarget = false
     private var aimTrackpadDisplayLink: CADisplayLink?
     private var aimTrackpadImpulse: CGPoint = .zero
     private var aimTrackpadResidualDelta: CGPoint = .zero
@@ -268,12 +269,6 @@ import UIKit
     private var aimTrackpadHasOutput = false
     private var aimRelativeModeWasActive = false
     private let aimStopDelay: TimeInterval = 0.08
-    private let aimDeadOffset: CGFloat = 0.16
-    private let aimFastBoostFactor: CGFloat = 2.2
-    private let aimFastBoostStart: CGFloat = 0.45
-    private let aimFastBoostFull: CGFloat = 7.0
-    private let aimSmoothingSlowAlpha: CGFloat = 0.58
-    private let aimSmoothingFastAlpha: CGFloat = 0.86
     private let aimTrackpadNoiseDeadzone: CGFloat = 0.03
     private let aimTrackpadReferenceResponseTime: CGFloat = 0.06
     private let aimTrackpadReverseBrake: CGFloat = 0.12
@@ -320,6 +315,10 @@ import UIKit
 
     private var isAimStickPad: Bool {
         return self.touchPadString == "RSPADALT2"
+    }
+
+    private var shouldShowRuntimeStickIndicator: Bool {
+        return self.touchPadString != "RSPADALT2"
     }
 
     private func highlightAlpha(for backgroundAlpha: CGFloat) -> CGFloat {
@@ -410,6 +409,9 @@ import UIKit
                     self.aimTrackpadDeadzoneCompensation = 0
                     self.aimTrackpadResponseDuration = 0.075
                     self.hasAimTweak = true
+                }
+                if self.touchPadString == "LSPADALT" || self.touchPadString == "RSPADALT" || self.touchPadString == "RSPADALT2" {
+                    self.hasDoubleTapStickClickTweak = true
                 }
             }
             else {print("无法从 keyString 提取 comboKeyStrings")}
@@ -1212,6 +1214,26 @@ import UIKit
         }
     }
 
+    private var shouldTriggerQuickDoubleTapCombo: Bool {
+        guard quickDoubleTapDetected, !comboButtonStrings.isEmpty else { return false }
+        return !hasDoubleTapStickClickTweak || doubleTapStickClickEnabled
+    }
+
+    private func triggerQuickDoubleTapCombo(showIndicator: Bool = true) {
+        guard shouldTriggerQuickDoubleTapCombo else { return }
+        if showIndicator {
+            self.showl3r3Indicator()
+        }
+        self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)
+        self.quickDoubleTapComboHeld = true
+    }
+
+    private func releaseQuickDoubleTapComboIfNeeded() {
+        guard quickDoubleTapComboHeld else { return }
+        sendComboButtonsUpEvent(comboStrings: comboButtonStrings)
+        quickDoubleTapComboHeld = false
+    }
+
     
     //================================================================================================
     //Indicator overlay for on-screen game controller left or right sticks (non-vector mode)
@@ -1896,7 +1918,7 @@ import UIKit
         // bias, producing -minStickOffset when the finger is exactly centered.
         var adjX = self.stickInvertHorizontal ? -inputX : inputX
         var adjY = self.stickInvertVertical ? -inputY : inputY
-        if self.touchPadString == "RSPADALT" { // circular clamp for ALT variant
+        if self.isRightAltStickPad { // circular clamp for ALT variant
             let mag = hypot(adjX, adjY)
             if mag > stickInputScale && mag > 0 { // clamp in source domain to keep mapping consistent
                 let scale = stickInputScale / mag
@@ -1910,6 +1932,15 @@ import UIKit
         // vertical input must be inverted
         targetX = (targetX >= 0 ? 1.0 : -1.0) * self.minStickOffset + (self.stickMaxOffset - self.minStickOffset) * (targetX/self.stickMaxOffset)
         targetY = (targetY >= 0 ? 1.0 : -1.0) * self.minStickOffset + (self.stickMaxOffset - self.minStickOffset) * (targetY/self.stickMaxOffset)
+        if self.isAimStickPad {
+            let maxOutputMagnitude = stickMaxOffset * aimMaxOutputScale
+            let outputMagnitude = hypot(targetX, targetY)
+            if outputMagnitude > maxOutputMagnitude && outputMagnitude > 0 {
+                let scale = maxOutputMagnitude / outputMagnitude
+                targetX *= scale
+                targetY *= scale
+            }
+        }
         self.onScreenControls.sendRightStickTouchPadEvent(targetX, targetY)
     }
 
@@ -1935,8 +1966,6 @@ import UIKit
         aimAnchorLocation = .zero
         aimHasAnchor = false
         aimLastMoveTimestamp = 0
-        aimFilteredTarget = .zero
-        aimHasFilteredTarget = false
         if clearHostStick {
             self.onScreenControls.clearRightStickTouchPadFlag()
         }
@@ -1956,10 +1985,8 @@ import UIKit
                 self.aimHasAnchor = true
                 self.offSetX = 0
                 self.offSetY = 0
-                self.aimFilteredTarget = .zero
-                self.aimHasFilteredTarget = false
                 self.onScreenControls.clearRightStickTouchPadFlag()
-                if self.widgetType == WidgetTypeEnum.touchPad {
+                if self.widgetType == WidgetTypeEnum.touchPad && self.shouldShowRuntimeStickIndicator {
                     self.updateStickIndicator()
                 }
             }
@@ -1973,17 +2000,6 @@ import UIKit
         return t * t * (3.0 - 2.0 * t)
     }
 
-    private func applyAimDeadzoneFloor(targetX: inout CGFloat, targetY: inout CGFloat) {
-        guard minStickOffset > 0 else { return }
-        let mag = hypot(targetX, targetY)
-        guard mag > 0 else { return }
-        let normalized = min(mag / stickMaxOffset, 1.0)
-        let flooredMag = minStickOffset + (stickMaxOffset - minStickOffset) * normalized
-        let scale = flooredMag / mag
-        targetX *= scale
-        targetY *= scale
-    }
-
     private func applyTrackpadDeadzoneCompensation(targetX: inout CGFloat, targetY: inout CGFloat) {
         guard aimTrackpadDeadzoneCompensation > 0 else { return }
         let mag = hypot(targetX, targetY)
@@ -1993,75 +2009,6 @@ import UIKit
         let scale = floorMagnitude / mag
         targetX *= scale
         targetY *= scale
-    }
-
-    private func smoothAimTarget(targetX: inout CGFloat, targetY: inout CGFloat, speed: CGFloat) {
-        let speedT = min(max(speed / aimFastBoostFull, 0.0), 1.0)
-        let alpha = aimSmoothingSlowAlpha + (aimSmoothingFastAlpha - aimSmoothingSlowAlpha) * speedT
-        smoothAimTarget(targetX: &targetX, targetY: &targetY, alpha: alpha)
-    }
-
-    private func smoothAimTarget(targetX: inout CGFloat, targetY: inout CGFloat, alpha: CGFloat) {
-        if !aimHasFilteredTarget {
-            aimFilteredTarget = CGPoint(x: targetX, y: targetY)
-            aimHasFilteredTarget = true
-        } else {
-            aimFilteredTarget.x += (targetX - aimFilteredTarget.x) * alpha
-            aimFilteredTarget.y += (targetY - aimFilteredTarget.y) * alpha
-        }
-        targetX = aimFilteredTarget.x
-        targetY = aimFilteredTarget.y
-    }
-
-    private func sendRightAimStickOutputEvent(sourceX: CGFloat, sourceY: CGFloat, visualX: CGFloat, visualY: CGFloat, speed: CGFloat) {
-        let sourceMagnitude = hypot(sourceX, sourceY)
-        let visualMagnitude = hypot(visualX, visualY)
-        guard sourceMagnitude >= aimDeadOffset || visualMagnitude >= aimDeadOffset || speed >= aimDeadOffset else {
-            self.offSetX = 0
-            self.offSetY = 0
-            self.aimFilteredTarget = .zero
-            self.aimHasFilteredTarget = false
-            self.onScreenControls.clearRightStickTouchPadFlag()
-            return
-        }
-
-        let visualOffset = clampVector(x: visualX, y: visualY, radius: stickInputScale)
-        self.offSetX = visualOffset.x
-        self.offSetY = visualOffset.y
-
-        let source = clampVector(x: sourceX, y: sourceY, radius: stickInputScale)
-        var adjX = self.stickInvertHorizontal ? -source.x : source.x
-        var adjY = self.stickInvertVertical ? -source.y : source.y
-        applyStickResponseCurve(&adjX, &adjY)
-
-        var targetX = self.touchInputToStickInput(input: adjX)
-        var targetY = -self.touchInputToStickInput(input: adjY)
-        applyAimDeadzoneFloor(targetX: &targetX, targetY: &targetY)
-
-        let maxOutputMagnitude = stickMaxOffset * aimMaxOutputScale
-        let outputMagnitude = hypot(targetX, targetY)
-        if outputMagnitude > maxOutputMagnitude && outputMagnitude > 0 {
-            let scale = maxOutputMagnitude / outputMagnitude
-            targetX *= scale
-            targetY *= scale
-        }
-
-        smoothAimTarget(targetX: &targetX, targetY: &targetY, speed: speed)
-        self.onScreenControls.sendRightStickTouchPadEvent(targetX, targetY)
-    }
-
-    private func sendRightAimStickOffsetEvent(rawOffsetX: CGFloat, rawOffsetY: CGFloat, fastDeltaX: CGFloat, fastDeltaY: CGFloat) {
-        let fastDeltaMagnitude = hypot(fastDeltaX, fastDeltaY)
-        let boostT = min(max((fastDeltaMagnitude - aimFastBoostStart) / (aimFastBoostFull - aimFastBoostStart), 0.0), 1.0)
-        let boostedX = rawOffsetX + fastDeltaX * aimFastBoostFactor * boostT
-        let boostedY = rawOffsetY + fastDeltaY * aimFastBoostFactor * boostT
-        sendRightAimStickOutputEvent(
-            sourceX: boostedX,
-            sourceY: boostedY,
-            visualX: rawOffsetX,
-            visualY: rawOffsetY,
-            speed: fastDeltaMagnitude
-        )
     }
 
     private func startAimTrackpadDisplayLink() {
@@ -2235,13 +2182,11 @@ import UIKit
             )
             aimAnchorLocation = currentLocation
         } else {
-            let offsetX = (currentLocation.x - aimAnchorLocation.x) * self.sensitivityFactorX
-            let offsetY = (currentLocation.y - aimAnchorLocation.y) * self.sensitivityFactorY
-            self.sendRightAimStickOffsetEvent(
-                rawOffsetX: offsetX,
-                rawOffsetY: offsetY,
-                fastDeltaX: scaledDeltaX,
-                fastDeltaY: scaledDeltaY
+            self.offSetX = currentLocation.x - aimAnchorLocation.x
+            self.offSetY = currentLocation.y - aimAnchorLocation.y
+            self.sendRightStickTouchPadEvent(
+                inputX: self.offSetX * self.sensitivityFactorX,
+                inputY: self.offSetY * self.sensitivityFactorY
             )
         }
         self.scheduleAimStickStopCheck()
@@ -2401,31 +2346,27 @@ import UIKit
             if self.widgetType == WidgetTypeEnum.touchPad && touches.count == 1{ // don't use event?.allTouches?.count here, it will counts all touches including the ones captured by other UIViews
                 switch self.touchPadString {
                 case "LSPAD", "LSPADALT":
-                    self.showStickIndicator()
-                    if quickDoubleTapDetected {
-                        self.showl3r3Indicator()
-                        self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)}
+                    if self.shouldShowRuntimeStickIndicator {
+                        self.showStickIndicator()
+                    }
+                    self.triggerQuickDoubleTapCombo()
                     // 对于 Alt 版本，降低相关控件透明度
                     if self.touchPadString == "LSPADALT" && !OnScreenWidgetView.obscuredByAlpha {
                         self.dimControlsForAltPad()
                     }
                 case "RSPAD", "RSPADALT", "RSPADALT2":
-                    self.showStickIndicator()
-                    if quickDoubleTapDetected {
-                        self.showl3r3Indicator()
-                        self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)}
+                    if self.shouldShowRuntimeStickIndicator {
+                        self.showStickIndicator()
+                    }
+                    self.triggerQuickDoubleTapCombo()
                     // 对于 Alt 版本，降低相关控件透明度
                     if self.isRightAltStickPad && !OnScreenWidgetView.obscuredByAlpha {
                         self.dimControlsForAltPad()
                     }
                 case "LSVPAD":
-                    if quickDoubleTapDetected {
-                        self.showl3r3Indicator()
-                        self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)}
+                    self.triggerQuickDoubleTapCombo()
                 case "RSVPAD":
-                    if quickDoubleTapDetected {
-                        self.showl3r3Indicator()
-                        self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)}
+                    self.triggerQuickDoubleTapCombo()
                 case "DPAD", "WASDPAD", "ARROWPAD":
                     if allCapturedTouchesCount == 1 {showLrudBall(at: touchBeganLocation)}
                     if quickDoubleTapDetected {
@@ -2436,10 +2377,7 @@ import UIKit
                         }
                     }
                 case "DS4TOUCH":
-                    if quickDoubleTapDetected {
-                        self.showl3r3Indicator()
-                        self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)
-                    }
+                    self.triggerQuickDoubleTapCombo()
                 default:
                     break
                 }
@@ -2674,16 +2612,16 @@ import UIKit
                 DispatchQueue.global(qos: .userInteractive).async {
                     self.sendLeftStickTouchPadEvent(inputX: self.offSetX * self.sensitivityFactorX, inputY: self.offSetY * self.sensitivityFactorY)
                 }
-                if widgetType == WidgetTypeEnum.touchPad {updateStickIndicator()}
+                if widgetType == WidgetTypeEnum.touchPad && shouldShowRuntimeStickIndicator {updateStickIndicator()}
             case "RSPAD", "RSPADALT":
                 self.updateTouchLocation(touch: touches.first!)
                 DispatchQueue.global(qos: .userInteractive).async {
                     self.sendRightStickTouchPadEvent(inputX: self.offSetX * self.sensitivityFactorX, inputY: self.offSetY * self.sensitivityFactorY)
                 }
-                if widgetType == WidgetTypeEnum.touchPad {updateStickIndicator()}
+                if widgetType == WidgetTypeEnum.touchPad && shouldShowRuntimeStickIndicator {updateStickIndicator()}
             case "RSPADALT2":
                 self.handleRightAimStickMove(touch: touches.first!)
-                if widgetType == WidgetTypeEnum.touchPad {updateStickIndicator()}
+                if widgetType == WidgetTypeEnum.touchPad && shouldShowRuntimeStickIndicator {updateStickIndicator()}
             case "LSVPAD":
                 DispatchQueue.global(qos: .userInteractive).async {
                     self.updateTouchLocation(touch: touches.first!)
@@ -2777,20 +2715,22 @@ import UIKit
         }
 
         if widgetType == WidgetTypeEnum.touchPad {
-            if !comboButtonStrings.isEmpty {
-                sendComboButtonsUpEvent(comboStrings: comboButtonStrings)
-            }
+            releaseQuickDoubleTapComboIfNeeded()
 
             switch touchPadString {
             case "LSPAD", "LSPADALT":
                 onScreenControls.clearLeftStickTouchPadFlag()
-                resetStickBallPositionAndHideIndicator()
+                if shouldShowRuntimeStickIndicator {
+                    resetStickBallPositionAndHideIndicator()
+                }
             case "RSPAD", "RSPADALT", "RSPADALT2":
                 onScreenControls.clearRightStickTouchPadFlag()
                 if self.isAimStickPad {
                     resetAimStickState(clearHostStick: false)
                 }
-                resetStickBallPositionAndHideIndicator()
+                if shouldShowRuntimeStickIndicator {
+                    resetStickBallPositionAndHideIndicator()
+                }
             case "LSVPAD":
                 onScreenControls.clearLeftStickTouchPadFlag()
             case "RSVPAD":
@@ -2841,6 +2781,7 @@ import UIKit
         touchBegan = false
         mousePointerMoved = false
         quickDoubleTapDetected = false
+        quickDoubleTapComboHeld = false
         restoreAlphaAfterRelease = false
         // Drop any captured touch references — touchesEnded clears these on the
         // happy path, but cancellation never gets there. Stale entries would
@@ -2939,10 +2880,11 @@ import UIKit
         
         // then other types of pads or buttons with touchPad function
         if !OnScreenWidgetView.editMode && !self.touchPadString.isEmpty {
+            releaseQuickDoubleTapComboIfNeeded()
             switch self.touchPadString{
             case "LSPAD", "LSPADALT":
                 self.onScreenControls.clearLeftStickTouchPadFlag()
-                if widgetType == WidgetTypeEnum.touchPad {self.resetStickBallPositionAndHideIndicator()}
+                if widgetType == WidgetTypeEnum.touchPad && shouldShowRuntimeStickIndicator {self.resetStickBallPositionAndHideIndicator()}
                 // 对于 Alt 版本，恢复相关控件透明度
                 if self.touchPadString == "LSPADALT" && !OnScreenWidgetView.obscuredByAlpha {
                     self.restoreControlsOpacity()
@@ -2952,7 +2894,7 @@ import UIKit
                 if self.isAimStickPad {
                     resetAimStickState(clearHostStick: false)
                 }
-                if widgetType == WidgetTypeEnum.touchPad {self.resetStickBallPositionAndHideIndicator()}
+                if widgetType == WidgetTypeEnum.touchPad && shouldShowRuntimeStickIndicator {self.resetStickBallPositionAndHideIndicator()}
                 // 对于 Alt 版本，恢复相关控件透明度
                 if self.isRightAltStickPad && !OnScreenWidgetView.obscuredByAlpha {
                     self.restoreControlsOpacity()
@@ -3044,8 +2986,10 @@ import UIKit
             if self.widgetType == WidgetTypeEnum.touchPad{
                 switch self.touchPadString{
                 case "LSPAD", "LSPADALT", "RSPAD", "RSPADALT", "RSPADALT2":
-                    self.showStickIndicator()
-                    self.updateStickIndicator()
+                    if self.shouldShowRuntimeStickIndicator {
+                        self.showStickIndicator()
+                        self.updateStickIndicator()
+                    }
                 default: break
                 }
             }

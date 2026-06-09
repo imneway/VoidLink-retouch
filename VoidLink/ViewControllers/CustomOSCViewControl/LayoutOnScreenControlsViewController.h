@@ -104,6 +104,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (strong, nonatomic) UILabel *stickInvertHorizontalLabel;
 @property (strong, nonatomic) UISwitch *stickInvertHorizontalSwitch;
 @property (strong, nonatomic) UIStackView *stickInvertHorizontalStack;
+@property (strong, nonatomic) UILabel *doubleTapStickClickLabel;
+@property (strong, nonatomic) UISwitch *doubleTapStickClickSwitch;
+@property (strong, nonatomic) UIStackView *doubleTapStickClickStack;
 
 
 

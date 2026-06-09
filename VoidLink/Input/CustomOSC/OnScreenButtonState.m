@@ -60,6 +60,7 @@
     [encoder encodeInt:self.aimTuningVersion forKey:@"aimTuningVersion"];
     [encoder encodeBool:self.stickInvertVertical forKey:@"stickInvertVertical"];
     [encoder encodeBool:self.stickInvertHorizontal forKey:@"stickInvertHorizontal"];
+    [encoder encodeBool:self.doubleTapStickClickEnabled forKey:@"doubleTapStickClickEnabled"];
 }
 
 - (id) initWithCoder:(NSCoder*)decoder {
@@ -101,6 +102,7 @@
         self.aimTuningVersion = [decoder containsValueForKey:@"aimTuningVersion"] ? [decoder decodeIntForKey:@"aimTuningVersion"] : 0;
         self.stickInvertVertical = [decoder decodeBoolForKey:@"stickInvertVertical"];
         self.stickInvertHorizontal = [decoder decodeBoolForKey:@"stickInvertHorizontal"];
+        self.doubleTapStickClickEnabled = [decoder containsValueForKey:@"doubleTapStickClickEnabled"] ? [decoder decodeBoolForKey:@"doubleTapStickClickEnabled"] : YES;
     }
     return self;
 }

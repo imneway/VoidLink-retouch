@@ -539,6 +539,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
             widgetView.aimRelativeActivationButton = buttonState.aimRelativeActivationButton;
             widgetView.stickInvertVertical = buttonState.stickInvertVertical;
             widgetView.stickInvertHorizontal = buttonState.stickInvertHorizontal;
+            widgetView.doubleTapStickClickEnabled = buttonState.doubleTapStickClickEnabled;
             widgetView.slideMode = buttonState.slideMode;
 
             if(widgetView.widgetType == WidgetTypeEnumFullscreenTrigger){
@@ -1207,6 +1208,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         newWidget.stickResponseExponent = widget.stickResponseExponent;
         newWidget.stickInvertVertical = widget.stickInvertVertical;
         newWidget.stickInvertHorizontal = widget.stickInvertHorizontal;
+        newWidget.doubleTapStickClickEnabled = widget.doubleTapStickClickEnabled;
     }
     if (widget.hasAimTweak && newWidget.hasAimTweak) {
         newWidget.aimMaxOutputScale = widget.aimMaxOutputScale;
@@ -1370,6 +1372,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     bool showStickIndicatorOffsetStack = selectedWidgetView.hasStickIndicator && !isFullscreenTrigger;
     bool showResponseCurveStack = selectedWidgetView.hasResponseCurveTweak && !isFullscreenTrigger;
     bool showAimTweakStack = selectedWidgetView.hasAimTweak && !isFullscreenTrigger;
+    bool showDoubleTapStickClickStack = selectedWidgetView.hasDoubleTapStickClickTweak && !isFullscreenTrigger;
 
     self.sensitivityXStack.hidden = self.sensitivityYStack.hidden = !showSensitivityFactorStack;
     self.stickIndicatorOffsetStack.hidden = !showStickIndicatorOffsetStack;
@@ -1377,6 +1380,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.aimMaxOutputStack.hidden = self.aimRelativeModeStack.hidden = !showAimTweakStack;
     self.aimResponseTimeStack.hidden = !(showAimTweakStack && selectedWidgetView.aimRelativeModeEnabled);
     self.stickInvertVerticalStack.hidden = self.stickInvertHorizontalStack.hidden = !showResponseCurveStack;
+    self.doubleTapStickClickStack.hidden = !showDoubleTapStickClickStack;
     self.mouseDownButtonStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"MOUSEPAD"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
     self.decelerationRateStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"TRACKBALL"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
 
@@ -1413,6 +1417,9 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         [self configureAimResponseSlidersForSelectedWidget];
         self.stickInvertVerticalSwitch.on = self->selectedWidgetView.stickInvertVertical;
         self.stickInvertHorizontalSwitch.on = self->selectedWidgetView.stickInvertHorizontal;
+    }
+    if(showDoubleTapStickClickStack){
+        self.doubleTapStickClickSwitch.on = self->selectedWidgetView.doubleTapStickClickEnabled;
     }
     if(showAimTweakStack){
         [self updateAimRelativeModeButtonTitle];
@@ -1464,6 +1471,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.stickInputScaleStack.hidden = self.stickResponseExponentStack.hidden = true;
     self.aimMaxOutputStack.hidden = self.aimResponseTimeStack.hidden = self.aimRelativeModeStack.hidden = true;
     self.stickInvertVerticalStack.hidden = self.stickInvertHorizontalStack.hidden = true;
+    self.doubleTapStickClickStack.hidden = true;
     
     self->controllerLayerSelected = true;
     self->selectedControllerLayer = controllerLayer;
@@ -1880,6 +1888,25 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     [self.stickInvertHorizontalStack.heightAnchor constraintEqualToConstant:30].active = YES;
     self.stickInvertHorizontalStack.hidden = YES;
     [self.widgetPanelStack addArrangedSubview:self.stickInvertHorizontalStack];
+
+    self.doubleTapStickClickLabel = [[UILabel alloc] init];
+    self.doubleTapStickClickLabel.font = labelFont;
+    self.doubleTapStickClickLabel.textColor = whiteColor;
+    self.doubleTapStickClickLabel.text = [LocalizationHelper localizedStringForKey:@"Double Tap L3/R3"];
+    [self.doubleTapStickClickLabel.widthAnchor constraintEqualToConstant:160].active = YES;
+
+    self.doubleTapStickClickSwitch = [[UISwitch alloc] init];
+    self.doubleTapStickClickSwitch.onTintColor = sliderTint;
+    self.doubleTapStickClickSwitch.on = YES;
+    [self.doubleTapStickClickSwitch addTarget:self action:@selector(doubleTapStickClickChanged:) forControlEvents:UIControlEventValueChanged];
+
+    self.doubleTapStickClickStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.doubleTapStickClickLabel, self.doubleTapStickClickSwitch]];
+    self.doubleTapStickClickStack.axis = UILayoutConstraintAxisHorizontal;
+    self.doubleTapStickClickStack.translatesAutoresizingMaskIntoConstraints = NO;
+    self.doubleTapStickClickStack.alignment = UIStackViewAlignmentCenter;
+    [self.doubleTapStickClickStack.heightAnchor constraintEqualToConstant:30].active = YES;
+    self.doubleTapStickClickStack.hidden = YES;
+    [self.widgetPanelStack addArrangedSubview:self.doubleTapStickClickStack];
 }
 
 - (void)stickInvertVerticalChanged:(UISwitch* )sender{
@@ -1891,6 +1918,12 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 - (void)stickInvertHorizontalChanged:(UISwitch* )sender{
     if(self->selectedWidgetView != nil && self->widgetViewSelected){
         self->selectedWidgetView.stickInvertHorizontal = sender.on;
+    }
+}
+
+- (void)doubleTapStickClickChanged:(UISwitch* )sender{
+    if(self->selectedWidgetView != nil && self->widgetViewSelected){
+        self->selectedWidgetView.doubleTapStickClickEnabled = sender.on;
     }
 }
 
