@@ -219,6 +219,10 @@ import UIKit
     private var touchTapTimeInterval: TimeInterval
     private var touchTapTimeStamp: TimeInterval
     private let QUICK_TAP_TIME_INTERVAL = 0.2
+    private let ALT_STICK_DOUBLE_TAP_STATIONARY_SLOP: CGFloat = 8.0
+    private var altStickTouchMovedBeyondTapSlop: Bool = false
+    private var altStickTouchHadMultipleTouches: Bool = false
+    private var lastAltStickTouchWasStationaryTap: Bool = true
     @objc public var stickIndicatorOffset: CGFloat = 120
     
     // for all LRUD pads
@@ -1224,6 +1228,22 @@ import UIKit
         return !hasDoubleTapStickClickTweak || doubleTapStickClickEnabled
     }
 
+    private func recordAltStickDoubleTapMovement(to currentLocation: CGPoint) {
+        guard isAltStickPad, !altStickTouchMovedBeyondTapSlop else { return }
+        let movement = hypot(currentLocation.x - touchBeganLocation.x,
+                             currentLocation.y - touchBeganLocation.y)
+        if movement > ALT_STICK_DOUBLE_TAP_STATIONARY_SLOP {
+            altStickTouchMovedBeyondTapSlop = true
+        }
+    }
+
+    private func finishAltStickDoubleTapMovementTracking(cancelled: Bool = false) {
+        guard isAltStickPad else { return }
+        lastAltStickTouchWasStationaryTap = !cancelled && !altStickTouchMovedBeyondTapSlop && !altStickTouchHadMultipleTouches
+        altStickTouchMovedBeyondTapSlop = false
+        altStickTouchHadMultipleTouches = false
+    }
+
     private func triggerQuickDoubleTapCombo(showIndicator: Bool = true) {
         guard shouldTriggerQuickDoubleTapCombo else { return }
         if showIndicator {
@@ -2144,6 +2164,7 @@ import UIKit
         let now = CACurrentMediaTime()
         let currentLocation = touch.location(in: self)
         let elapsed = aimLastMoveTimestamp > 0 ? now - aimLastMoveTimestamp : 1.0 / 60.0
+        recordAltStickDoubleTapMovement(to: currentLocation)
         self.deltaX = currentLocation.x - self.latestTouchLocation.x
         self.deltaY = currentLocation.y - self.latestTouchLocation.y
         self.latestTouchLocation = currentLocation
@@ -2299,6 +2320,10 @@ import UIKit
         }
         self.touchBegan = true
         self.firstTouchMoved = false
+        if self.isAltStickPad {
+            self.altStickTouchMovedBeyondTapSlop = false
+            self.altStickTouchHadMultipleTouches = false
+        }
         if self.isAimStickPad {
             self.resetAimStickState(clearHostStick: true)
             self.aimLastMoveTimestamp = CACurrentMediaTime()
@@ -2316,6 +2341,9 @@ import UIKit
             touchTapTimeInterval = currentTime - touchTapTimeStamp
             touchTapTimeStamp = currentTime
             quickDoubleTapDetected = touchTapTimeInterval < QUICK_TAP_TIME_INTERVAL
+            if self.isAltStickPad {
+                quickDoubleTapDetected = quickDoubleTapDetected && lastAltStickTouchWasStationaryTap
+            }
             
             let touch = touches.first
             if OnScreenWidgetView.editMode {self.touchBeganLocation = touch!.location(in: superview)}
@@ -2334,6 +2362,9 @@ import UIKit
         let allCapturedTouchesCount = event?.allTouches?.filter({ $0.view == self }).count // this will counts all valid touches within the self widgetView, and excludes touches in other widgetViews
         if allCapturedTouchesCount == 2 {
             self.twoTouchesDetected = true
+            if self.isAltStickPad {
+                self.altStickTouchHadMultipleTouches = true
+            }
         }
         
         self.pressed = true
@@ -2589,6 +2620,7 @@ import UIKit
         self.deltaY = currentTouchLocation.y - self.latestTouchLocation.y
         self.offSetX = currentTouchLocation.x - self.touchBeganLocation.x
         self.offSetY = currentTouchLocation.y - self.touchBeganLocation.y
+        recordAltStickDoubleTapMovement(to: currentTouchLocation)
         self.latestTouchLocation = currentTouchLocation
     }
     
@@ -2784,6 +2816,7 @@ import UIKit
         mousePointerMoved = false
         quickDoubleTapDetected = false
         quickDoubleTapComboHeld = false
+        finishAltStickDoubleTapMovementTracking(cancelled: true)
         restoreAlphaAfterRelease = false
         // Drop any captured touch references — touchesEnded clears these on the
         // happy path, but cancellation never gets there. Stale entries would
@@ -2955,6 +2988,10 @@ import UIKit
                     break
                 }
             }
+        }
+
+        if !OnScreenWidgetView.editMode {
+            finishAltStickDoubleTapMovementTracking()
         }
         
         CATransaction.commit()
