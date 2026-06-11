@@ -269,16 +269,36 @@ import UIKit
     private var aimTrackpadDisplayLink: CADisplayLink?
     private var aimTrackpadImpulse: CGPoint = .zero
     private var aimTrackpadResidualDelta: CGPoint = .zero
+    // Touch deltas land here on the touch-event clock; the display link consumes
+    // the whole batch once per frame. Injecting on the frame clock instead of the
+    // touch clock removes the sawtooth/beat ripple the two unsynchronized clocks
+    // produce in the stick output.
+    private var aimTrackpadPendingDelta: CGPoint = .zero
     private var aimTrackpadLastFrameTimestamp: CFTimeInterval = 0
     private var aimTrackpadLastOutput: CGPoint = .zero
     private var aimTrackpadHasOutput = false
+    private var aimTrackpadLastInjectTimestamp: CFTimeInterval = 0
+    private var aimTouchSawMovement = false
+    private var aimTouchBeganWhileCoasting = false
     private var aimRelativeModeWasActive = false
     private let aimTrackpadNoiseDeadzone: CGFloat = 0.03
     private let aimTrackpadReferenceResponseTime: CGFloat = 0.06
-    private let aimTrackpadReverseBrake: CGFloat = 0.12
+    // Only a genuine reversal (angle > ~104°) clears the pending impulse.
+    // Oblique course changes merge via vector addition; braking them too made
+    // slow precision aim stutter because touch direction noise kept tripping it.
+    private let aimTrackpadReverseAlignment: CGFloat = -0.25
     private let aimTrackpadMaxImpulseTime: CGFloat = 0.42
-    private let aimTrackpadOutputSmoothingAlpha: CGFloat = 0.86
+    // Output smoothing as time constants so the filter strength is frame-rate
+    // independent: alpha = 1 - exp(-dt/tau). The reverse tau stays short to keep
+    // direction flips responsive without the old one-frame snap.
+    private let aimTrackpadOutputSmoothingTau: CGFloat = 0.020
+    private let aimTrackpadOutputReverseTau: CGFloat = 0.008
     private let aimTrackpadStopThreshold: CGFloat = 0.003
+    // Finger resting on screen with no effective injection for this long means
+    // "hold still" — the impulse pool then decays fast (press-to-stop). Lift-off
+    // skips this decay so a fast swipe's stored budget coasts to completion.
+    private let aimTrackpadStillHoldDelay: CFTimeInterval = 0.07
+    private let aimTrackpadStillDecayTau: CGFloat = 0.05
     
     // trackball
     private var trackballVelocity: CGPoint = .zero
@@ -1996,9 +2016,13 @@ import UIKit
         aimTrackpadDisplayLink = nil
         aimTrackpadImpulse = .zero
         aimTrackpadResidualDelta = .zero
+        aimTrackpadPendingDelta = .zero
         aimTrackpadLastFrameTimestamp = 0
         aimTrackpadLastOutput = .zero
         aimTrackpadHasOutput = false
+        aimTrackpadLastInjectTimestamp = 0
+        aimTouchSawMovement = false
+        aimTouchBeganWhileCoasting = false
         aimRelativeModeWasActive = false
         aimAnchorLocation = .zero
         aimHasAnchor = false
@@ -2027,6 +2051,9 @@ import UIKit
     private func startAimTrackpadDisplayLink() {
         guard aimTrackpadDisplayLink == nil else { return }
         aimTrackpadLastFrameTimestamp = CACurrentMediaTime()
+        if aimTrackpadLastInjectTimestamp == 0 {
+            aimTrackpadLastInjectTimestamp = aimTrackpadLastFrameTimestamp
+        }
         let displayLink = CADisplayLink(target: self, selector: #selector(handleAimTrackpadDisplayLink(_:)))
         displayLink.add(to: .main, forMode: .common)
         aimTrackpadDisplayLink = displayLink
@@ -2038,6 +2065,8 @@ import UIKit
         aimTrackpadLastFrameTimestamp = 0
         aimTrackpadLastOutput = .zero
         aimTrackpadHasOutput = false
+        aimTrackpadPendingDelta = .zero
+        aimTrackpadLastInjectTimestamp = 0
         aimRelativeModeWasActive = false
         self.offSetX = 0
         self.offSetY = 0
@@ -2046,7 +2075,7 @@ import UIKit
         }
     }
 
-    private func sendRightAimTrackpadSource(_ source: CGPoint) {
+    private func sendRightAimTrackpadSource(_ source: CGPoint, dt: CGFloat) {
         let visualOffset = clampVector(x: source.x, y: source.y, radius: stickInputScale)
         self.offSetX = visualOffset.x
         self.offSetY = visualOffset.y
@@ -2068,7 +2097,8 @@ import UIKit
         }
 
         let reversed = aimTrackpadHasOutput && (targetX * aimTrackpadLastOutput.x + targetY * aimTrackpadLastOutput.y) < 0
-        let alpha: CGFloat = reversed ? 1.0 : aimTrackpadOutputSmoothingAlpha
+        let tau = reversed ? aimTrackpadOutputReverseTau : aimTrackpadOutputSmoothingTau
+        let alpha = 1.0 - exp(-dt / tau)
         if aimTrackpadHasOutput {
             targetX = aimTrackpadLastOutput.x + (targetX - aimTrackpadLastOutput.x) * alpha
             targetY = aimTrackpadLastOutput.y + (targetY - aimTrackpadLastOutput.y) * alpha
@@ -2080,7 +2110,11 @@ import UIKit
     }
 
     @objc private func handleAimTrackpadDisplayLink(_ displayLink: CADisplayLink) {
-        guard self.isAimStickPad, self.isAimRelativeModeActive, self.pressed else {
+        // Deliberately no `pressed` check: after lift-off the remaining impulse
+        // keeps draining (swipe coast). A fast swipe parks most of its travel in
+        // the pool — clearing it on lift-off used to throw away ~75% of a quick
+        // 200pt flick, which is why fast aim turns felt short.
+        guard self.isAimStickPad, self.isAimRelativeModeActive else {
             aimTrackpadImpulse = .zero
             stopAimTrackpadDisplayLink(clearHostStick: true)
             return
@@ -2090,6 +2124,18 @@ import UIKit
         let elapsed = aimTrackpadLastFrameTimestamp > 0 ? now - aimTrackpadLastFrameTimestamp : displayLink.duration
         aimTrackpadLastFrameTimestamp = now
         let dt = min(max(CGFloat(elapsed), 1.0 / 240.0), 1.0 / 30.0)
+
+        injectPendingAimDelta(timestamp: now)
+
+        // Finger resting on the pad without effective movement: collapse the
+        // pool quickly so the crosshair settles under the finger instead of
+        // drifting through the stored budget (press-to-stop). Skipped after
+        // lift-off so a swipe's remaining budget still coasts to completion.
+        if self.touchBegan, now - aimTrackpadLastInjectTimestamp > aimTrackpadStillHoldDelay {
+            let decay = exp(-dt / aimTrackpadStillDecayTau)
+            aimTrackpadImpulse.x *= decay
+            aimTrackpadImpulse.y *= decay
+        }
 
         let impulseMagnitude = hypot(aimTrackpadImpulse.x, aimTrackpadImpulse.y)
         let responseTime = aimTrackpadResponseDuration
@@ -2105,7 +2151,7 @@ import UIKit
             y: aimTrackpadImpulse.y / responseTime
         )
         let source = clampVector(x: rawSource.x, y: rawSource.y, radius: stickInputScale)
-        sendRightAimTrackpadSource(source)
+        sendRightAimTrackpadSource(source, dt: dt)
 
         let drain = CGPoint(x: source.x * dt, y: source.y * dt)
         if hypot(drain.x, drain.y) >= impulseMagnitude {
@@ -2116,9 +2162,13 @@ import UIKit
         }
     }
 
-    private func sendRightAimStickRelativeEvent(deltaX: CGFloat, deltaY: CGFloat, elapsed _: CFTimeInterval) {
-        aimTrackpadResidualDelta.x += deltaX
-        aimTrackpadResidualDelta.y += deltaY
+    // Runs on the display-link clock. Consumes the touch deltas accumulated since
+    // the previous frame and turns them into impulse budget.
+    private func injectPendingAimDelta(timestamp: CFTimeInterval) {
+        let pending = aimTrackpadPendingDelta
+        aimTrackpadPendingDelta = .zero
+        aimTrackpadResidualDelta.x += pending.x
+        aimTrackpadResidualDelta.y += pending.y
 
         let deltaMagnitude = hypot(aimTrackpadResidualDelta.x, aimTrackpadResidualDelta.y)
         guard deltaMagnitude >= aimTrackpadNoiseDeadzone else {
@@ -2137,12 +2187,12 @@ import UIKit
         let newMagnitude = hypot(newImpulse.x, newImpulse.y)
         if pendingMagnitude > 0, newMagnitude > 0 {
             let alignment = (aimTrackpadImpulse.x * newImpulse.x + aimTrackpadImpulse.y * newImpulse.y) / (pendingMagnitude * newMagnitude)
-            if alignment < 0.65 {
-                let keep = max(alignment, 0.0) * aimTrackpadReverseBrake
-                aimTrackpadImpulse.x *= keep
-                aimTrackpadImpulse.y *= keep
-                aimTrackpadLastOutput = .zero
-                aimTrackpadHasOutput = false
+            if alignment < aimTrackpadReverseAlignment {
+                // Genuine reversal: drop the old budget so the turn-back is
+                // immediate. Smoothing state stays intact — the reverse tau in
+                // sendRightAimTrackpadSource handles the transition without the
+                // old one-frame output snap.
+                aimTrackpadImpulse = .zero
             }
         }
 
@@ -2157,6 +2207,12 @@ import UIKit
             aimTrackpadImpulse.y *= scale
         }
 
+        aimTrackpadLastInjectTimestamp = timestamp
+    }
+
+    private func sendRightAimStickRelativeEvent(deltaX: CGFloat, deltaY: CGFloat, elapsed _: CFTimeInterval) {
+        aimTrackpadPendingDelta.x += deltaX
+        aimTrackpadPendingDelta.y += deltaY
         startAimTrackpadDisplayLink()
     }
 
@@ -2165,6 +2221,13 @@ import UIKit
         let currentLocation = touch.location(in: self)
         let elapsed = aimLastMoveTimestamp > 0 ? now - aimLastMoveTimestamp : 1.0 / 60.0
         recordAltStickDoubleTapMovement(to: currentLocation)
+        if !aimTouchSawMovement {
+            let travel = hypot(currentLocation.x - touchBeganLocation.x,
+                               currentLocation.y - touchBeganLocation.y)
+            if travel > ALT_STICK_DOUBLE_TAP_STATIONARY_SLOP {
+                aimTouchSawMovement = true
+            }
+        }
         self.deltaX = currentLocation.x - self.latestTouchLocation.x
         self.deltaY = currentLocation.y - self.latestTouchLocation.y
         self.latestTouchLocation = currentLocation
@@ -2181,6 +2244,7 @@ import UIKit
         if previousRelativeAimActive && !relativeAimActive {
             aimTrackpadImpulse = .zero
             aimTrackpadResidualDelta = .zero
+            aimTrackpadPendingDelta = .zero
             stopAimTrackpadDisplayLink(clearHostStick: false)
             aimAnchorLocation = currentLocation
             touchBeganLocation = currentLocation
@@ -2192,6 +2256,7 @@ import UIKit
             }
         } else if !previousRelativeAimActive && relativeAimActive {
             aimTrackpadResidualDelta = .zero
+            aimTrackpadPendingDelta = .zero
             aimTrackpadLastOutput = .zero
             aimTrackpadHasOutput = false
             hideStickIndicatorImmediately()
@@ -2325,7 +2390,23 @@ import UIKit
             self.altStickTouchHadMultipleTouches = false
         }
         if self.isAimStickPad {
-            self.resetAimStickState(clearHostStick: true)
+            if self.isAimRelativeModeActive, aimTrackpadDisplayLink != nil {
+                // Touch-down while the previous swipe's budget is still coasting
+                // (rapid repeated swipes): keep the pool and the output filter so
+                // the strokes chain seamlessly. Only per-touch state resets.
+                aimTouchBeganWhileCoasting = true
+                aimTouchSawMovement = false
+                aimTrackpadResidualDelta = .zero
+                aimTrackpadPendingDelta = .zero
+                aimHasAnchor = false
+                aimRelativeModeWasActive = true
+                // Grace period: landing the finger must not count as "holding
+                // still" yet, or the still-decay would eat the coasting budget
+                // before the follow-up stroke's first move event arrives.
+                aimTrackpadLastInjectTimestamp = CACurrentMediaTime()
+            } else {
+                self.resetAimStickState(clearHostStick: true)
+            }
             self.aimLastMoveTimestamp = CACurrentMediaTime()
         }
         super.touchesBegan(touches, with: event)
@@ -2925,9 +3006,27 @@ import UIKit
                     self.restoreControlsOpacity()
                 }
             case "RSPAD", "RSPADALT", "RSPADALT2":
-                self.onScreenControls.clearRightStickTouchPadFlag()
-                if self.isAimStickPad {
-                    resetAimStickState(clearHostStick: false)
+                let coasting = self.isAimStickPad && self.isAimRelativeModeActive && aimTrackpadDisplayLink != nil
+                // A stationary tap landing on a coasting pool means "stop" —
+                // trackpad momentum semantics. Anything else with budget left
+                // keeps draining after lift-off so the swipe's distance isn't lost.
+                let tapToStop = aimTouchBeganWhileCoasting && !aimTouchSawMovement
+                if coasting && !tapToStop {
+                    aimTrackpadResidualDelta = .zero
+                    aimHasAnchor = false
+                    aimTouchBeganWhileCoasting = false
+                    aimTouchSawMovement = false
+                } else {
+                    self.onScreenControls.clearRightStickTouchPadFlag()
+                    if self.isAimStickPad {
+                        resetAimStickState(clearHostStick: false)
+                        if tapToStop {
+                            // This tap was consumed as "stop the coast" — it must
+                            // not double as the first half of a double-tap stick
+                            // click, or stop-then-swipe within 0.2s sends R3.
+                            touchTapTimeStamp = 0
+                        }
+                    }
                 }
                 if widgetType == WidgetTypeEnum.touchPad && (shouldShowRuntimeStickIndicator || self.isAimStickPad) {self.resetStickBallPositionAndHideIndicator()}
                 // 对于 Alt 版本，恢复相关控件透明度

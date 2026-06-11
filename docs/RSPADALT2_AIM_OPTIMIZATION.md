@@ -1,6 +1,6 @@
 # RSPADALT2 Aim Optimization Notes
 
-Last updated: 2026-06-09
+Last updated: 2026-06-12
 
 This document records the current aiming-feel goal, the tested implementation directions, the latest technical model, and the next optimization path for `RSPADALT2`.
 
@@ -212,7 +212,76 @@ Technical lesson:
 - Merely renaming joystick parameters is misleading.
 - `Relative Aim` needs trackpad-specific parameters that map to actual algorithm concepts.
 
-## Latest Version Direction
+### 10. Lift-off coast + frame-synced injection (2026-06-12)
+
+Diagnosis that motivated this round (from a quantitative pass over the v3 linear
+integrator with Wei's "still shaky/jumpy, fast swipes feel short" feedback):
+
+- **Fast swipes lost most of their input.** Steady-state full deflection is
+  reached at only ~250pt/s finger speed (gain 2.8). Anything faster floods the
+  impulse pool, which was (a) capped at `stickInputScale * 0.42` with overflow
+  discarded, and (b) **hard-cleared on lift-off**. A 200pt swipe at 1000pt/s
+  kept only ~25% of its travel; the same 200pt moved slowly kept 100%. That
+  directly violates the distance-consistency goal and explains "fast aim turns
+  need several swipes but slow tracking looks fine".
+- **The 0.42s tail caused overshoot-correct-jump loops.** With the finger held
+  after a fast swipe the pool kept draining at full deflection for up to 0.42s.
+  The correction then tripped the reverse brake (`alignment < 0.65`, i.e. any
+  course change beyond ~50°), which zeroed the pool **and** the output filter
+  state, so the next frame bypassed smoothing — a one-frame stick snap. Slow
+  precision movement also tripped this constantly because touch direction noise
+  at low speeds easily exceeds 50°. That is the "shaky/jumpy but the trail looks
+  continuous" feel: velocity discontinuities, not position jumps.
+- **Touch-clock injection rippled against the display-link clock.** Each touch
+  event bumped the pool by ~20% (60Hz events, tau 75ms) and the display link
+  sampled that sawtooth out of phase, producing a beat-frequency wobble in the
+  stick output. The fixed EMA (alpha 0.86 per frame ≈ 8ms time constant) was
+  too weak to filter it.
+
+Direction implemented (P0 + P1):
+
+- **Frame-synchronized injection.** `touchesMoved` only accumulates into
+  `aimTrackpadPendingDelta`; the display link consumes the whole batch once per
+  frame (`injectPendingAimDelta`). Injection and drain now share one clock, so
+  the sawtooth/beat ripple is gone at the source.
+- **Lift-off coast.** `touchesEnded` no longer clears the pool while the
+  relative-aim display link is running; the remaining budget keeps draining
+  after the finger lifts (trackpad-momentum semantics). The display-link guard
+  no longer requires an active touch. Fast-swipe travel realization goes from
+  ~25% to ~78% in the 200pt @ 1000pt/s case (the rest is the pool cap, which is
+  the deliberate flick-coverage limit).
+- **Press-to-stop.** While the finger rests on the pad with no effective
+  injection for `0.07s`, the pool decays by `exp(-dt / 0.05)` per frame, so the
+  crosshair settles under a held finger (~0.1-0.17s) instead of drifting
+  through the stored budget. Skipped after lift-off so coast still completes.
+- **Tap-to-stop.** A touch that lands while coasting and ends within the 8pt
+  stationary slop hard-stops the pool — same muscle memory as tapping a
+  trackpad to kill momentum. The consumed tap also resets the double-tap clock
+  so stop-then-swipe within 0.2s cannot fire the R3 stick-click combo.
+- **Stroke chaining.** A touch that lands while coasting keeps the pool, the
+  display link, and the output-filter state, so rapid repeated swipes (turn
+  fast by chaining strokes) blend instead of restarting from zero each time.
+- **Reverse brake redesign.** Only a genuine reversal (`alignment < -0.25`,
+  ~104°+) clears the old pool. Oblique course changes merge through vector
+  addition. The brake no longer resets the output filter, so direction flips
+  transition through the fast reverse tau instead of snapping in one frame.
+- **dt-aware output smoothing.** `alpha = 1 - exp(-dt / tau)` with
+  `tau = 0.020s` forward and `0.008s` on reversal — frame-rate independent,
+  stronger ripple rejection than the old fixed alpha, still fast on flips.
+
+Review notes (adversarial pass, 2026-06-12):
+
+- Fixed before commit: the tap-to-stop tap used to count as the first half of
+  a double tap, so stop-then-touch within 0.2s sent R3 to the game.
+- Known and accepted: combo-command widgets (e.g. `A-RSPADALT2`) enable
+  multi-touch, where a second finger can clobber the per-touch tap/coast flags
+  (exotic config; touchpad widgets keep multi-touch disabled). If the app
+  backgrounds mid-coast the host keeps the last stick value until the display
+  link resumes and the pool drains (bounded, self-healing, worst case ~1.1s).
+  Extremely slow drags (<~0.4pt/s) can poke the press-to-stop decay between
+  injections; below the noise floor in practice.
+
+## Previous Version Direction (superseded by 10)
 
 Commit:
 
@@ -239,64 +308,76 @@ Relevant implementation files:
 - `VoidLink/Input/StreamView.m`
 - `VoidLink/ViewControllers/CustomOSCViewControl/LayoutOnScreenControlsViewController.m`
 
-Current exposed `Relative Aim` parameters:
+Current exposed `Relative Aim` parameters (code defaults as of 2026-06-12):
 
-- `Trackpad Gain`, default `5.20`, range `1.0...10.0`
-- `Deadzone`, default `0.16`, range `0.0...0.35`
-- `Response Time`, default `0.060s`, range `0.030...0.140s`
-- `Peak Output`, default `0.92`, range `0.20...1.00`
+- `Trackpad Gain`, default `2.8`, clamp `0.5...10.0`
+- `Deadzone`, default `0` (zero-deadzone host setup), clamp `0.0...0.35`
+- `Response Time`, default `0.075s`, clamp `0.030...0.140s`
+- `Peak Output`, default `0.92`, clamp `0.20...1.00`
 
 Current internal constants:
 
 - `aimTrackpadNoiseDeadzone = 0.03`
 - `aimTrackpadReferenceResponseTime = 0.06`
-- `aimTrackpadReverseBrake = 0.12`
-- `aimTrackpadMaxImpulseTime = 0.36`
-- `aimTrackpadOutputSmoothingAlpha = 0.68`
-- `aimTrackpadStopThreshold = 0.018`
+- `aimTrackpadReverseAlignment = -0.25`
+- `aimTrackpadMaxImpulseTime = 0.42`
+- `aimTrackpadOutputSmoothingTau = 0.020`
+- `aimTrackpadOutputReverseTau = 0.008`
+- `aimTrackpadStopThreshold = 0.003`
+- `aimTrackpadStillHoldDelay = 0.07`
+- `aimTrackpadStillDecayTau = 0.05`
 
-Current data flow in `Relative Aim`:
+Current data flow in `Relative Aim` (after direction 10):
 
-1. `touchMoved` calculates the latest finger delta from the previous touch position.
-2. Delta is multiplied by `SensitivityX/Y`.
-3. Delta is added to a residual accumulator.
-4. If residual magnitude is below `0.03pt`, it stays accumulated and no output is sent yet.
-5. When residual passes the noise threshold, it becomes a new aim impulse:
+1. `touchesMoved` computes the finger delta, multiplies by aim `SensitivityX/Y`, and only accumulates it into `aimTrackpadPendingDelta`. No host output happens on the touch clock.
+2. Each `CADisplayLink` frame consumes the whole pending batch into the residual accumulator.
+3. If residual magnitude is below `0.03pt`, it stays accumulated and nothing is injected this frame.
+4. When residual passes the noise threshold it becomes a new aim impulse:
    - `newImpulse = delta * Trackpad Gain * 0.06`
-6. If new impulse direction conflicts with pending impulse direction, pending impulse is braked and previous smoothed output is cleared.
-7. The impulse budget is capped by:
-   - `stickInputScale * aimTrackpadMaxImpulseTime`
-8. `CADisplayLink` runs every display frame while there is pending impulse.
-9. Each display frame computes:
-   - `source = impulse / Response Time`
-10. `source` is clamped to the stick range.
-11. The source is converted to right-stick coordinates.
-12. `Deadzone` compensation raises very small non-zero output above the game's likely right-stick dead zone.
-13. `Peak Output` caps the maximum right-stick magnitude.
-14. Output smoothing is applied with alpha `0.68`, except reversed movement can bypass smoothing for immediate response.
-15. The frame drains budget by:
-   - `drain = source * dt`
-16. When the remaining impulse drops below the stop threshold, the right stick is cleared.
+5. If the new impulse genuinely reverses against the pending impulse (`alignment < -0.25`), the pending impulse is dropped; oblique changes merge via vector addition. The output filter state is never reset here.
+6. The impulse budget is capped by `stickInputScale * 0.42`.
+7. While the finger rests on the pad with no effective injection for `0.07s`, the pool decays by `exp(-dt / 0.05)` per frame (press-to-stop). This decay is skipped once the finger lifts.
+8. Each frame computes `source = impulse / Response Time`, clamped to the stick range, converted to right-stick coordinates.
+9. `Deadzone` compensation raises very small non-zero output above the game's right-stick dead zone (no-op at the current `0` default).
+10. `Peak Output` caps the right-stick magnitude.
+11. Output smoothing uses `alpha = 1 - exp(-dt / tau)`, `tau = 0.020s` normally and `0.008s` when the new target reverses against the last output.
+12. The frame drains budget by `drain = source * dt`.
+13. When the remaining impulse drops below the stop threshold, the display link stops and the right stick is cleared.
+14. On lift-off the pool is **not** cleared: the display link keeps draining it (coast). A stationary tap during coast stops it immediately; a touch-down that starts moving chains into the coasting budget.
 
 ## How To Tune The Latest Version
 
-Recommended tuning order:
+Recommended tuning order (zero-deadzone host, defaults Gain 2.8 / Deadzone 0 / Response 0.075):
 
-1. Tune `Deadzone` first.
-   - If tiny finger movement still does not move the crosshair, raise it from `0.16` to `0.18-0.20`.
-   - If tiny movement jumps, lower it to `0.12-0.14`.
+1. Expand dynamic range on the host first (biggest lever, no code).
+   - Raise the in-game right-stick sensitivity (1.5-2x) and pick a linear
+     response curve if the game offers one, then lower `Trackpad Gain`
+     proportionally. Full deflection currently maps to only ~250pt/s finger
+     speed at Gain 2.8; halving gain after doubling game sensitivity doubles
+     the speed range before saturation, which is what makes fast swipes both
+     cover distance and stop cleanly.
 
-2. Tune `Trackpad Gain` second.
-   - If the whole control is too sensitive, lower it to `4.6-5.0`.
-   - If large movement is too short, raise it to `5.6-6.2`.
+2. Tune `Trackpad Gain`.
+   - Too sensitive overall: lower toward `2.2-2.6`.
+   - Large movement too short even after step 1: raise toward `3.2-3.6`.
 
-3. Tune `Response Time` third.
-   - If output feels choppy or has broken continuity, raise it to around `0.070s`.
-   - If output feels laggy or drifty, lower it to `0.045-0.055s`.
+3. Tune `Response Time`.
+   - Choppy / broken continuity: raise toward `0.085-0.095s`.
+   - Laggy or floaty: lower toward `0.050-0.060s` (frame-synced injection
+     keeps this stable where the old event-clock injection stuttered).
 
 4. Tune `Peak Output` last.
-   - If large movement is too violent, lower it to `0.82-0.88`.
-   - If large movement still cannot cover enough distance, raise it to `1.00`.
+   - Large movement too violent: lower to `0.82-0.88`.
+   - Still cannot cover distance: raise to `1.00`.
+
+5. `Deadzone` stays `0` for a zero-deadzone host. Only raise it (`0.05-0.10`)
+   if the game itself has a built-in stick dead zone that the host-side
+   zero-deadzone setting cannot remove (tiny movement does nothing in game).
+
+Fixed behaviors (internal constants, not sliders): lift-off coast budget is
+bounded by `0.42` full-deflection-seconds; press-to-stop engages after `0.07s`
+of stillness and settles in ~0.1-0.17s; a stationary tap during coast stops
+instantly.
 
 ## Next Optimization Directions
 
@@ -355,13 +436,14 @@ If users can get distance right but cannot get smoothness right, expose a separa
 
 ## Current Baseline Summary
 
-Use `RSPADALT2` with `Relative Aim` enabled to test the latest linear shooter-style model.
+Use `RSPADALT2` with `Relative Aim` enabled to test the linear trackpad model
+with lift-off coast (direction 10).
 
-Default test values:
+Default test values (zero-deadzone host):
 
-- `Trackpad Gain 5.20`
-- `Deadzone 0.16`
-- `Response Time 0.060s`
+- `Trackpad Gain 2.8`
+- `Deadzone 0`
+- `Response Time 0.075s`
 - `Peak Output 0.92`
 
 Known-good fallback:
