@@ -656,6 +656,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
                         widgetView.aimTrackpadResponseDuration = buttonState.aimTrackpadResponseDuration;
                     }
                 }
+                widgetView.aimTrackpadAxisSnapDegrees = buttonState.aimTrackpadAxisSnapDegrees;
                 widgetView.aimRelativeModeEnabled = buttonState.aimRelativeModeEnabled;
                 widgetView.aimRelativeActivationButton = buttonState.aimRelativeActivationButton;
                 widgetView.stickInvertVertical = buttonState.stickInvertVertical;

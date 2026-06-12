@@ -537,6 +537,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
                     widgetView.aimTrackpadResponseDuration = buttonState.aimTrackpadResponseDuration;
                 }
             }
+            widgetView.aimTrackpadAxisSnapDegrees = buttonState.aimTrackpadAxisSnapDegrees;
             widgetView.aimRelativeModeEnabled = buttonState.aimRelativeModeEnabled;
             widgetView.aimRelativeActivationButton = buttonState.aimRelativeActivationButton;
             widgetView.stickInvertVertical = buttonState.stickInvertVertical;
@@ -1219,6 +1220,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         newWidget.aimTrackpadGain = widget.aimTrackpadGain;
         newWidget.aimTrackpadDeadzoneCompensation = widget.aimTrackpadDeadzoneCompensation;
         newWidget.aimTrackpadResponseDuration = widget.aimTrackpadResponseDuration;
+        newWidget.aimTrackpadAxisSnapDegrees = widget.aimTrackpadAxisSnapDegrees;
         newWidget.aimRelativeModeEnabled = widget.aimRelativeModeEnabled;
         newWidget.aimRelativeActivationButton = widget.aimRelativeActivationButton;
     }
@@ -1437,6 +1439,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.stickInputScaleStack.hidden = self.stickResponseExponentStack.hidden = !showResponseCurveStack;
     self.aimMaxOutputStack.hidden = self.aimRelativeModeStack.hidden = !showAimTweakStack;
     self.aimSensitivityXYStack.hidden = self.aimTrackpadGainStack.hidden = self.aimDeadzoneStack.hidden = self.aimResponseTimeStack.hidden = !showAimTweakStack;
+    self.aimAxisSnapStack.hidden = !showAimTweakStack;
     self.stickInvertAxisStack.hidden = !showResponseCurveStack;
     self.doubleTapStickClickStack.hidden = !showDoubleTapStickClickStack;
     self.mouseDownButtonStack.hidden = isFullscreenTrigger || !([selectedWidgetView.cmdString containsString:@"MOUSEPAD"] && selectedWidgetView.widgetType == WidgetTypeEnumTouchPad);
@@ -1526,6 +1529,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.stickInputScaleStack.hidden = self.stickResponseExponentStack.hidden = true;
     self.aimMaxOutputStack.hidden = self.aimResponseTimeStack.hidden = self.aimRelativeModeStack.hidden = true;
     self.aimSensitivityXYStack.hidden = self.aimTrackpadGainStack.hidden = self.aimDeadzoneStack.hidden = true;
+    self.aimAxisSnapStack.hidden = true;
     self.stickInvertAxisStack.hidden = true;
     self.doubleTapStickClickStack.hidden = true;
     
@@ -1725,6 +1729,10 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     [self.aimResponseTimeSlider setValue:self->selectedWidgetView.aimTrackpadResponseDuration];
     [self autoFitLabel:self.aimResponseTimeLabel];
     [self.aimResponseTimeLabel setText:[LocalizationHelper localizedStringForKey:@"Response Time: %.3fs", self->selectedWidgetView.aimTrackpadResponseDuration]];
+
+    [self.aimAxisSnapSlider setValue:self->selectedWidgetView.aimTrackpadAxisSnapDegrees];
+    [self autoFitLabel:self.aimAxisSnapLabel];
+    [self.aimAxisSnapLabel setText:[LocalizationHelper localizedStringForKey:@"Axis Snap: %.0f°", self->selectedWidgetView.aimTrackpadAxisSnapDegrees]];
 }
 
 - (void)stickInputScaleSliderMoved:(UISlider* )sender{
@@ -1766,6 +1774,14 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     if(self->selectedWidgetView != nil && self->widgetViewSelected){
         self->selectedWidgetView.aimTrackpadResponseDuration = sender.value;
         [self.aimResponseTimeLabel setText:[LocalizationHelper localizedStringForKey:@"Response Time: %.3fs", self->selectedWidgetView.aimTrackpadResponseDuration]];
+    }
+}
+
+- (void)aimAxisSnapSliderMoved:(UISlider* )sender{
+    if(self->selectedWidgetView != nil && self->widgetViewSelected){
+        sender.value = roundf(sender.value); // whole degrees so the label and the math agree, and 0 really means off
+        self->selectedWidgetView.aimTrackpadAxisSnapDegrees = sender.value;
+        [self.aimAxisSnapLabel setText:[LocalizationHelper localizedStringForKey:@"Axis Snap: %.0f°", self->selectedWidgetView.aimTrackpadAxisSnapDegrees]];
     }
 }
 
@@ -1886,6 +1902,26 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     [self.aimResponseTimeStack.heightAnchor constraintEqualToConstant:20].active = YES;
     self.aimResponseTimeStack.hidden = YES;
     [self.widgetPanelStack addArrangedSubview:self.aimResponseTimeStack];
+
+    self.aimAxisSnapLabel = [[UILabel alloc] init];
+    self.aimAxisSnapLabel.font = labelFont;
+    self.aimAxisSnapLabel.textColor = whiteColor;
+    self.aimAxisSnapLabel.text = [LocalizationHelper localizedStringForKey:@"Axis Snap"];
+    [self.aimAxisSnapLabel.widthAnchor constraintEqualToConstant:160].active = YES;
+
+    self.aimAxisSnapSlider = [[UISlider alloc] init];
+    self.aimAxisSnapSlider.minimumValue = 0.0;
+    self.aimAxisSnapSlider.maximumValue = 20.0;
+    self.aimAxisSnapSlider.value = 10.0;
+    self.aimAxisSnapSlider.tintColor = sliderTint;
+    [self.aimAxisSnapSlider addTarget:self action:@selector(aimAxisSnapSliderMoved:) forControlEvents:UIControlEventValueChanged];
+
+    self.aimAxisSnapStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.aimAxisSnapLabel, self.aimAxisSnapSlider]];
+    self.aimAxisSnapStack.axis = UILayoutConstraintAxisHorizontal;
+    self.aimAxisSnapStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.aimAxisSnapStack.heightAnchor constraintEqualToConstant:20].active = YES;
+    self.aimAxisSnapStack.hidden = YES;
+    [self.widgetPanelStack addArrangedSubview:self.aimAxisSnapStack];
 
     self.aimRelativeModeLabel = [[UILabel alloc] init];
     self.aimRelativeModeLabel.font = labelFont;
@@ -2063,6 +2099,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         self.aimTrackpadGainStack,
         self.aimDeadzoneStack,
         self.aimResponseTimeStack,
+        self.aimAxisSnapStack,
         self.doubleTapStickClickStack
     ];
     for(UIView *view in orderedRuntimeStacks){

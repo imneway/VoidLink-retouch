@@ -154,6 +154,17 @@ import UIKit
             aimTrackpadResponseDuration = min(max(aimTrackpadResponseDuration, 0.03), 0.14)
         }
     }
+    // Axis-snap cone half-angle in degrees for relative aim. Strokes within
+    // this angle of an axis get the cross-axis component compressed so thumb
+    // arcs read as straight lines. 0 disables.
+    @objc public var aimTrackpadAxisSnapDegrees: CGFloat = 10 {
+        didSet {
+            if !aimTrackpadAxisSnapDegrees.isFinite {
+                aimTrackpadAxisSnapDegrees = oldValue
+            }
+            aimTrackpadAxisSnapDegrees = min(max(aimTrackpadAxisSnapDegrees, 0.0), 20.0)
+        }
+    }
     @objc public var aimRelativeModeEnabled: Bool = false
     @objc public var aimRelativeActivationButton: String = CommandManager.aimRelativeActivationOff {
         didSet {
@@ -435,6 +446,7 @@ import UIKit
                     self.aimTrackpadGain = 2.8
                     self.aimTrackpadDeadzoneCompensation = 0
                     self.aimTrackpadResponseDuration = 0.075
+                    self.aimTrackpadAxisSnapDegrees = 10
                     self.hasAimTweak = true
                 }
                 if self.touchPadString == "LSPADALT" || self.touchPadString == "RSPADALT" || self.touchPadString == "RSPADALT2" {
@@ -2048,6 +2060,24 @@ import UIKit
         targetY *= scale
     }
 
+    // Strokes within the snap cone of an axis get their cross-axis component
+    // compressed toward zero, so a thumb's natural arc reads as a straight
+    // line. smoothStep keeps the compression continuous in stroke angle:
+    // dead-on-axis → fully snapped, cone edge → untouched, no pop when an
+    // intentional diagonal crosses the boundary.
+    private func applyAimAxisSnap(to delta: inout CGPoint) {
+        guard aimTrackpadAxisSnapDegrees > 0 else { return }
+        let ax = abs(delta.x)
+        let ay = abs(delta.y)
+        guard ax > 0 || ay > 0 else { return }
+        let cone = tan(aimTrackpadAxisSnapDegrees * .pi / 180.0)
+        if ay < ax * cone {
+            delta.y *= smoothStep(ay / (ax * cone))
+        } else if ax < ay * cone {
+            delta.x *= smoothStep(ax / (ay * cone))
+        }
+    }
+
     private func startAimTrackpadDisplayLink() {
         guard aimTrackpadDisplayLink == nil else { return }
         aimTrackpadLastFrameTimestamp = CACurrentMediaTime()
@@ -2175,8 +2205,9 @@ import UIKit
             return
         }
 
-        let activeDelta = aimTrackpadResidualDelta
+        var activeDelta = aimTrackpadResidualDelta
         aimTrackpadResidualDelta = .zero
+        applyAimAxisSnap(to: &activeDelta)
 
         let newImpulse = CGPoint(
             x: activeDelta.x * aimTrackpadGain * aimTrackpadReferenceResponseTime,

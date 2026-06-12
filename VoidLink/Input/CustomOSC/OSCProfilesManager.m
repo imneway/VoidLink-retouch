@@ -435,6 +435,7 @@ static CGRect layoutViewBounds;
         buttonState.aimTrackpadGain = widgetView.aimTrackpadGain;
         buttonState.aimTrackpadDeadzoneCompensation = widgetView.aimTrackpadDeadzoneCompensation;
         buttonState.aimTrackpadResponseDuration = widgetView.aimTrackpadResponseDuration;
+        buttonState.aimTrackpadAxisSnapDegrees = widgetView.aimTrackpadAxisSnapDegrees;
         buttonState.aimRelativeModeEnabled = widgetView.aimRelativeModeEnabled;
         buttonState.aimRelativeActivationButton = widgetView.aimRelativeActivationButton;
         buttonState.aimTuningVersion = widgetView.hasAimTweak ? 3 : 0;

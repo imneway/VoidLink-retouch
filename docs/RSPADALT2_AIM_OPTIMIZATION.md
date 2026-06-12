@@ -314,6 +314,13 @@ Current exposed `Relative Aim` parameters (code defaults as of 2026-06-12):
 - `Deadzone`, default `0` (zero-deadzone host setup), clamp `0.0...0.35`
 - `Response Time`, default `0.075s`, clamp `0.030...0.140s`
 - `Peak Output`, default `0.92`, clamp `0.20...1.00`
+- `Axis Snap`, default `10°`, clamp `0...20°` (0 = off). Strokes within this
+  angle of the horizontal or vertical axis get their cross-axis delta
+  compressed (smoothStep over stroke angle, continuous at the cone edge), so
+  the thumb's natural arc reads as a straight line. Added after Wei reported
+  horizontal aim strokes drifting up-right/down-left while vertical-inverted;
+  the relative path itself was verified direction-neutral, so the slant comes
+  from the finger arc, not the algorithm.
 
 Current internal constants:
 

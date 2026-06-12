@@ -44,6 +44,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) CGFloat aimTrackpadGain; // for RSPADALT2 Relative Aim (0 = use widget default)
 @property (nonatomic, assign) CGFloat aimTrackpadDeadzoneCompensation; // for RSPADALT2 Relative Aim (0 = no compensation)
 @property (nonatomic, assign) CGFloat aimTrackpadResponseDuration; // for RSPADALT2 Relative Aim (0 = use widget default)
+@property (nonatomic, assign) CGFloat aimTrackpadAxisSnapDegrees; // for RSPADALT2 Relative Aim axis snap cone (0 = off)
 @property (nonatomic, assign) BOOL aimRelativeModeEnabled; // for RSPADALT2 dynamic-anchor relative aim mode
 @property NSString *aimRelativeActivationButton; // ON / OFF / controller button token for RSPADALT2 Relative Aim
 @property (nonatomic, assign) uint8_t aimTuningVersion; // distinguishes saved user tuning from old migrated defaults

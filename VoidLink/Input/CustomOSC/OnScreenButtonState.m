@@ -57,6 +57,7 @@
     [encoder encodeFloat:self.aimTrackpadGain forKey:@"aimTrackpadGain"];
     [encoder encodeFloat:self.aimTrackpadDeadzoneCompensation forKey:@"aimTrackpadDeadzoneCompensation"];
     [encoder encodeFloat:self.aimTrackpadResponseDuration forKey:@"aimTrackpadResponseDuration"];
+    [encoder encodeFloat:self.aimTrackpadAxisSnapDegrees forKey:@"aimTrackpadAxisSnapDegrees"];
     [encoder encodeBool:self.aimRelativeModeEnabled forKey:@"aimRelativeModeEnabled"];
     [encoder encodeObject:self.aimRelativeActivationButton forKey:@"aimRelativeActivationButton"];
     [encoder encodeInt:self.aimTuningVersion forKey:@"aimTuningVersion"];
@@ -96,6 +97,9 @@
         self.aimTrackpadGain = [decoder containsValueForKey:@"aimTrackpadGain"] ? [decoder decodeFloatForKey:@"aimTrackpadGain"] : 0;
         self.aimTrackpadDeadzoneCompensation = [decoder containsValueForKey:@"aimTrackpadDeadzoneCompensation"] ? [decoder decodeFloatForKey:@"aimTrackpadDeadzoneCompensation"] : 0;
         self.aimTrackpadResponseDuration = [decoder containsValueForKey:@"aimTrackpadResponseDuration"] ? [decoder decodeFloatForKey:@"aimTrackpadResponseDuration"] : 0;
+        // 0 is a valid "off" value, so older profiles missing the key get the
+        // widget default (10°) instead of silently disabling the snap.
+        self.aimTrackpadAxisSnapDegrees = [decoder containsValueForKey:@"aimTrackpadAxisSnapDegrees"] ? [decoder decodeFloatForKey:@"aimTrackpadAxisSnapDegrees"] : 10;
         self.aimRelativeModeEnabled = [decoder containsValueForKey:@"aimRelativeModeEnabled"] ? [decoder decodeBoolForKey:@"aimRelativeModeEnabled"] : NO;
         if ([decoder containsValueForKey:@"aimRelativeActivationButton"]) {
             self.aimRelativeActivationButton = [decoder decodeObjectForKey:@"aimRelativeActivationButton"];
