@@ -30,6 +30,9 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 @interface ControllerSupport()
 
 @property (assign,nonatomic) bool shallDisableGyroHotSwitch;
+@property (atomic, assign) BOOL forceGyroOverrideSet;
+
+- (void)clearGyroOutputForAllControllers;
 
 @end
 
@@ -105,18 +108,19 @@ static inline int16_t clamp_int16(CGFloat v) {
 
 // YES when motion events should be emitted right now. Decision order:
 //   1. GYROPAUSE always wins (emergency suspend, even over forceGyroEnabled)
-//   2. forceGyroEnabled (persistent stream-view toggle) overrides hold gate
-//   3. No motion widgets registered → legacy always-on (under user's GyroMode)
-//   4. GYRO widgets registered → at least one must be held
+//   2. Explicit stream-view GYRO ON/OFF switch wins globally
+//   3. No motion widgets registered -> legacy always-on (under user's GyroMode)
+//   4. GYRO widgets registered -> at least one must be held
 // Read under the same lock as push/pop to avoid races between the gyro timer
 // (background thread, ~60Hz reads) and touch handlers (main thread).
 - (BOOL) motionEmissionAllowed {
     BOOL hasToggle = self.hasGyroToggleButton;
     BOOL hasPause  = self.hasGyroPauseButton;
+    BOOL hasGlobalOverride = self.forceGyroOverrideSet;
     BOOL globalForce = self.forceGyroEnabled;
     @synchronized (self) {
         if (hasPause && _motionButtonPauseCount > 0) return NO;
-        if (globalForce) return YES;
+        if (hasGlobalOverride) return globalForce;
         if (!hasToggle && !hasPause) return YES;
         return !hasToggle || _motionButtonHoldCount > 0;
     }
@@ -1549,6 +1553,7 @@ static inline int16_t clamp_int16(CGFloat v) {
     _mapGyroTo = currentSettings.mapGyroTo.intValue;  // 0 = MapGyroToMotion (legacy default)
     _gyroInvertPitch = currentSettings.gyroInvertPitch;
     _gyroInvertYaw = currentSettings.gyroInvertYaw;
+    self.forceGyroOverrideSet = [[NSUserDefaults standardUserDefaults] objectForKey:@"forceGyroEnabled"] != nil;
     self.forceGyroEnabled = currentSettings.forceGyroEnabled;
 }
 
@@ -1557,6 +1562,43 @@ static inline int16_t clamp_int16(CGFloat v) {
     if(voidController.hasGyroscope) LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber,LI_MOTION_TYPE_GYRO,0,0,0);
     if (@available(iOS 14.0, *)) {
         voidController.gamepad.motion.sensorsActive = false;
+    }
+}
+
+- (void)clearGyroOutputForController:(VoidController* )voidController {
+    if (!voidController) return;
+
+    if (voidController.hasAccelerometer) {
+        LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber, LI_MOTION_TYPE_ACCEL, 0, 0, 0);
+    }
+    if (voidController.hasGyroscope) {
+        LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber, LI_MOTION_TYPE_GYRO, 0, 0, 0);
+    }
+
+    GCAcceleration emptyAccelSample = {};
+    GCRotationRate emptyGyroSample = {};
+#if !TARGET_OS_TV
+    CMAcceleration emptyDeviceAccelSample = {};
+    CMRotationRate emptyDeviceGyroSample = {};
+    voidController.lastDeviceAccelSample = emptyDeviceAccelSample;
+    voidController.lastDeviceGyroSample = emptyDeviceGyroSample;
+#endif
+    voidController.lastAccelSample = emptyAccelSample;
+    voidController.lastGyroSample = emptyGyroSample;
+
+    if (voidController.gyroStickX != 0 || voidController.gyroStickY != 0) {
+        @synchronized(voidController) {
+            voidController.gyroStickX = 0;
+            voidController.gyroStickY = 0;
+        }
+        [self updateFinished:voidController];
+    }
+}
+
+- (void)clearGyroOutputForAllControllers {
+    [self clearGyroOutputForController:_oscController];
+    for (VoidController* controller in _voidControllers.allValues) {
+        [self clearGyroOutputForController:controller];
     }
 }
 
@@ -1754,11 +1796,19 @@ static inline int16_t clamp_int16(CGFloat v) {
         DataManager* dm = [[DataManager alloc] init];
         TemporarySettings* s = [dm getSettings];
         int previousMapGyroTo = strongSelf->_mapGyroTo;
+        BOOL previousForceGyroOverrideSet = strongSelf.forceGyroOverrideSet;
+        BOOL previousForceGyroEnabled = strongSelf.forceGyroEnabled;
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
         strongSelf->_gyroSensitivity = s.gyroSensitivity.floatValue;
         strongSelf->_mapGyroTo = s.mapGyroTo.intValue;
         strongSelf->_gyroInvertPitch = s.gyroInvertPitch;
         strongSelf->_gyroInvertYaw = s.gyroInvertYaw;
+        strongSelf.forceGyroOverrideSet = [defaults objectForKey:@"forceGyroEnabled"] != nil;
         strongSelf.forceGyroEnabled = s.forceGyroEnabled;
+        if (strongSelf.forceGyroOverrideSet && !strongSelf.forceGyroEnabled &&
+            (!previousForceGyroOverrideSet || previousForceGyroEnabled)) {
+            [strongSelf clearGyroOutputForAllControllers];
+        }
         // Re-evaluate timer state if mapGyroTo flipped between needs/doesn't
         // need device gyro — otherwise the legacy snapshot path is enough.
         if (previousMapGyroTo != strongSelf->_mapGyroTo) {

@@ -641,6 +641,11 @@ static CGFloat VoidFixedToggleWidth(UIButton *button, NSArray<NSString *> *title
     return ceil(maxTextW) + button.contentEdgeInsets.left + button.contentEdgeInsets.right;
 }
 
+static BOOL VoidGyroToggleEnabled(void) {
+    id storedValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"forceGyroEnabled"];
+    return storedValue == nil ? YES : [storedValue boolValue];
+}
+
 - (void)updateSnapRatioButton {
     if (!_snapRatioButton) {
         // Custom (not System) buttons: System buttons cross-fade their title
@@ -686,7 +691,7 @@ static CGFloat VoidFixedToggleWidth(UIButton *button, NSArray<NSString *> *title
     NSString *oscTitle = (currentLevel == OnScreenControlsLevelOff) ? @"OSC OFF" : @"OSC ON";
     [_oscToggleButton setTitle:oscTitle forState:UIControlStateNormal];
 
-    BOOL gyroForceOn = [[NSUserDefaults standardUserDefaults] boolForKey:@"forceGyroEnabled"];
+    BOOL gyroForceOn = VoidGyroToggleEnabled();
     [_gyroToggleButton setTitle:(gyroForceOn ? @"GYRO ON" : @"GYRO OFF") forState:UIControlStateNormal];
 
     // Hide all three buttons if snap screen is not enabled (matches OSC behavior)
@@ -717,11 +722,12 @@ static CGFloat VoidFixedToggleWidth(UIButton *button, NSArray<NSString *> *title
     _oscToggleButton.frame = CGRectMake(oscX, baseY - btnH, oscW, btnH);
 }
 
-// Toggles the persistent forceGyroEnabled flag. ControllerSupport observes
-// VoidGyroSettingsDidChangeNotification and re-snapshots so the live stream
-// picks up the change without reconnect.
+// Toggles the persistent forceGyroEnabled flag. An unset value behaves like
+// legacy ON; once the user taps, OFF becomes an explicit global suppressor.
+// ControllerSupport observes VoidGyroSettingsDidChangeNotification so the
+// live stream picks up the change without reconnect.
 - (void)toggleGyroOnOff {
-    BOOL current = [[NSUserDefaults standardUserDefaults] boolForKey:@"forceGyroEnabled"];
+    BOOL current = VoidGyroToggleEnabled();
     BOOL newValue = !current;
     [[NSUserDefaults standardUserDefaults] setBool:newValue forKey:@"forceGyroEnabled"];
     [[NSUserDefaults standardUserDefaults] synchronize];
