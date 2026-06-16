@@ -272,6 +272,40 @@ static float L3_Y;
     }
 }
 
+- (BOOL)isOnlyControllerButtonPressedForString:(NSString *)buttonString {
+    NSString *s = [[buttonString stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] uppercaseString];
+    if (s.length == 0 || _controller == nil) return NO;
+
+    @synchronized(_controller) {
+        int buttonFlags = _controller.lastButtonFlags;
+        unsigned char leftTrigger = _controller.lastLeftTrigger;
+        unsigned char rightTrigger = _controller.lastRightTrigger;
+        VoidController *merged = _controller.mergedWithController;
+
+        if (merged != nil) {
+            @synchronized(merged) {
+                buttonFlags |= merged.lastButtonFlags;
+                leftTrigger = MAX(leftTrigger, merged.lastLeftTrigger);
+                rightTrigger = MAX(rightTrigger, merged.lastRightTrigger);
+            }
+        }
+
+        if ([s isEqualToString:@"OSCL2"] || [s isEqualToString:@"L2"] || [s isEqualToString:@"LT"]) {
+            return leftTrigger > 0 && rightTrigger == 0 && buttonFlags == 0;
+        }
+        if ([s isEqualToString:@"OSCR2"] || [s isEqualToString:@"R2"] || [s isEqualToString:@"RT"]) {
+            return rightTrigger > 0 && leftTrigger == 0 && buttonFlags == 0;
+        }
+
+        int flag = [self controllerButtonFlagForString:s];
+        if (flag == 0) return NO;
+        return (buttonFlags & flag) != 0 &&
+            (buttonFlags & ~flag) == 0 &&
+            leftTrigger == 0 &&
+            rightTrigger == 0;
+    }
+}
+
 // Motion-button forwarders. Once any GYRO/GYROPAUSE widget is registered,
 // the runtime gating switches on (legacy always-on behavior is suppressed).
 - (void) markGyroToggleButtonRegistered { _controllerSupport.hasGyroToggleButton = YES; }

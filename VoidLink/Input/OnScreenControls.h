@@ -127,6 +127,7 @@ typedef NS_ENUM(NSInteger, OnScreenControlsLevel) {
 - (void) updateLeftTrigger:(unsigned char)input;
 - (void) updateRightTrigger:(unsigned char)input;
 - (BOOL)isControllerButtonPressedForString:(NSString *)buttonString NS_SWIFT_NAME(isControllerButtonPressed(forString:));
+- (BOOL)isOnlyControllerButtonPressedForString:(NSString *)buttonString NS_SWIFT_NAME(isOnlyControllerButtonPressed(forString:));
 - (void) cancelAllActiveTouches;
 
 // Motion-button forwarders — see ControllerSupport.h. On-screen widgets call

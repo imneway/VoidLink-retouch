@@ -2020,7 +2020,7 @@ import UIKit
         let activation = CommandManager.normalizedAimRelativeActivationCommand(aimRelativeActivationButton)
         if activation == CommandManager.aimRelativeActivationOn { return true }
         if activation == CommandManager.aimRelativeActivationOff { return false }
-        return self.onScreenControls.isControllerButtonPressed(forString: activation)
+        return self.onScreenControls.isOnlyControllerButtonPressed(forString: activation)
     }
 
     private func resetAimStickState(clearHostStick: Bool) {
