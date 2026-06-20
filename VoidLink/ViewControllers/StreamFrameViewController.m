@@ -49,6 +49,11 @@
 - (id)initWithRefreshRate:(float)arg1 videoDynamicRange:(int)arg2;
 @end
 
+#if !TARGET_OS_TV
+@interface StreamFrameViewController () <UIPickerViewDataSource, UIPickerViewDelegate>
+@end
+#endif
+
 
 typedef NS_ENUM(NSInteger, StreamCountdownState) {
     StreamCountdownStateIdle = 0,
@@ -83,6 +88,9 @@ typedef NS_ENUM(NSInteger, StreamCountdownState) {
     NSTimeInterval _streamCountdownRemainingSeconds;
     NSDate *_streamCountdownEndDate;
     BOOL _streamCountdownFinishFeedbackShown;
+#if !TARGET_OS_TV
+    UIPickerView *_streamCountdownDurationPicker;
+#endif
     StreamView *_streamView;
     UIScrollView *_scrollView;
     BOOL _userIsInteracting;
@@ -142,8 +150,11 @@ static NSString * const kStreamCountdownStateKey = @"StreamCountdownState";
 static NSString * const kStreamCountdownEndDateKey = @"StreamCountdownEndDate";
 static NSString * const kStreamCountdownRemainingSecondsKey = @"StreamCountdownRemainingSeconds";
 static const NSTimeInterval kStreamCountdownDefaultDurationSeconds = 5 * 60;
-static const NSTimeInterval kStreamCountdownMinimumDurationSeconds = 60;
+static const NSTimeInterval kStreamCountdownMinimumDurationSeconds = 10;
 static const NSTimeInterval kStreamCountdownMaximumDurationSeconds = (23 * 60 * 60) + (59 * 60);
+static const NSInteger kStreamCountdownMaximumPickerMinutes = (23 * 60) + 59;
+static const NSInteger kStreamCountdownPickerSecondStep = 10;
+static const NSInteger kStreamCountdownPickerSecondRows = 6;
 
 // 根据当前视图 bounds 判断是否横屏
 - (BOOL)osc_isCurrentLandscapeInViewBounds {
@@ -835,6 +846,30 @@ static BOOL VoidGyroToggleEnabled(void) {
     return [NSString stringWithFormat:@"%ld:%02ld", (long)minutes, (long)remainingSeconds];
 }
 
+#if !TARGET_OS_TV
+- (NSInteger)streamCountdownPickerMinutesForDuration:(NSTimeInterval)duration {
+    NSInteger totalSeconds = (NSInteger)llround([self normalizedStreamCountdownDuration:duration]);
+    return MIN(totalSeconds / 60, kStreamCountdownMaximumPickerMinutes);
+}
+
+- (NSInteger)streamCountdownPickerSecondRowForDuration:(NSTimeInterval)duration {
+    NSInteger totalSeconds = (NSInteger)llround([self normalizedStreamCountdownDuration:duration]);
+    NSInteger seconds = totalSeconds % 60;
+    NSInteger row = (NSInteger)llround((double)seconds / (double)kStreamCountdownPickerSecondStep);
+    return MIN(MAX(row, 0), kStreamCountdownPickerSecondRows - 1);
+}
+
+- (NSTimeInterval)selectedStreamCountdownPickerDuration {
+    if (!_streamCountdownDurationPicker) {
+        return _streamCountdownDurationSeconds;
+    }
+
+    NSInteger minutes = [_streamCountdownDurationPicker selectedRowInComponent:0];
+    NSInteger seconds = [_streamCountdownDurationPicker selectedRowInComponent:1] * kStreamCountdownPickerSecondStep;
+    return [self normalizedStreamCountdownDuration:(minutes * 60) + seconds];
+}
+#endif
+
 - (UIColor *)streamCountdownBaseTintColor {
     return [[UIColor whiteColor] colorWithAlphaComponent:0.22];
 }
@@ -1199,35 +1234,75 @@ static BOOL VoidGyroToggleEnabled(void) {
     }
 
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Timer Duration"
-                                                                   message:@"\n\n\n\n\n\n\n\n"
+                                                                   message:@"\n\n\n\n\n\n\n"
                                                             preferredStyle:UIAlertControllerStyleAlert];
-    UIDatePicker *picker = [[UIDatePicker alloc] initWithFrame:CGRectZero];
-    picker.datePickerMode = UIDatePickerModeCountDownTimer;
-    picker.minuteInterval = 1;
-    picker.countDownDuration = [self normalizedStreamCountdownDuration:_streamCountdownDurationSeconds];
-    picker.translatesAutoresizingMaskIntoConstraints = NO;
-    if (@available(iOS 13.4, *)) {
-        picker.preferredDatePickerStyle = UIDatePickerStyleWheels;
-    }
-    [alert.view addSubview:picker];
+    _streamCountdownDurationPicker = [[UIPickerView alloc] initWithFrame:CGRectZero];
+    _streamCountdownDurationPicker.dataSource = self;
+    _streamCountdownDurationPicker.delegate = self;
+    _streamCountdownDurationPicker.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSInteger minuteRow = [self streamCountdownPickerMinutesForDuration:_streamCountdownDurationSeconds];
+    NSInteger secondRow = [self streamCountdownPickerSecondRowForDuration:_streamCountdownDurationSeconds];
+    [_streamCountdownDurationPicker selectRow:minuteRow inComponent:0 animated:NO];
+    [_streamCountdownDurationPicker selectRow:secondRow inComponent:1 animated:NO];
+
+    [alert.view addSubview:_streamCountdownDurationPicker];
     [NSLayoutConstraint activateConstraints:@[
-        [picker.centerXAnchor constraintEqualToAnchor:alert.view.centerXAnchor],
-        [picker.topAnchor constraintEqualToAnchor:alert.view.topAnchor constant:50.0f],
-        [picker.widthAnchor constraintEqualToConstant:260.0f],
-        [picker.heightAnchor constraintEqualToConstant:160.0f]
+        [_streamCountdownDurationPicker.centerXAnchor constraintEqualToAnchor:alert.view.centerXAnchor],
+        [_streamCountdownDurationPicker.topAnchor constraintEqualToAnchor:alert.view.topAnchor constant:48.0f],
+        [_streamCountdownDurationPicker.widthAnchor constraintEqualToConstant:260.0f],
+        [_streamCountdownDurationPicker.heightAnchor constraintEqualToConstant:150.0f]
     ]];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
                                               style:UIAlertActionStyleCancel
-                                            handler:nil]];
+                                            handler:^(UIAlertAction * _Nonnull action) {
+        self->_streamCountdownDurationPicker = nil;
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Set"
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction * _Nonnull action) {
-        [self applyStreamCountdownDuration:picker.countDownDuration];
+        NSTimeInterval duration = [self selectedStreamCountdownPickerDuration];
+        self->_streamCountdownDurationPicker = nil;
+        [self applyStreamCountdownDuration:duration];
     }]];
     [self presentViewController:alert animated:YES completion:nil];
 #endif
 }
+
+#if !TARGET_OS_TV
+- (NSInteger)numberOfComponentsInPickerView:(UIPickerView *)pickerView {
+    return pickerView == _streamCountdownDurationPicker ? 2 : 0;
+}
+
+- (NSInteger)pickerView:(UIPickerView *)pickerView numberOfRowsInComponent:(NSInteger)component {
+    if (pickerView != _streamCountdownDurationPicker) {
+        return 0;
+    }
+    return component == 0 ? (kStreamCountdownMaximumPickerMinutes + 1) : kStreamCountdownPickerSecondRows;
+}
+
+- (CGFloat)pickerView:(UIPickerView *)pickerView widthForComponent:(NSInteger)component {
+    return component == 0 ? 140.0f : 90.0f;
+}
+
+- (NSString *)pickerView:(UIPickerView *)pickerView titleForRow:(NSInteger)row forComponent:(NSInteger)component {
+    if (component == 0) {
+        return [NSString stringWithFormat:@"%ld min", (long)row];
+    }
+    return [NSString stringWithFormat:@"%02ld sec", (long)(row * kStreamCountdownPickerSecondStep)];
+}
+
+- (void)pickerView:(UIPickerView *)pickerView didSelectRow:(NSInteger)row inComponent:(NSInteger)component {
+    if (pickerView != _streamCountdownDurationPicker) {
+        return;
+    }
+
+    if ([pickerView selectedRowInComponent:0] == 0 && [pickerView selectedRowInComponent:1] == 0) {
+        [pickerView selectRow:1 inComponent:1 animated:YES];
+    }
+}
+#endif
 
 - (void)playStreamCountdownFinishedFeedback {
     if (_streamCountdownFinishFeedbackShown) {
