@@ -56,13 +56,11 @@ static UIWindow *_externalSceneWindow = nil;
             }
             if ([components.host.lowercaseString isEqualToString:@"auto-enter"] && hostParam.length > 0) {
                 AppDelegate *delegate = (AppDelegate *)[UIApplication sharedApplication].delegate;
+                [[NSUserDefaults standardUserDefaults] setObject:hostParam forKey:@"AutoEnterDesktopHostName"];
+                [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"AutoEnterTriggered"];
                 if (@available(iOS 13.0, *)) {
                     delegate.autoEnterHostName = hostParam; // foreground delivery
-                } else {
-                    [[NSUserDefaults standardUserDefaults] setObject:hostParam forKey:@"AutoEnterDesktopHostName"];
-                    [[NSUserDefaults standardUserDefaults] synchronize];
                 }
-                [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"AutoEnterTriggered"];
                 [[NSUserDefaults standardUserDefaults] synchronize];
             }
         }
@@ -87,6 +85,9 @@ static UIWindow *_externalSceneWindow = nil;
         if ([components.host.lowercaseString isEqualToString:@"auto-enter"] && hostParam.length > 0) {
             AppDelegate *delegate = (AppDelegate *)[UIApplication sharedApplication].delegate;
             delegate.autoEnterHostName = hostParam;
+            [[NSUserDefaults standardUserDefaults] setObject:hostParam forKey:@"AutoEnterDesktopHostName"];
+            [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"AutoEnterTriggered"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
             [[NSNotificationCenter defaultCenter] postNotificationName:@"VoidLinkAutoEnterRequested" object:nil userInfo:@{ @"host": hostParam }];
         }
     }

@@ -82,13 +82,16 @@
     // Auto Enter Desktop (URL/Shortcut) helpers
     NSTimer *_autoEnterTimer;
     double _autoEnterElapsedSeconds;
-    NSInteger _autoEnterProbeTick;
     UIView *_autoEnterToast;
     UILabel *_autoEnterLabel;
     UIButton *_autoEnterCancelButton;
     TemporaryHost *_autoEnterTargetHost;
     NSString *_autoEnterTargetHostName;
     BOOL _autoEnterActive;
+    BOOL _autoEnterProbeInFlight;
+    BOOL _autoEnterAppListInFlight;
+    BOOL _autoEnterLaunchInProgress;
+    NSTimeInterval _autoEnterLastProbeTimestamp;
 
 #if TARGET_OS_TV
     UITapGestureRecognizer* _menuRecognizer;
@@ -1303,7 +1306,12 @@ static NSMutableSet* hostList;
     [self hideAutoEnterToast];
     _autoEnterTargetHost = nil;
     _autoEnterTargetHostName = nil;
+    _autoEnterProbeInFlight = NO;
+    _autoEnterAppListInFlight = NO;
+    _autoEnterLaunchInProgress = NO;
+    _autoEnterLastProbeTimestamp = 0;
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterDesktopHostName"];
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"AutoEnterTriggered"];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
@@ -1315,16 +1323,23 @@ static NSMutableSet* hostList;
     [self hideAutoEnterToast];
     _autoEnterTargetHost = nil;
     _autoEnterTargetHostName = nil;
+    _autoEnterProbeInFlight = NO;
+    _autoEnterAppListInFlight = NO;
+    _autoEnterLaunchInProgress = NO;
+    _autoEnterLastProbeTimestamp = 0;
 }
 
-- (void)tryLaunchIfReady:(TemporaryHost *)host {
-    if (host.state == StateOnline && host.pairState == PairStatePaired && host.appList.count > 0) {
-        [self hideAutoEnterToast];
-        _autoEnterActive = NO;
-        [_autoEnterTimer invalidate];
-        _autoEnterTimer = nil;
-        [self launchButtonTappedForHost:host];
-    }
+- (void)finishAutoEnterBeforeLaunch {
+    _autoEnterActive = NO;
+    [_autoEnterTimer invalidate];
+    _autoEnterTimer = nil;
+    [self hideAutoEnterToast];
+    _autoEnterProbeInFlight = NO;
+    _autoEnterAppListInFlight = NO;
+    _autoEnterLaunchInProgress = NO;
+    _autoEnterLastProbeTimestamp = 0;
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"AutoEnterTriggered"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
 - (TemporaryHost *)findHostByName:(NSString *)name {
@@ -1343,10 +1358,149 @@ static NSMutableSet* hostList;
     return found;
 }
 
+- (NSArray *)sortedAppsForAutoEnterHost:(TemporaryHost *)host {
+    if (host.appList.count == 0) return @[];
+    return [[host.appList allObjects] sortedArrayUsingSelector:@selector(compareName:)];
+}
+
+- (TemporaryApp *)preferredDesktopAppForAutoEnterHost:(TemporaryHost *)host {
+    NSArray *apps = [self sortedAppsForAutoEnterHost:host];
+    TemporaryApp *containsDesktopMatch = nil;
+
+    for (TemporaryApp *app in apps) {
+        NSString *name = [[app.name stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] lowercaseString];
+        if ([name isEqualToString:@"desktop"] || [name isEqualToString:@"桌面"]) {
+            return app;
+        }
+        if (containsDesktopMatch == nil && ([name containsString:@"desktop"] || [name containsString:@"桌面"])) {
+            containsDesktopMatch = app;
+        }
+    }
+
+    return containsDesktopMatch ?: apps.firstObject;
+}
+
+- (TemporaryApp *)targetAppForAutoEnterHost:(TemporaryHost *)host {
+    TemporaryApp *runningApp = [self findRunningApp:host];
+    if (runningApp != nil) {
+        return runningApp;
+    }
+    return [self preferredDesktopAppForAutoEnterHost:host];
+}
+
+- (void)launchAutoEnterApp:(TemporaryApp *)app {
+    if (app == nil || _autoEnterLaunchInProgress) return;
+
+    _autoEnterLaunchInProgress = YES;
+    [_appManager stopRetrieving];
+
+    void (^launchBlock)(void) = ^{
+        [self finishAutoEnterBeforeLaunch];
+        [self closeSettingViewAnimated:NO];
+        [self prepareToStreamApp:app];
+        [self performSegueWithIdentifier:@"createStreamFrame" sender:nil];
+    };
+
+    if ([_loadingFrame isShown]) {
+        [self hideLoadingFrame:launchBlock];
+    }
+    else {
+        launchBlock();
+    }
+}
+
+- (void)fetchAutoEnterAppListForHost:(TemporaryHost *)host {
+    if (_autoEnterAppListInFlight || host == nil) return;
+    _autoEnterAppListInFlight = YES;
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        [self->_discMan pauseDiscoveryForHost:host];
+        AppListResponse *appListResp = [ConnectionHelper getAppListForHost:host];
+        [self->_discMan resumeDiscoveryForHost:host];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self->_autoEnterAppListInFlight = NO;
+            if (!self->_autoEnterActive || host != self->_autoEnterTargetHost) {
+                return;
+            }
+
+            if ([appListResp isStatusOk] && [appListResp getAppList] != nil) {
+                [self updateApplist:[appListResp getAppList] forHost:host];
+                if (host == self->_selectedHost) {
+                    [self updateAppsForHost:host];
+                    [self->_appManager stopRetrieving];
+                    [self->_appManager retrieveAssetsFromHost:host];
+                }
+            }
+            else {
+                Log(LOG_W, @"Auto enter failed to refresh app list: %@", appListResp.statusMessage);
+            }
+
+            [self advanceAutoEnter];
+        });
+    });
+}
+
+- (void)probeAutoEnterHost:(TemporaryHost *)host {
+    if (_autoEnterProbeInFlight || host == nil) return;
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (_autoEnterLastProbeTimestamp > 0 && now - _autoEnterLastProbeTimestamp < 1.0) return;
+    _autoEnterLastProbeTimestamp = now;
+    _autoEnterProbeInFlight = YES;
+
+    [self probeHostStatusSilently:host completion:^{
+        self->_autoEnterProbeInFlight = NO;
+        [self advanceAutoEnter];
+    }];
+}
+
+- (void)advanceAutoEnter {
+    if (!_autoEnterActive || _autoEnterLaunchInProgress) return;
+
+    if (self.revealViewController.isStreaming) {
+        [self pauseAutoEnterPreservingPendingFlag];
+        return;
+    }
+
+    TemporaryHost *host = _autoEnterTargetHost ?: [self findHostByName:_autoEnterTargetHostName];
+    if (host == nil) {
+        return;
+    }
+
+    _autoEnterTargetHost = host;
+
+    if (host.state != StateOnline || host.pairState != PairStatePaired) {
+        [self probeAutoEnterHost:host];
+        return;
+    }
+
+    if (host.appList.count == 0) {
+        [self fetchAutoEnterAppListForHost:host];
+        return;
+    }
+
+    TemporaryApp *targetApp = [self targetAppForAutoEnterHost:host];
+    if (targetApp == nil) {
+        [self fetchAutoEnterAppListForHost:host];
+        return;
+    }
+
+    [self launchAutoEnterApp:targetApp];
+}
+
 - (void)beginAutoEnterForHostName:(NSString *)hostName {
-    if (hostName == nil || hostName.length == 0) return;
-    // If already streaming or already active, ignore to avoid duplicates
-    if (self.revealViewController.isStreaming || _autoEnterActive) return;
+    NSString *trimmedHostName = [hostName stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmedHostName.length == 0) return;
+    if (self.revealViewController.isStreaming) return;
+
+    if (_autoEnterActive) {
+        if (_autoEnterTargetHostName != nil && [_autoEnterTargetHostName caseInsensitiveCompare:trimmedHostName] == NSOrderedSame) {
+            [self advanceAutoEnter];
+            return;
+        }
+        [self pauseAutoEnterPreservingPendingFlag];
+    }
+
     // If user explicitly suppressed auto-enter once (manual sidebar exit), skip
     BOOL triggered = [[NSUserDefaults standardUserDefaults] boolForKey:@"AutoEnterTriggered"];
     BOOL suppressed = [[NSUserDefaults standardUserDefaults] boolForKey:@"AutoEnterSuppressOnce"];
@@ -1358,20 +1512,19 @@ static NSMutableSet* hostList;
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterSuppressOnce"];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
-    _autoEnterTargetHostName = hostName;
-    _autoEnterTargetHost = [self findHostByName:hostName];
+
+    _autoEnterTargetHostName = trimmedHostName;
+    _autoEnterTargetHost = [self findHostByName:trimmedHostName];
     _autoEnterElapsedSeconds = 0;
-    _autoEnterProbeTick = 0;
     _autoEnterActive = YES;
+    _autoEnterProbeInFlight = NO;
+    _autoEnterAppListInFlight = NO;
+    _autoEnterLaunchInProgress = NO;
+    _autoEnterLastProbeTimestamp = 0;
 
     [self showAutoEnterToast];
     [self updateAutoEnterLabel];
-
-    if (_autoEnterTargetHost) {
-        // Select host and refresh app list
-        [self appButtonTappedForHost:_autoEnterTargetHost];
-        [self tryLaunchIfReady:_autoEnterTargetHost];
-    }
+    [self advanceAutoEnter];
 
     __weak typeof(self) weakSelf = self;
     _autoEnterTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
@@ -1383,16 +1536,7 @@ static NSMutableSet* hostList;
             [selfRef updateAutoEnterLabel];
         }
 
-        TemporaryHost *host = selfRef->_autoEnterTargetHost ?: [selfRef findHostByName:selfRef->_autoEnterTargetHostName];
-        if (host) {
-            selfRef->_autoEnterTargetHost = host;
-            // Probe occasionally to speed up state convergence
-            selfRef->_autoEnterProbeTick++;
-            if (selfRef->_autoEnterProbeTick % 2 == 0) { // every 1s
-                [selfRef probeHostStatusSilently:host completion:^{ }];
-            }
-            [selfRef tryLaunchIfReady:host];
-        }
+        [selfRef advanceAutoEnter];
     }];
 }
 
@@ -1408,10 +1552,8 @@ static NSMutableSet* hostList;
 
         if ([serverInfoResp isStatusOk]) {
             dispatch_async(dispatch_get_main_queue(), ^{
+                host.state = StateOnline;
                 [serverInfoResp populateHost:host];
-                if (host == self->_selectedHost && host.pairState == PairStatePaired && host.appList.count == 0) {
-                    [self alreadyPaired];
-                }
                 if (completion) completion();
             });
         } else {

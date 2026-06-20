@@ -24,6 +24,7 @@ struct AutoEnterDesktopIntent: AppIntent {
         // Persist the target host for the app to consume on launch
         UserDefaults.standard.set(host, forKey: "AutoEnterDesktopHostName")
         UserDefaults.standard.set(true, forKey: "AutoEnterTriggered")
+        _ = UserDefaults.standard.synchronize()
         // Notify running app (if any) using Darwin notification
         #if canImport(CoreFoundation)
         let notifName = CFNotificationName(rawValue: "com.imneway.voidlink.autoenter" as CFString)
@@ -52,5 +53,3 @@ struct VoidLinkAppShortcuts: AppShortcutsProvider {
 }
 
 #endif
-
-
