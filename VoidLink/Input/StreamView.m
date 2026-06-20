@@ -598,7 +598,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
         NSMutableArray<OnScreenWidgetView*>* padWidgets = [NSMutableArray array];
         NSMutableArray<OnScreenWidgetView*>* otherWidgets = [NSMutableArray array];
         // Track each widget's source buttonState so Pass 2 can read position /
-        // backgroundAlpha / borderWidth without re-unarchiving.
+        // backgroundAlpha / borderWidth / textAlpha without re-unarchiving.
         NSMutableArray<OnScreenButtonState*>* fullscreenStates = [NSMutableArray array];
         NSMutableArray<OnScreenButtonState*>* padStates = [NSMutableArray array];
         NSMutableArray<OnScreenButtonState*>* otherStates = [NSMutableArray array];
@@ -625,6 +625,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
                 widgetView.widthFactor = buttonState.widthFactor;
                 widgetView.heightFactor = buttonState.heightFactor;
                 widgetView.borderWidth = buttonState.borderWidth;
+                widgetView.textAlpha = buttonState.textAlpha;
                 [widgetView setVibrationWithStyle:buttonState.vibrationStyle];
                 widgetView.mouseButtonAction = buttonState.mouseButtonAction;
                 widgetView.sensitivityFactorX = buttonState.sensitivityFactorX;
@@ -725,6 +726,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
             [widgetView resizeWidgetView]; // resize must be called after relocation
             [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
             [widgetView adjustBorderWithWidth:buttonState.borderWidth];
+            [widgetView adjustTextAlphaWithAlpha:buttonState.textAlpha];
         }
 
         // touchPad widgets — chained "just above" the running lowerAnchor so each new
@@ -749,6 +751,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
             [widgetView resizeWidgetView]; // resize must be called after relocation
             [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
             [widgetView adjustBorderWithWidth:buttonState.borderWidth];
+            [widgetView adjustTextAlphaWithAlpha:buttonState.textAlpha];
         }
 
         // Button (and any future non-pad / non-fullscreen) widgets — appended last
@@ -762,6 +765,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
             [widgetView resizeWidgetView]; // resize must be called after relocation
             [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
             [widgetView adjustBorderWithWidth:buttonState.borderWidth];
+            [widgetView adjustTextAlphaWithAlpha:buttonState.textAlpha];
         }
 
         // Keep the freshly-rebuilt widgets in lockstep with the legacy OSC layers'

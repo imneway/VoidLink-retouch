@@ -58,6 +58,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (weak, nonatomic) IBOutlet UILabel *widgetAlphaLabel;
 @property (weak, nonatomic) IBOutlet UISlider *widgetAlphaSlider;
 @property (weak, nonatomic) IBOutlet UIStackView *borderWidthAlphaStack;
+@property (strong, nonatomic) UILabel *widgetTextAlphaLabel;
+@property (strong, nonatomic) UISlider *widgetTextAlphaSlider;
+@property (strong, nonatomic) UIStackView *widgetTextAlphaStack;
 @property (weak, nonatomic) IBOutlet UIButton *saveButton;
 @property (weak, nonatomic) IBOutlet UIButton *exitButton;
 @property (weak, nonatomic) IBOutlet UIButton *loadButton;

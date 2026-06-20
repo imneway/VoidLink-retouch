@@ -87,6 +87,7 @@ import UIKit
     
     @objc public var borderWidth: CGFloat = 0.0
     @objc public var backgroundAlpha: CGFloat = 0.5
+    @objc public var textAlpha: CGFloat = 0.64
     @objc public var vibrationStyle: Int = 6
     @objc public var latestTouchLocation: CGPoint
     @objc public var selfViewOnTheRight: Bool = false
@@ -263,6 +264,8 @@ import UIKit
     // key / button label
     private let label: UILabel
     private let outlineLabel: UILabel
+    private let defaultLabelTextAlpha: CGFloat = 0.64
+    private let defaultLabelStrokeAlpha: CGFloat = 0.20
     
     // first touch location within the button or pad view (self)
     @objc public var touchBeganLocation: CGPoint = .zero
@@ -608,6 +611,12 @@ import UIKit
         }
         self.tweakAlpha()
     }
+
+    @objc public func adjustTextAlpha(alpha: CGFloat) {
+        if widgetType == WidgetTypeEnum.fullscreenTrigger { return }
+        self.textAlpha = max(0.0, min(alpha, 1.0))
+        self.applyLabelTextAppearance()
+    }
     
     @objc public func adjustBorder(width: CGFloat){
         self.borderWidth = width
@@ -867,7 +876,7 @@ import UIKit
         label.adjustsFontSizeToFitWidth = true
         label.minimumScaleFactor = 0.1  // Adjust the scale factor as needed
         
-        label.textColor = UIColor(white: 1.0, alpha: 0.64)
+        label.textColor = UIColor(white: 1.0, alpha: max(0.0, min(textAlpha, 1.0)))
         label.textAlignment = .center
         label.shadowColor = nil
         label.shadowOffset = .zero
@@ -1209,13 +1218,20 @@ import UIKit
         // 使用正值描边宽度绘制仅描边（无填充），再由上层 label 负责填充，从而呈现外描边
         let pointSize = max(font.pointSize, 1)
         let strokeWidthPercent = (1.5 / pointSize) * 100.0
+        let alphaScale = defaultLabelTextAlpha > 0 ? max(0.0, min(textAlpha, 1.0)) / defaultLabelTextAlpha : 1.0
+        let strokeAlpha = min(1.0, defaultLabelStrokeAlpha * alphaScale)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: UIColor.clear,
-            .strokeColor: UIColor(white: 0.0, alpha: 0.2),
+            .strokeColor: UIColor(white: 0.0, alpha: strokeAlpha),
             .strokeWidth: strokeWidthPercent
         ]
         outlineLabel.attributedText = NSAttributedString(string: text, attributes: attributes)
+    }
+
+    private func applyLabelTextAppearance() {
+        label.textColor = UIColor(white: 1.0, alpha: max(0.0, min(textAlpha, 1.0)))
+        applyLabelStroke()
     }
     
     private func createl3r3Indicator() -> CAShapeLayer{

@@ -31,6 +31,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) CGFloat widthFactor; // for OnScreenWidgetView
 @property (nonatomic, assign) CGFloat heightFactor; // for OnScreenWidgetView
 @property (nonatomic, assign) CGFloat borderWidth; // for OnScreenWidgetView
+@property (nonatomic, assign) CGFloat textAlpha; // for OnScreenWidgetView label and outline
 @property (nonatomic, assign) CGFloat sensitivityFactorX; // for OnScreenWidgetView
 @property (nonatomic, assign) CGFloat sensitivityFactorY; // for OnScreenWidgetView
 @property (nonatomic, assign) CGFloat aimSensitivityFactorX; // for RSPADALT2 Relative Aim

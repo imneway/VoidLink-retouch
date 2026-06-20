@@ -49,6 +49,7 @@
     [encoder encodeFloat:self.oscLayerSizeFactor forKey:@"oscLayerSizeFactor"];
     [encoder encodeFloat:self.backgroundAlpha forKey:@"backgroundAlpha"];
     [encoder encodeFloat:self.borderWidth forKey:@"borderWidth"];
+    [encoder encodeFloat:self.textAlpha forKey:@"textAlpha"];
     [encoder encodeObject:self.widgetShape forKey:@"widgetShape"];
     [encoder encodeFloat:self.minStickOffset forKey:@"minStickOffset"];
     [encoder encodeFloat:self.stickInputScale forKey:@"stickInputScale"];
@@ -89,6 +90,7 @@
         self.oscLayerSizeFactor = [decoder decodeFloatForKey:@"oscLayerSizeFactor"];
         self.backgroundAlpha = [decoder decodeFloatForKey:@"backgroundAlpha"];
         self.borderWidth = [decoder decodeFloatForKey:@"borderWidth"];
+        self.textAlpha = [decoder containsValueForKey:@"textAlpha"] ? [decoder decodeFloatForKey:@"textAlpha"] : 0.64f;
         self.widgetShape = [decoder decodeObjectForKey:@"widgetShape"];
         self.minStickOffset = [decoder decodeFloatForKey:@"minStickOffset"];
         self.stickInputScale = [decoder decodeFloatForKey:@"stickInputScale"];

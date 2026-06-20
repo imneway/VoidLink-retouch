@@ -506,6 +506,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
             widgetView.widthFactor = buttonState.widthFactor;
             widgetView.heightFactor = buttonState.heightFactor;
             widgetView.borderWidth = buttonState.borderWidth;
+            widgetView.textAlpha = buttonState.textAlpha;
             [widgetView setVibrationWithStyle:buttonState.vibrationStyle];
             widgetView.mouseButtonAction = buttonState.mouseButtonAction;
             widgetView.sensitivityFactorX = buttonState.sensitivityFactorX;
@@ -574,6 +575,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         [widgetView resizeWidgetView]; // resize must be called after relocation
         [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
         [widgetView adjustBorderWithWidth:buttonState.borderWidth];
+        [widgetView adjustTextAlphaWithAlpha:buttonState.textAlpha];
         [self.onScreenWidgetViews addObject:widgetView];
     }
     for (NSUInteger i = 0; i < padWidgets.count; i++) {
@@ -585,6 +587,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         [widgetView resizeWidgetView]; // resize must be called after relocation
         [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
         [widgetView adjustBorderWithWidth:buttonState.borderWidth];
+        [widgetView adjustTextAlphaWithAlpha:buttonState.textAlpha];
         [self.onScreenWidgetViews addObject:widgetView];
     }
     for (NSUInteger i = 0; i < otherWidgets.count; i++) {
@@ -596,6 +599,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         [widgetView resizeWidgetView]; // resize must be called after relocation
         [widgetView adjustTransparencyWithAlpha:buttonState.backgroundAlpha];
         [widgetView adjustBorderWithWidth:buttonState.borderWidth];
+        [widgetView adjustTextAlphaWithAlpha:buttonState.textAlpha];
         [self.onScreenWidgetViews addObject:widgetView];
     }
 }
@@ -1197,6 +1201,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     newWidget.widthFactor = widget.widthFactor;
     newWidget.heightFactor = widget.heightFactor;
     newWidget.borderWidth = widget.borderWidth;
+    newWidget.textAlpha = widget.textAlpha;
     newWidget.sensitivityFactorX = widget.sensitivityFactorX;
     newWidget.sensitivityFactorY = widget.sensitivityFactorY;
     newWidget.aimSensitivityFactorX = widget.aimSensitivityFactorX;
@@ -1242,6 +1247,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     [newWidget resizeWidgetView]; // resize must be called after relocation
     [newWidget adjustTransparencyWithAlpha:widget.backgroundAlpha];
     [newWidget adjustBorderWithWidth:widget.borderWidth];
+    [newWidget adjustTextAlphaWithAlpha:widget.textAlpha];
     [self.onScreenWidgetViews addObject:newWidget];
     self->selectedWidgetView = newWidget;
     if(!createNew){
@@ -1320,6 +1326,40 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     label.adjustsFontSizeToFitWidth = true;
     label.minimumScaleFactor = 0.3;
     label.numberOfLines = 1;
+}
+
+- (void)installTextAlphaSliderIfNeeded {
+    if(self.widgetTextAlphaStack != nil) return;
+
+    UIColor* whiteColor = [UIColor whiteColor];
+    UIFont* labelFont = [UIFont systemFontOfSize:18];
+    UIColor* sliderTint = [UIColor colorWithRed:0.188 green:0.690 blue:0.780 alpha:0.5];
+
+    self.widgetTextAlphaLabel = [[UILabel alloc] init];
+    self.widgetTextAlphaLabel.font = labelFont;
+    self.widgetTextAlphaLabel.textColor = whiteColor;
+    self.widgetTextAlphaLabel.text = [LocalizationHelper localizedStringForKey:@"Text Alpha"];
+    [self.widgetTextAlphaLabel.widthAnchor constraintEqualToConstant:160].active = YES;
+
+    self.widgetTextAlphaSlider = [[UISlider alloc] init];
+    self.widgetTextAlphaSlider.minimumValue = 0.0;
+    self.widgetTextAlphaSlider.maximumValue = 1.0;
+    self.widgetTextAlphaSlider.value = 0.64;
+    self.widgetTextAlphaSlider.tintColor = sliderTint;
+    [self.widgetTextAlphaSlider addTarget:self action:@selector(widgetTextAlphaSliderMoved:) forControlEvents:UIControlEventValueChanged];
+
+    self.widgetTextAlphaStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.widgetTextAlphaLabel, self.widgetTextAlphaSlider]];
+    self.widgetTextAlphaStack.axis = UILayoutConstraintAxisHorizontal;
+    self.widgetTextAlphaStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.widgetTextAlphaStack.heightAnchor constraintEqualToConstant:22].active = YES;
+    self.widgetTextAlphaStack.hidden = YES;
+
+    NSUInteger insertIndex = [self.widgetPanelStack.arrangedSubviews indexOfObject:self.borderWidthAlphaStack];
+    if(insertIndex == NSNotFound){
+        [self.widgetPanelStack addArrangedSubview:self.widgetTextAlphaStack];
+    } else {
+        [self.widgetPanelStack insertArrangedSubview:self.widgetTextAlphaStack atIndex:insertIndex + 1];
+    }
 }
 
 - (void)installCompactSensitivityRowIfNeeded {
@@ -1421,6 +1461,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     [self.widgetHeightSlider setValue: self->selectedWidgetView.deNormalizedHeightFactor];
     [self.widgetAlphaSlider setValue: self->selectedWidgetView.backgroundAlpha];
     [self.widgetBorderWidthSlider setValue:self->selectedWidgetView.borderWidth];
+    [self.widgetTextAlphaSlider setValue:self->selectedWidgetView.textAlpha];
     
     bool isFullscreenTrigger = selectedWidgetView.widgetType == WidgetTypeEnumFullscreenTrigger;
 
@@ -1450,6 +1491,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.widgetSizeStack.hidden = isFullscreenTrigger;
     self.widgetHeightStack.hidden = isFullscreenTrigger;
     self.borderWidthAlphaStack.hidden = isFullscreenTrigger;
+    self.widgetTextAlphaStack.hidden = isFullscreenTrigger || selectedWidgetView.widgetType != WidgetTypeEnumButton;
     if(isFullscreenTrigger){
         self.coordinateControlStack.hidden = YES;
     }
@@ -1493,6 +1535,9 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     
     [self autoFitLabel:self.widgetAlphaLabel];
     [self.widgetAlphaLabel setText:[LocalizationHelper localizedStringForKey:@"Alpha: %.2f", self->selectedWidgetView.backgroundAlpha]];
+
+    [self autoFitLabel:self.widgetTextAlphaLabel];
+    [self.widgetTextAlphaLabel setText:[LocalizationHelper localizedStringForKey:@"Text Alpha: %.2f", self->selectedWidgetView.textAlpha]];
     
     [self autoFitLabel:self.widgetBorderWidthLabel];
     [self.widgetBorderWidthLabel setText:[LocalizationHelper localizedStringForKey:@"Border Width: %.2f", self->selectedWidgetView.borderWidth]];
@@ -1532,6 +1577,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.aimAxisSnapStack.hidden = true;
     self.stickInvertAxisStack.hidden = true;
     self.doubleTapStickClickStack.hidden = true;
+    self.widgetTextAlphaStack.hidden = true;
     
     self->controllerLayerSelected = true;
     self->selectedControllerLayer = controllerLayer;
@@ -1600,6 +1646,14 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 
     if(self->selectedControllerLayer != nil && self->controllerLayerSelected){
         [self.layoutOSC adjustControllerLayerOpacityWith:self->selectedControllerLayer and:sender.value];
+    }
+    return;
+}
+
+- (void)widgetTextAlphaSliderMoved:(UISlider* )sender{
+    [self.widgetTextAlphaLabel setText:[LocalizationHelper localizedStringForKey:@"Text Alpha: %.2f", sender.value]];
+    if(self->selectedWidgetView != nil && self->widgetViewSelected){
+        [self->selectedWidgetView adjustTextAlphaWithAlpha:sender.value];
     }
     return;
 }
@@ -2199,6 +2253,8 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 
     [self.widgetAlphaSlider addTarget:self action:@selector(widgetAlphaSliderMoved:) forControlEvents:(UIControlEventValueChanged)];
     self.widgetAlphaLabel.text = [LocalizationHelper localizedStringForKey:@"Alpha"];
+    [self installTextAlphaSliderIfNeeded];
+    self.widgetTextAlphaStack.hidden = YES;
    
     [self.widgetBorderWidthSlider addTarget:self action:@selector(widgetBorderWidthSliderMoved:) forControlEvents:(UIControlEventValueChanged)];
     self.widgetBorderWidthLabel.text = [LocalizationHelper localizedStringForKey:@"Border Width"];
