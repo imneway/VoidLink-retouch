@@ -21,6 +21,10 @@ xcodebuild \
   -scheme VoidLink \
   -configuration Debug \
   -destination 'generic/platform=iOS' \
+  -clonedSourcePackagesDirPath "$REPO_ROOT/Build/SourcePackages" \
+  -packageAuthorizationProvider netrc \
+  -skipPackageUpdates \
+  -onlyUsePackageVersionsFromResolvedFile \
   SYMROOT="$PRODUCTS_ROOT" \
   CODE_SIGNING_ALLOWED=NO \
   build
