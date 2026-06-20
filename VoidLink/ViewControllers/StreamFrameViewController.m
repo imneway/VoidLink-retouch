@@ -50,6 +50,13 @@
 @end
 
 
+typedef NS_ENUM(NSInteger, StreamCountdownState) {
+    StreamCountdownStateIdle = 0,
+    StreamCountdownStateRunning,
+    StreamCountdownStatePaused,
+    StreamCountdownStateFinished,
+};
+
 
 @implementation StreamFrameViewController {
     ControllerSupport *_controllerSupport;
@@ -68,6 +75,14 @@
     UIActivityIndicatorView *_spinner;
     UILabel *_timeLabel;
     UILabel *_batteryLabel;
+    UIView *_countdownHitAreaView;
+    PaddedLabel *_countdownLabel;
+    NSTimer *_streamCountdownUpdateTimer;
+    StreamCountdownState _streamCountdownState;
+    NSTimeInterval _streamCountdownDurationSeconds;
+    NSTimeInterval _streamCountdownRemainingSeconds;
+    NSDate *_streamCountdownEndDate;
+    BOOL _streamCountdownFinishFeedbackShown;
     StreamView *_streamView;
     UIScrollView *_scrollView;
     BOOL _userIsInteracting;
@@ -121,6 +136,14 @@
 // MARK: - 方向锁定 持久化Key（与其它页面一致）
 static NSString * const kOSCLockedPortraitProfileName = @"OSCLockedPortraitProfileName";
 static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapeProfileName";
+
+static NSString * const kStreamCountdownDurationSecondsKey = @"StreamCountdownDurationSeconds";
+static NSString * const kStreamCountdownStateKey = @"StreamCountdownState";
+static NSString * const kStreamCountdownEndDateKey = @"StreamCountdownEndDate";
+static NSString * const kStreamCountdownRemainingSecondsKey = @"StreamCountdownRemainingSeconds";
+static const NSTimeInterval kStreamCountdownDefaultDurationSeconds = 5 * 60;
+static const NSTimeInterval kStreamCountdownMinimumDurationSeconds = 60;
+static const NSTimeInterval kStreamCountdownMaximumDurationSeconds = (23 * 60 * 60) + (59 * 60);
 
 // 根据当前视图 bounds 判断是否横屏
 - (BOOL)osc_isCurrentLandscapeInViewBounds {
@@ -544,15 +567,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     }
     
     // Restart time and battery update timer
-    if (self->_timeBatteryUpdateTimer) {
-        [self->_timeBatteryUpdateTimer invalidate];
-        self->_timeBatteryUpdateTimer = nil;
-    }
-    self->_timeBatteryUpdateTimer = [NSTimer scheduledTimerWithTimeInterval:60.0f
-                                                                   target:self
-                                                                 selector:@selector(updateTimeBatteryDisplay)
-                                                                 userInfo:nil
-                                                                  repeats:YES];
+    [self restartTimeBatteryUpdateTimer];
     
     // Re-create the ImGui view to properly apply the 'enableGraphs' setting
     if (self.imguiView && self.imguiView.mtkView) {
@@ -585,6 +600,9 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     NSLog(@"streamview gestures: %d", (uint32_t)[_streamView.gestureRecognizers count]);
     // Ensure ratio button is created/updated after reconfig
     [self updateSnapRatioButton];
+    if (_timeLabel && _batteryLabel) {
+        [self updateTimeBatteryDisplay];
+    }
 }
 
 - (void)applySnapToTopIfNeeded {
@@ -754,6 +772,8 @@ static BOOL VoidGyroToggleEnabled(void) {
         _batteryLabel.userInteractionEnabled = NO;
         [self.view addSubview:_batteryLabel];
     }
+
+    [self createStreamCountdownDisplayIfNeeded];
     
     [self updateTimeBatteryDisplay];
 }
@@ -773,6 +793,322 @@ static BOOL VoidGyroToggleEnabled(void) {
     _batteryLabel.text = [NSString stringWithFormat:@"%d%%", batteryPercent];
     [_batteryLabel sizeToFit];
     
+    [self layoutTimeBatteryCountdownDisplay];
+}
+
+- (void)restartTimeBatteryUpdateTimer {
+    [_timeBatteryUpdateTimer invalidate];
+    _timeBatteryUpdateTimer = nil;
+
+    _timeBatteryUpdateTimer = [NSTimer timerWithTimeInterval:60.0f
+                                                      target:self
+                                                    selector:@selector(updateTimeBatteryDisplay)
+                                                    userInfo:nil
+                                                     repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:_timeBatteryUpdateTimer forMode:NSRunLoopCommonModes];
+}
+
+- (NSTimeInterval)normalizedStreamCountdownDuration:(NSTimeInterval)duration {
+    if (!isfinite(duration) || duration <= 0) {
+        duration = kStreamCountdownDefaultDurationSeconds;
+    }
+    return MIN(MAX(duration, kStreamCountdownMinimumDurationSeconds), kStreamCountdownMaximumDurationSeconds);
+}
+
+- (NSTimeInterval)storedStreamCountdownDuration {
+    id storedDuration = [[NSUserDefaults standardUserDefaults] objectForKey:kStreamCountdownDurationSecondsKey];
+    if (![storedDuration respondsToSelector:@selector(doubleValue)]) {
+        return kStreamCountdownDefaultDurationSeconds;
+    }
+    return [self normalizedStreamCountdownDuration:[storedDuration doubleValue]];
+}
+
+- (NSString *)formattedStreamCountdownSeconds:(NSTimeInterval)seconds {
+    NSInteger totalSeconds = (NSInteger)ceil(MAX(0, seconds));
+    NSInteger hours = totalSeconds / 3600;
+    NSInteger minutes = (totalSeconds % 3600) / 60;
+    NSInteger remainingSeconds = totalSeconds % 60;
+
+    if (hours > 0) {
+        return [NSString stringWithFormat:@"%ld:%02ld:%02ld", (long)hours, (long)minutes, (long)remainingSeconds];
+    }
+    return [NSString stringWithFormat:@"%ld:%02ld", (long)minutes, (long)remainingSeconds];
+}
+
+- (UIColor *)streamCountdownBaseTintColor {
+    return [[UIColor whiteColor] colorWithAlphaComponent:0.22];
+}
+
+- (void)createStreamCountdownDisplayIfNeeded {
+    if (!_countdownHitAreaView) {
+        _countdownHitAreaView = [[UIView alloc] initWithFrame:CGRectZero];
+        _countdownHitAreaView.backgroundColor = [UIColor clearColor];
+        _countdownHitAreaView.userInteractionEnabled = YES;
+        _countdownHitAreaView.accessibilityTraits = UIAccessibilityTraitButton;
+        _countdownHitAreaView.accessibilityLabel = @"Timer";
+
+        UITapGestureRecognizer *singleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(streamCountdownTapped:)];
+        UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(streamCountdownDoubleTapped:)];
+        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(streamCountdownLongPressed:)];
+        doubleTap.numberOfTapsRequired = 2;
+        longPress.minimumPressDuration = 0.55;
+        [singleTap requireGestureRecognizerToFail:doubleTap];
+
+        [_countdownHitAreaView addGestureRecognizer:singleTap];
+        [_countdownHitAreaView addGestureRecognizer:doubleTap];
+        [_countdownHitAreaView addGestureRecognizer:longPress];
+        [self.view addSubview:_countdownHitAreaView];
+    }
+
+    if (!_countdownLabel) {
+        _countdownLabel = [[PaddedLabel alloc] initWithFrame:CGRectZero];
+        _countdownLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+        _countdownLabel.textAlignment = NSTextAlignmentCenter;
+        _countdownLabel.userInteractionEnabled = NO;
+        _countdownLabel.clipsToBounds = YES;
+        [_countdownHitAreaView addSubview:_countdownLabel];
+    }
+
+    if (_streamCountdownDurationSeconds <= 0) {
+        [self restoreStreamCountdownStateFromDefaults];
+    } else {
+        [self updateStreamCountdownDisplay];
+    }
+}
+
+- (void)restoreStreamCountdownStateFromDefaults {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    _streamCountdownDurationSeconds = [self storedStreamCountdownDuration];
+    _streamCountdownRemainingSeconds = _streamCountdownDurationSeconds;
+    _streamCountdownEndDate = nil;
+    _streamCountdownFinishFeedbackShown = NO;
+
+    StreamCountdownState savedState = (StreamCountdownState)[defaults integerForKey:kStreamCountdownStateKey];
+    if (savedState == StreamCountdownStateRunning) {
+        NSDate *savedEndDate = [defaults objectForKey:kStreamCountdownEndDateKey];
+        if ([savedEndDate isKindOfClass:[NSDate class]]) {
+            NSTimeInterval remaining = [savedEndDate timeIntervalSinceNow];
+            if (remaining > 0) {
+                _streamCountdownState = StreamCountdownStateRunning;
+                _streamCountdownEndDate = savedEndDate;
+                _streamCountdownRemainingSeconds = remaining;
+            } else {
+                _streamCountdownState = StreamCountdownStateFinished;
+                _streamCountdownRemainingSeconds = 0;
+                _streamCountdownFinishFeedbackShown = YES;
+            }
+        } else {
+            _streamCountdownState = StreamCountdownStateIdle;
+        }
+    } else if (savedState == StreamCountdownStatePaused) {
+        NSTimeInterval remaining = [defaults doubleForKey:kStreamCountdownRemainingSecondsKey];
+        if (remaining > 0) {
+            _streamCountdownState = StreamCountdownStatePaused;
+            _streamCountdownRemainingSeconds = MIN(remaining, _streamCountdownDurationSeconds);
+        } else {
+            _streamCountdownState = StreamCountdownStateIdle;
+            _streamCountdownRemainingSeconds = _streamCountdownDurationSeconds;
+        }
+    } else if (savedState == StreamCountdownStateFinished) {
+        _streamCountdownState = StreamCountdownStateFinished;
+        _streamCountdownRemainingSeconds = 0;
+        _streamCountdownFinishFeedbackShown = YES;
+    } else {
+        _streamCountdownState = StreamCountdownStateIdle;
+        _streamCountdownRemainingSeconds = _streamCountdownDurationSeconds;
+    }
+
+    [self persistStreamCountdownState];
+    [self updateStreamCountdownTimer];
+    [self updateStreamCountdownDisplay];
+}
+
+- (void)persistStreamCountdownState {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setDouble:_streamCountdownDurationSeconds forKey:kStreamCountdownDurationSecondsKey];
+    [defaults setInteger:_streamCountdownState forKey:kStreamCountdownStateKey];
+
+    if (_streamCountdownState == StreamCountdownStateRunning && _streamCountdownEndDate) {
+        [defaults setObject:_streamCountdownEndDate forKey:kStreamCountdownEndDateKey];
+    } else {
+        [defaults removeObjectForKey:kStreamCountdownEndDateKey];
+    }
+
+    if (_streamCountdownState == StreamCountdownStatePaused) {
+        [defaults setDouble:_streamCountdownRemainingSeconds forKey:kStreamCountdownRemainingSecondsKey];
+    } else {
+        [defaults removeObjectForKey:kStreamCountdownRemainingSecondsKey];
+    }
+    [defaults synchronize];
+}
+
+- (void)updateStreamCountdownTimer {
+    [_streamCountdownUpdateTimer invalidate];
+    _streamCountdownUpdateTimer = nil;
+
+    if (_streamCountdownState != StreamCountdownStateRunning) {
+        return;
+    }
+
+    _streamCountdownUpdateTimer = [NSTimer timerWithTimeInterval:0.25
+                                                          target:self
+                                                        selector:@selector(streamCountdownUpdateTimerFired:)
+                                                        userInfo:nil
+                                                         repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:_streamCountdownUpdateTimer forMode:NSRunLoopCommonModes];
+}
+
+- (void)streamCountdownUpdateTimerFired:(NSTimer *)timer {
+    [self refreshStreamCountdownFromClockWithFeedback:YES];
+}
+
+- (void)refreshStreamCountdownFromClockWithFeedback:(BOOL)feedback {
+    if (_streamCountdownState != StreamCountdownStateRunning) {
+        return;
+    }
+
+    NSTimeInterval remaining = [_streamCountdownEndDate timeIntervalSinceNow];
+    if (remaining <= 0) {
+        [self finishStreamCountdownWithFeedback:feedback];
+        return;
+    }
+
+    _streamCountdownRemainingSeconds = remaining;
+    [self updateStreamCountdownDisplay];
+}
+
+- (void)startStreamCountdownWithDuration:(NSTimeInterval)duration {
+    _streamCountdownDurationSeconds = [self normalizedStreamCountdownDuration:duration];
+    _streamCountdownRemainingSeconds = _streamCountdownDurationSeconds;
+    _streamCountdownEndDate = [NSDate dateWithTimeIntervalSinceNow:_streamCountdownDurationSeconds];
+    _streamCountdownState = StreamCountdownStateRunning;
+    _streamCountdownFinishFeedbackShown = NO;
+
+    [self persistStreamCountdownState];
+    [self updateStreamCountdownTimer];
+    [self updateStreamCountdownDisplay];
+}
+
+- (void)pauseStreamCountdown {
+    if (_streamCountdownState != StreamCountdownStateRunning) {
+        return;
+    }
+
+    _streamCountdownRemainingSeconds = MAX(0, [_streamCountdownEndDate timeIntervalSinceNow]);
+    if (_streamCountdownRemainingSeconds <= 0) {
+        [self finishStreamCountdownWithFeedback:YES];
+        return;
+    }
+
+    _streamCountdownState = StreamCountdownStatePaused;
+    _streamCountdownEndDate = nil;
+
+    [self persistStreamCountdownState];
+    [self updateStreamCountdownTimer];
+    [self updateStreamCountdownDisplay];
+}
+
+- (void)resumeStreamCountdown {
+    if (_streamCountdownState != StreamCountdownStatePaused) {
+        return;
+    }
+
+    if (_streamCountdownRemainingSeconds <= 0) {
+        [self finishStreamCountdownWithFeedback:YES];
+        return;
+    }
+
+    _streamCountdownEndDate = [NSDate dateWithTimeIntervalSinceNow:_streamCountdownRemainingSeconds];
+    _streamCountdownState = StreamCountdownStateRunning;
+
+    [self persistStreamCountdownState];
+    [self updateStreamCountdownTimer];
+    [self updateStreamCountdownDisplay];
+}
+
+- (void)resetStreamCountdownToIdle {
+    _streamCountdownState = StreamCountdownStateIdle;
+    _streamCountdownRemainingSeconds = _streamCountdownDurationSeconds;
+    _streamCountdownEndDate = nil;
+    _streamCountdownFinishFeedbackShown = NO;
+
+    [self persistStreamCountdownState];
+    [self updateStreamCountdownTimer];
+    [self updateStreamCountdownDisplay];
+}
+
+- (void)finishStreamCountdownWithFeedback:(BOOL)feedback {
+    _streamCountdownState = StreamCountdownStateFinished;
+    _streamCountdownRemainingSeconds = 0;
+    _streamCountdownEndDate = nil;
+
+    [self persistStreamCountdownState];
+    [self updateStreamCountdownTimer];
+    [self updateStreamCountdownDisplay];
+
+    if (feedback) {
+        [self playStreamCountdownFinishedFeedback];
+    }
+}
+
+- (void)applyStreamCountdownDuration:(NSTimeInterval)duration {
+    _streamCountdownDurationSeconds = [self normalizedStreamCountdownDuration:duration];
+
+    if (_streamCountdownState == StreamCountdownStateRunning ||
+        _streamCountdownState == StreamCountdownStatePaused) {
+        [self startStreamCountdownWithDuration:_streamCountdownDurationSeconds];
+    } else {
+        [self resetStreamCountdownToIdle];
+    }
+}
+
+- (void)updateStreamCountdownDisplay {
+    if (!_countdownLabel) {
+        return;
+    }
+
+    UIColor *baseTint = [self streamCountdownBaseTintColor];
+    UIColor *foregroundColor = baseTint;
+    UIColor *backgroundColor = [UIColor clearColor];
+    UIEdgeInsets textInsets = UIEdgeInsetsZero;
+    NSString *displayText = [self formattedStreamCountdownSeconds:_streamCountdownDurationSeconds];
+
+    if (_streamCountdownState == StreamCountdownStateRunning) {
+        displayText = [self formattedStreamCountdownSeconds:_streamCountdownRemainingSeconds];
+        foregroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.72];
+        backgroundColor = baseTint;
+        textInsets = UIEdgeInsetsMake(3, 8, 3, 8);
+    } else if (_streamCountdownState == StreamCountdownStatePaused) {
+        displayText = [self formattedStreamCountdownSeconds:_streamCountdownRemainingSeconds];
+        foregroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.55];
+        backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.13];
+        textInsets = UIEdgeInsetsMake(3, 8, 3, 8);
+    } else if (_streamCountdownState == StreamCountdownStateFinished) {
+        displayText = @"DONE";
+        foregroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.82];
+        backgroundColor = [UIColor colorWithRed:1.0 green:0.82 blue:0.16 alpha:0.92];
+        textInsets = UIEdgeInsetsMake(3, 8, 3, 8);
+    }
+
+    _countdownLabel.textInsets = textInsets;
+    _countdownLabel.text = displayText;
+    _countdownLabel.textColor = foregroundColor;
+    _countdownLabel.backgroundColor = backgroundColor;
+    [_countdownLabel sizeToFit];
+    _countdownLabel.layer.cornerRadius = (_streamCountdownState == StreamCountdownStateIdle) ? 0 : (_countdownLabel.bounds.size.height / 2.0f);
+    if (_streamCountdownState != StreamCountdownStateFinished) {
+        [_countdownLabel.layer removeAllAnimations];
+        _countdownLabel.transform = CGAffineTransformIdentity;
+    }
+
+    [self layoutTimeBatteryCountdownDisplay];
+}
+
+- (void)layoutTimeBatteryCountdownDisplay {
+    if (!_timeLabel || !_batteryLabel) {
+        return;
+    }
+
     // Layout labels at bottom-left
     CGFloat leftMargin = 24.0f;
     CGFloat bottomMargin = 12.0f;
@@ -784,6 +1120,140 @@ static BOOL VoidGyroToggleEnabled(void) {
     
     _timeLabel.frame = CGRectMake(timeX, y, _timeLabel.frame.size.width, _timeLabel.frame.size.height);
     _batteryLabel.frame = CGRectMake(batteryX, y, _batteryLabel.frame.size.width, _batteryLabel.frame.size.height);
+
+    if (_countdownHitAreaView && _countdownLabel) {
+        CGFloat countdownX = CGRectGetMaxX(_batteryLabel.frame) + spacing;
+        CGFloat labelWidth = _countdownLabel.frame.size.width;
+        CGFloat labelHeight = _countdownLabel.frame.size.height;
+        CGFloat hitWidth = MAX(48.0f, labelWidth);
+        CGFloat hitHeight = MAX(32.0f, labelHeight);
+        CGFloat centerY = CGRectGetMidY(_timeLabel.frame);
+        CGFloat hitX = countdownX - ((hitWidth - labelWidth) / 2.0f);
+        CGFloat hitY = centerY - (hitHeight / 2.0f);
+
+        _countdownHitAreaView.frame = CGRectMake(hitX, hitY, hitWidth, hitHeight);
+        _countdownLabel.frame = CGRectMake((hitWidth - labelWidth) / 2.0f,
+                                           (hitHeight - labelHeight) / 2.0f,
+                                           labelWidth,
+                                           labelHeight);
+    }
+
+    [self.view bringSubviewToFront:_timeLabel];
+    [self.view bringSubviewToFront:_batteryLabel];
+    if (_countdownHitAreaView) {
+        [self.view bringSubviewToFront:_countdownHitAreaView];
+    }
+}
+
+- (void)streamCountdownTapped:(UITapGestureRecognizer *)recognizer {
+    if (recognizer.state != UIGestureRecognizerStateEnded) {
+        return;
+    }
+
+    if (_streamCountdownState == StreamCountdownStateIdle) {
+        [self startStreamCountdownWithDuration:_streamCountdownDurationSeconds];
+    } else if (_streamCountdownState == StreamCountdownStateRunning) {
+        [self pauseStreamCountdown];
+    } else if (_streamCountdownState == StreamCountdownStatePaused) {
+        [self resumeStreamCountdown];
+    } else if (_streamCountdownState == StreamCountdownStateFinished) {
+        [self resetStreamCountdownToIdle];
+    }
+}
+
+- (void)streamCountdownDoubleTapped:(UITapGestureRecognizer *)recognizer {
+    if (recognizer.state != UIGestureRecognizerStateEnded) {
+        return;
+    }
+    if (_streamCountdownState != StreamCountdownStateRunning &&
+        _streamCountdownState != StreamCountdownStatePaused) {
+        return;
+    }
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Reset timer?"
+                                                                   message:nil
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Reset"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(UIAlertAction * _Nonnull action) {
+        [self resetStreamCountdownToIdle];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)streamCountdownLongPressed:(UILongPressGestureRecognizer *)recognizer {
+    if (recognizer.state == UIGestureRecognizerStateBegan) {
+        [self presentStreamCountdownDurationPicker];
+    }
+}
+
+- (void)presentStreamCountdownDurationPicker {
+#if TARGET_OS_TV
+    return;
+#else
+    if (self.presentedViewController) {
+        return;
+    }
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Timer Duration"
+                                                                   message:@"\n\n\n\n\n\n\n\n"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    UIDatePicker *picker = [[UIDatePicker alloc] initWithFrame:CGRectZero];
+    picker.datePickerMode = UIDatePickerModeCountDownTimer;
+    picker.minuteInterval = 1;
+    picker.countDownDuration = [self normalizedStreamCountdownDuration:_streamCountdownDurationSeconds];
+    picker.translatesAutoresizingMaskIntoConstraints = NO;
+    if (@available(iOS 13.4, *)) {
+        picker.preferredDatePickerStyle = UIDatePickerStyleWheels;
+    }
+    [alert.view addSubview:picker];
+    [NSLayoutConstraint activateConstraints:@[
+        [picker.centerXAnchor constraintEqualToAnchor:alert.view.centerXAnchor],
+        [picker.topAnchor constraintEqualToAnchor:alert.view.topAnchor constant:50.0f],
+        [picker.widthAnchor constraintEqualToConstant:260.0f],
+        [picker.heightAnchor constraintEqualToConstant:160.0f]
+    ]];
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Set"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction * _Nonnull action) {
+        [self applyStreamCountdownDuration:picker.countDownDuration];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+#endif
+}
+
+- (void)playStreamCountdownFinishedFeedback {
+    if (_streamCountdownFinishFeedbackShown) {
+        return;
+    }
+    _streamCountdownFinishFeedbackShown = YES;
+
+#if !TARGET_OS_TV
+    if (@available(iOS 10.0, *)) {
+        UINotificationFeedbackGenerator *feedbackGenerator = [[UINotificationFeedbackGenerator alloc] init];
+        [feedbackGenerator notificationOccurred:UINotificationFeedbackTypeSuccess];
+    }
+#endif
+
+    _countdownLabel.transform = CGAffineTransformIdentity;
+    [UIView animateKeyframesWithDuration:0.55
+                                   delay:0
+                                 options:UIViewKeyframeAnimationOptionCalculationModeCubic
+                              animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.0 relativeDuration:0.5 animations:^{
+            self->_countdownLabel.transform = CGAffineTransformMakeScale(1.16, 1.16);
+        }];
+        [UIView addKeyframeWithRelativeStartTime:0.5 relativeDuration:0.5 animations:^{
+            self->_countdownLabel.transform = CGAffineTransformIdentity;
+        }];
+    } completion:nil];
 }
 
 - (void)toggleSnapRatio {
@@ -1358,6 +1828,10 @@ static BOOL VoidGyroToggleEnabled(void) {
             [_timeBatteryUpdateTimer invalidate];
             _timeBatteryUpdateTimer = nil;
         }
+        if (_streamCountdownUpdateTimer != nil) {
+            [_streamCountdownUpdateTimer invalidate];
+            _streamCountdownUpdateTimer = nil;
+        }
         if (self.metalViewController) {
             [self.metalViewController.view removeFromSuperview];
             [self.metalViewController removeFromParentViewController];
@@ -1474,6 +1948,8 @@ static BOOL VoidGyroToggleEnabled(void) {
     _statsUpdateTimer = nil;
     [_timeBatteryUpdateTimer invalidate];
     _timeBatteryUpdateTimer = nil;
+    [_streamCountdownUpdateTimer invalidate];
+    _streamCountdownUpdateTimer = nil;
     
     // Mark one-shot suppression to avoid immediate auto-enter after manual exit
     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"AutoEnterSuppressOnce"];
@@ -1628,6 +2104,9 @@ static BOOL VoidGyroToggleEnabled(void) {
         Log(LOG_I, @"Resuming ImGui renderer on foreground");
     }
     
+    [self refreshStreamCountdownFromClockWithFeedback:YES];
+    [self updateTimeBatteryDisplay];
+
     [self->_streamMan.videoRenderer resetFramePacing];
     _isRestoringFromPiP = NO;
 }
@@ -1814,11 +2293,7 @@ static BOOL VoidGyroToggleEnabled(void) {
         }
         
         // Start time and battery update timer (update every minute)
-        self->_timeBatteryUpdateTimer = [NSTimer scheduledTimerWithTimeInterval:60.0f
-                                                                         target:self
-                                                                       selector:@selector(updateTimeBatteryDisplay)
-                                                                       userInfo:nil
-                                                                        repeats:YES];
+        [self restartTimeBatteryUpdateTimer];
     });
 }
 
