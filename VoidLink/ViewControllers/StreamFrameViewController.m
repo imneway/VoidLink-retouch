@@ -723,7 +723,8 @@ static BOOL VoidGyroToggleEnabled(void) {
 }
 
 // Toggles the persistent forceGyroEnabled flag. An unset value behaves like
-// legacy ON; once the user taps, OFF becomes an explicit global suppressor.
+// legacy ON; once the user taps, OFF suppresses passive gyro while still
+// allowing explicit GYRO / OSCR2-GYRO widgets to enable it.
 // ControllerSupport observes VoidGyroSettingsDidChangeNotification so the
 // live stream picks up the change without reconnect.
 - (void)toggleGyroOnOff {

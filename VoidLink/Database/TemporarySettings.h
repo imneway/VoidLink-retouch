@@ -41,8 +41,9 @@
 @property (nonatomic, assign) BOOL gyroInvertPitch;
 @property (nonatomic, assign) BOOL gyroInvertYaw;
 // Persistent stream-view toggle state. ControllerSupport treats an explicitly
-// stored YES as global ON and an explicitly stored NO as global OFF; if the
-// key has never been stored, legacy/widget gyro rules still apply.
+// stored YES as global ON and an explicitly stored NO as passive legacy OFF;
+// explicit GYRO widgets can still activate gyro. If the key has never been
+// stored, legacy/widget gyro rules still apply.
 // Stored in NSUserDefaults under @"forceGyroEnabled".
 @property (nonatomic, assign) BOOL forceGyroEnabled;
 @property (nonatomic, retain) NSNumber * emulatedControllerType;

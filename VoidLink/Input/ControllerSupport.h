@@ -38,8 +38,8 @@
 @property (atomic, assign) BOOL hasGyroPauseButton;
 // Persistent stream-view gyro switch (NSUserDefaults @"forceGyroEnabled").
 // If the key exists, YES forces emission past the hold gate, while NO suppresses
-// gyro emission globally. If the key has never been set, legacy/widget rules
-// decide emission.
+// passive legacy emission. Explicit GYRO widgets can still enable gyro while
+// the stream-view switch is OFF.
 @property (atomic, assign) BOOL forceGyroEnabled;
 - (void) pushMotionButtonHold;
 - (void) popMotionButtonHold;

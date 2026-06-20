@@ -108,9 +108,10 @@ static inline int16_t clamp_int16(CGFloat v) {
 
 // YES when motion events should be emitted right now. Decision order:
 //   1. GYROPAUSE always wins (emergency suspend, even over forceGyroEnabled)
-//   2. Explicit stream-view GYRO ON/OFF switch wins globally
-//   3. No motion widgets registered -> legacy always-on (under user's GyroMode)
-//   4. GYRO widgets registered -> at least one must be held
+//   2. Explicit stream-view GYRO ON forces emission past the hold gate
+//   3. GYRO widgets registered -> at least one must be held
+//   4. Explicit stream-view GYRO OFF suppresses passive legacy emission
+//   5. No motion widgets or explicit switch -> legacy always-on
 // Read under the same lock as push/pop to avoid races between the gyro timer
 // (background thread, ~60Hz reads) and touch handlers (main thread).
 - (BOOL) motionEmissionAllowed {
@@ -120,9 +121,10 @@ static inline int16_t clamp_int16(CGFloat v) {
     BOOL globalForce = self.forceGyroEnabled;
     @synchronized (self) {
         if (hasPause && _motionButtonPauseCount > 0) return NO;
-        if (hasGlobalOverride) return globalForce;
-        if (!hasToggle && !hasPause) return YES;
-        return !hasToggle || _motionButtonHoldCount > 0;
+        if (hasGlobalOverride && globalForce) return YES;
+        if (hasToggle) return _motionButtonHoldCount > 0;
+        if (hasGlobalOverride) return NO;
+        return YES;
     }
 }
 
