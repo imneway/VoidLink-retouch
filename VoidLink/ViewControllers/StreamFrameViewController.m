@@ -1519,9 +1519,9 @@ static BOOL VoidGyroToggleEnabled(void) {
     }
 
     CGFloat minSide = MIN(bounds.size.width, bounds.size.height);
-    CGFloat softWidth = MIN(106.0f, MAX(61.0f, minSide * 0.1125f));
+    CGFloat softWidth = MIN(116.0f, MAX(68.0f, minSide * 0.1225f));
     CGFloat hotWidth = MIN(30.0f, MAX(18.0f, minSide * 0.03f));
-    UIColor *softYellow = [UIColor colorWithRed:1.0f green:0.78f blue:0.08f alpha:0.18f];
+    UIColor *softYellow = [UIColor colorWithRed:1.0f green:0.78f blue:0.08f alpha:0.22f];
     UIColor *hotWhite = [UIColor colorWithWhite:1.0f alpha:0.64f];
     UIColor *borderWhite = [UIColor colorWithWhite:1.0f alpha:0.85f];
 
@@ -1541,37 +1541,40 @@ static BOOL VoidGyroToggleEnabled(void) {
     [self.view addSubview:edgeGlowView];
     [self.view bringSubviewToFront:edgeGlowView];
 
-    [UIView animateKeyframesWithDuration:2.8
+    [UIView animateKeyframesWithDuration:3.5
                                    delay:0
                                  options:UIViewKeyframeAnimationOptionCalculationModeCubic
                               animations:^{
-        [UIView addKeyframeWithRelativeStartTime:0.00 relativeDuration:0.075 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.00 relativeDuration:0.06 animations:^{
             edgeGlowView.alpha = 1.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.075 relativeDuration:0.175 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.06 relativeDuration:0.14 animations:^{
             edgeGlowView.alpha = 0.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.25 relativeDuration:0.075 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.20 relativeDuration:0.06 animations:^{
             edgeGlowView.alpha = 1.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.325 relativeDuration:0.175 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.26 relativeDuration:0.14 animations:^{
             edgeGlowView.alpha = 0.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.50 relativeDuration:0.075 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.40 relativeDuration:0.06 animations:^{
             edgeGlowView.alpha = 1.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.575 relativeDuration:0.175 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.46 relativeDuration:0.14 animations:^{
             edgeGlowView.alpha = 0.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.75 relativeDuration:0.075 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.60 relativeDuration:0.06 animations:^{
             edgeGlowView.alpha = 1.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.825 relativeDuration:0.175 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.66 relativeDuration:0.14 animations:^{
             edgeGlowView.alpha = 0.0f;
+        }];
+        [UIView addKeyframeWithRelativeStartTime:0.80 relativeDuration:0.06 animations:^{
+            edgeGlowView.alpha = 1.0f;
         }];
     } completion:^(BOOL finished) {
-        if (self->_streamCountdownEdgeGlowView == edgeGlowView) {
-            [self removeStreamCountdownEdgeGlowFeedback];
+        if (finished && self->_streamCountdownEdgeGlowView == edgeGlowView) {
+            edgeGlowView.alpha = 1.0f;
         }
     }];
 #endif
