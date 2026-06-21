@@ -1519,6 +1519,7 @@ static BOOL VoidGyroToggleEnabled(void) {
     UIColor *softYellow = [UIColor colorWithRed:1.0f green:0.78f blue:0.08f alpha:0.22f];
     UIColor *hotWhite = [UIColor colorWithWhite:1.0f alpha:0.64f];
     UIColor *borderWhite = [UIColor colorWithWhite:1.0f alpha:0.85f];
+    CGFloat restingAlpha = 0.64f;
 
     [self addStreamCountdownEdgeGlowBandToView:edgeGlowView
                                          width:softWidth
@@ -1567,9 +1568,12 @@ static BOOL VoidGyroToggleEnabled(void) {
         [UIView addKeyframeWithRelativeStartTime:0.80 relativeDuration:0.06 animations:^{
             edgeGlowView.alpha = 1.0f;
         }];
+        [UIView addKeyframeWithRelativeStartTime:0.86 relativeDuration:0.14 animations:^{
+            edgeGlowView.alpha = restingAlpha;
+        }];
     } completion:^(BOOL finished) {
         if (finished && self->_streamCountdownEdgeGlowView == edgeGlowView) {
-            edgeGlowView.alpha = 1.0f;
+            edgeGlowView.alpha = restingAlpha;
         }
     }];
 #endif
