@@ -1127,7 +1127,7 @@ static BOOL VoidGyroToggleEnabled(void) {
     UIColor *baseTint = [self streamCountdownBaseTintColor];
     UIColor *foregroundColor = baseTint;
     UIColor *backgroundColor = [UIColor clearColor];
-    UIEdgeInsets textInsets = UIEdgeInsetsMake(3, 8, 3, 8);
+    UIEdgeInsets textInsets = UIEdgeInsetsMake(3, 6, 3, 6);
     NSString *displayText = [self formattedStreamCountdownSeconds:_streamCountdownDurationSeconds];
 
     if (_streamCountdownState == StreamCountdownStateRunning) {
@@ -1237,7 +1237,7 @@ static BOOL VoidGyroToggleEnabled(void) {
                                               style:UIAlertActionStyleCancel
                                             handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Reset"
-                                              style:UIAlertActionStyleDestructive
+                                              style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction * _Nonnull action) {
         [self resetStreamCountdownToIdle];
     }]];
@@ -1418,7 +1418,7 @@ static BOOL VoidGyroToggleEnabled(void) {
     CGFloat softWidth = MIN(92.0f, MAX(50.0f, minSide * 0.095f));
     CGFloat hotWidth = MIN(38.0f, MAX(24.0f, minSide * 0.04f));
     UIColor *softYellow = [UIColor colorWithRed:1.0f green:0.78f blue:0.08f alpha:0.14f];
-    UIColor *hotWhite = [UIColor colorWithWhite:1.0f alpha:0.30f];
+    UIColor *hotWhite = [UIColor colorWithWhite:1.0f alpha:0.42f];
 
     [self addStreamCountdownEdgeGlowBandToView:edgeGlowView
                                          width:softWidth
