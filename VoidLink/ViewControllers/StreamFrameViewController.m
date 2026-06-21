@@ -88,6 +88,7 @@ typedef NS_ENUM(NSInteger, StreamCountdownState) {
     NSTimeInterval _streamCountdownRemainingSeconds;
     NSDate *_streamCountdownEndDate;
     BOOL _streamCountdownFinishFeedbackShown;
+    UIView *_streamCountdownEdgeGlowView;
 #if !TARGET_OS_TV
     UIPickerView *_streamCountdownDurationPicker;
 #endif
@@ -1066,6 +1067,7 @@ static BOOL VoidGyroToggleEnabled(void) {
     _streamCountdownRemainingSeconds = _streamCountdownDurationSeconds;
     _streamCountdownEndDate = nil;
     _streamCountdownFinishFeedbackShown = NO;
+    [self removeStreamCountdownEdgeGlowFeedback];
 
     [self persistStreamCountdownState];
     [self updateStreamCountdownTimer];
@@ -1304,6 +1306,133 @@ static BOOL VoidGyroToggleEnabled(void) {
 }
 #endif
 
+- (CAGradientLayer *)streamCountdownEdgeGlowGradientWithFrame:(CGRect)frame
+                                                        start:(CGPoint)start
+                                                          end:(CGPoint)end
+                                                        color:(UIColor *)color
+                                                    blendMode:(NSString *)blendMode {
+    CAGradientLayer *layer = [CAGradientLayer layer];
+    layer.frame = frame;
+    layer.startPoint = start;
+    layer.endPoint = end;
+    layer.colors = @[(id)color.CGColor, (id)[color colorWithAlphaComponent:0.0].CGColor];
+    layer.locations = @[@0.0, @1.0];
+    layer.compositingFilter = blendMode;
+    layer.contentsScale = [UIScreen mainScreen].scale;
+    return layer;
+}
+
+- (void)addStreamCountdownEdgeGlowBandToView:(UIView *)view
+                                       width:(CGFloat)width
+                                       color:(UIColor *)color
+                                   blendMode:(NSString *)blendMode {
+    CGRect bounds = view.bounds;
+    if (CGRectIsEmpty(bounds) || width <= 0) {
+        return;
+    }
+
+    CGFloat bandWidth = MIN(width, MIN(bounds.size.width, bounds.size.height) / 2.0f);
+    NSArray<CAGradientLayer *> *layers = @[
+        [self streamCountdownEdgeGlowGradientWithFrame:CGRectMake(0, 0, bounds.size.width, bandWidth)
+                                                 start:CGPointMake(0.5, 0.0)
+                                                   end:CGPointMake(0.5, 1.0)
+                                                 color:color
+                                             blendMode:blendMode],
+        [self streamCountdownEdgeGlowGradientWithFrame:CGRectMake(0, bounds.size.height - bandWidth, bounds.size.width, bandWidth)
+                                                 start:CGPointMake(0.5, 1.0)
+                                                   end:CGPointMake(0.5, 0.0)
+                                                 color:color
+                                             blendMode:blendMode],
+        [self streamCountdownEdgeGlowGradientWithFrame:CGRectMake(0, 0, bandWidth, bounds.size.height)
+                                                 start:CGPointMake(0.0, 0.5)
+                                                   end:CGPointMake(1.0, 0.5)
+                                                 color:color
+                                             blendMode:blendMode],
+        [self streamCountdownEdgeGlowGradientWithFrame:CGRectMake(bounds.size.width - bandWidth, 0, bandWidth, bounds.size.height)
+                                                 start:CGPointMake(1.0, 0.5)
+                                                   end:CGPointMake(0.0, 0.5)
+                                                 color:color
+                                             blendMode:blendMode]
+    ];
+
+    for (CAGradientLayer *layer in layers) {
+        [view.layer addSublayer:layer];
+    }
+}
+
+- (void)removeStreamCountdownEdgeGlowFeedback {
+    [_streamCountdownEdgeGlowView.layer removeAllAnimations];
+    [_streamCountdownEdgeGlowView removeFromSuperview];
+    _streamCountdownEdgeGlowView = nil;
+}
+
+- (void)playStreamCountdownEdgeGlowFeedback {
+#if TARGET_OS_TV
+    return;
+#else
+    CGRect bounds = self.view.bounds;
+    if (CGRectIsEmpty(bounds)) {
+        return;
+    }
+
+    [self removeStreamCountdownEdgeGlowFeedback];
+
+    UIView *edgeGlowView = [[UIView alloc] initWithFrame:bounds];
+    edgeGlowView.backgroundColor = [UIColor clearColor];
+    edgeGlowView.userInteractionEnabled = NO;
+    edgeGlowView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    edgeGlowView.alpha = 0.0f;
+    edgeGlowView.layer.masksToBounds = YES;
+
+    CGFloat minSide = MIN(bounds.size.width, bounds.size.height);
+    CGFloat softWidth = MIN(120.0f, MAX(72.0f, minSide * 0.13f));
+    CGFloat hotWidth = MIN(44.0f, MAX(28.0f, minSide * 0.045f));
+    UIColor *softYellow = [UIColor colorWithRed:1.0f green:0.78f blue:0.08f alpha:0.22f];
+    UIColor *hotYellow = [UIColor colorWithRed:1.0f green:0.93f blue:0.32f alpha:0.34f];
+
+    [self addStreamCountdownEdgeGlowBandToView:edgeGlowView
+                                         width:softWidth
+                                         color:softYellow
+                                     blendMode:@"screenBlendMode"];
+    [self addStreamCountdownEdgeGlowBandToView:edgeGlowView
+                                         width:hotWidth
+                                         color:hotYellow
+                                     blendMode:@"plusLighter"];
+
+    _streamCountdownEdgeGlowView = edgeGlowView;
+    [self.view addSubview:edgeGlowView];
+    [self.view bringSubviewToFront:edgeGlowView];
+
+    [UIView animateKeyframesWithDuration:1.28
+                                   delay:0
+                                 options:UIViewKeyframeAnimationOptionCalculationModeCubic
+                              animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.00 relativeDuration:0.09 animations:^{
+            edgeGlowView.alpha = 1.0f;
+        }];
+        [UIView addKeyframeWithRelativeStartTime:0.09 relativeDuration:0.17 animations:^{
+            edgeGlowView.alpha = 0.0f;
+        }];
+        [UIView addKeyframeWithRelativeStartTime:0.34 relativeDuration:0.09 animations:^{
+            edgeGlowView.alpha = 1.0f;
+        }];
+        [UIView addKeyframeWithRelativeStartTime:0.43 relativeDuration:0.17 animations:^{
+            edgeGlowView.alpha = 0.0f;
+        }];
+        [UIView addKeyframeWithRelativeStartTime:0.68 relativeDuration:0.09 animations:^{
+            edgeGlowView.alpha = 1.0f;
+        }];
+        [UIView addKeyframeWithRelativeStartTime:0.77 relativeDuration:0.23 animations:^{
+            edgeGlowView.alpha = 0.0f;
+        }];
+    } completion:^(BOOL finished) {
+        if (self->_streamCountdownEdgeGlowView == edgeGlowView) {
+            [self removeStreamCountdownEdgeGlowFeedback];
+        }
+    }];
+#endif
+}
+
 - (void)playStreamCountdownFinishedFeedback {
     if (_streamCountdownFinishFeedbackShown) {
         return;
@@ -1316,6 +1445,8 @@ static BOOL VoidGyroToggleEnabled(void) {
         [feedbackGenerator notificationOccurred:UINotificationFeedbackTypeSuccess];
     }
 #endif
+
+    [self playStreamCountdownEdgeGlowFeedback];
 
     _countdownLabel.transform = CGAffineTransformIdentity;
     [UIView animateKeyframesWithDuration:0.55
