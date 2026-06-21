@@ -788,6 +788,14 @@ static NSMutableSet* hostList;
 
 - (void) prepareToStreamApp:(TemporaryApp *)app {
     launchedApp = app;
+    if (app.host.name.length > 0) {
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        [defaults setObject:app.host.name forKey:@"AutoEnterLastStreamHostName"];
+        if (app.host.uuid.length > 0) {
+            [defaults setObject:app.host.uuid forKey:@"AutoEnterLastStreamHostUUID"];
+        }
+        [defaults synchronize];
+    }
     [self updateResolutionAccordingly];
     self.revealViewController.isStreaming = true; // tell the revealViewController streaming is started.
     _streamConfig = [[StreamConfiguration alloc] init];
@@ -2223,6 +2231,10 @@ static NSMutableSet* hostList;
 
 - (void)consumePendingAutoEnter
 {
+    if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
+        return;
+    }
+
     AppDelegate* delegate = (AppDelegate*)[UIApplication sharedApplication].delegate;
     NSString *pendingHost = nil;
     if (delegate.autoEnterHostName != nil && delegate.autoEnterHostName.length > 0) {

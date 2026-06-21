@@ -2008,7 +2008,28 @@ static BOOL VoidGyroToggleEnabled(void) {
     }
 }
 
-- (void) returnToMainFrame {
+- (void)prepareAutoEnterStateForReturnToMainFrameAllowingBackgroundResume:(BOOL)allowBackgroundResume {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if (allowBackgroundResume) {
+        NSString *lastHostName = [defaults stringForKey:@"AutoEnterLastStreamHostName"];
+        if (lastHostName.length > 0) {
+            [defaults setObject:lastHostName forKey:@"AutoEnterDesktopHostName"];
+            [defaults setBool:YES forKey:@"AutoEnterTriggered"];
+            [defaults removeObjectForKey:@"AutoEnterSuppressOnce"];
+        }
+        else {
+            [defaults setBool:YES forKey:@"AutoEnterSuppressOnce"];
+            [defaults setBool:NO forKey:@"AutoEnterTriggered"];
+        }
+    }
+    else {
+        [defaults setBool:YES forKey:@"AutoEnterSuppressOnce"];
+        [defaults setBool:NO forKey:@"AutoEnterTriggered"];
+    }
+    [defaults synchronize];
+}
+
+- (void)returnToMainFrameAllowingBackgroundAutoResume:(BOOL)allowBackgroundResume {
     // Reset display mode back to default
     [self updatePreferredDisplayMode:NO];
     if (@available(iOS 13.0, *)) {
@@ -2025,15 +2046,17 @@ static BOOL VoidGyroToggleEnabled(void) {
     _timeBatteryUpdateTimer = nil;
     [_streamCountdownUpdateTimer invalidate];
     _streamCountdownUpdateTimer = nil;
-    
-    // Mark one-shot suppression to avoid immediate auto-enter after manual exit
-    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"AutoEnterSuppressOnce"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    [self prepareAutoEnterStateForReturnToMainFrameAllowingBackgroundResume:allowBackgroundResume];
     [self.navigationController popToRootViewControllerAnimated:NO];
     
     _extWindow = nil;
     
     self.mainFrameViewcontroller.settingsExpandedInStreamView = false; // reset this flag to false
+}
+
+- (void) returnToMainFrame {
+    [self returnToMainFrameAllowingBackgroundAutoResume:NO];
 }
 
 // External Screen connected
@@ -2150,7 +2173,7 @@ static BOOL VoidGyroToggleEnabled(void) {
 - (void)inactiveTimerExpired:(NSTimer*)timer {
     Log(LOG_I, @"Terminating stream after inactivity");
 
-    [self returnToMainFrame];
+    [self returnToMainFrameAllowingBackgroundAutoResume:YES];
     
     _inactivityTimer = nil;
 }
