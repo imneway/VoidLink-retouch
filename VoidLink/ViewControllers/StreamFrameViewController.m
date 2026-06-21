@@ -1403,26 +1403,38 @@ static BOOL VoidGyroToggleEnabled(void) {
     [self.view addSubview:edgeGlowView];
     [self.view bringSubviewToFront:edgeGlowView];
 
-    [UIView animateKeyframesWithDuration:1.28
+    [UIView animateKeyframesWithDuration:3.0
                                    delay:0
                                  options:UIViewKeyframeAnimationOptionCalculationModeCubic
                               animations:^{
-        [UIView addKeyframeWithRelativeStartTime:0.00 relativeDuration:0.09 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.00 relativeDuration:0.06 animations:^{
             edgeGlowView.alpha = 1.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.09 relativeDuration:0.17 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.06 relativeDuration:0.14 animations:^{
             edgeGlowView.alpha = 0.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.34 relativeDuration:0.09 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.20 relativeDuration:0.06 animations:^{
             edgeGlowView.alpha = 1.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.43 relativeDuration:0.17 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.26 relativeDuration:0.14 animations:^{
             edgeGlowView.alpha = 0.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.68 relativeDuration:0.09 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.40 relativeDuration:0.06 animations:^{
             edgeGlowView.alpha = 1.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.77 relativeDuration:0.23 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.46 relativeDuration:0.14 animations:^{
+            edgeGlowView.alpha = 0.0f;
+        }];
+        [UIView addKeyframeWithRelativeStartTime:0.60 relativeDuration:0.06 animations:^{
+            edgeGlowView.alpha = 1.0f;
+        }];
+        [UIView addKeyframeWithRelativeStartTime:0.66 relativeDuration:0.14 animations:^{
+            edgeGlowView.alpha = 0.0f;
+        }];
+        [UIView addKeyframeWithRelativeStartTime:0.80 relativeDuration:0.06 animations:^{
+            edgeGlowView.alpha = 1.0f;
+        }];
+        [UIView addKeyframeWithRelativeStartTime:0.86 relativeDuration:0.14 animations:^{
             edgeGlowView.alpha = 0.0f;
         }];
     } completion:^(BOOL finished) {
