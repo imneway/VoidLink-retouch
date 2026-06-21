@@ -1265,9 +1265,10 @@ static BOOL VoidGyroToggleEnabled(void) {
         return;
     }
 
+    UIAlertControllerStyle style = [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad ? UIAlertControllerStyleActionSheet : UIAlertControllerStyleAlert;
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Timer Duration"
                                                                    message:@"\n\n\n\n\n\n\n"
-                                                            preferredStyle:UIAlertControllerStyleAlert];
+                                                            preferredStyle:style];
     _streamCountdownDurationPicker = [[UIPickerView alloc] initWithFrame:CGRectZero];
     _streamCountdownDurationPicker.dataSource = self;
     _streamCountdownDurationPicker.delegate = self;
@@ -1298,6 +1299,13 @@ static BOOL VoidGyroToggleEnabled(void) {
         self->_streamCountdownDurationPicker = nil;
         [self applyStreamCountdownDuration:duration];
     }]];
+    UIPopoverPresentationController *popover = alert.popoverPresentationController;
+    if (popover) {
+        UIView *sourceView = _countdownHitAreaView ?: self.view;
+        popover.sourceView = sourceView;
+        popover.sourceRect = sourceView.bounds;
+        popover.permittedArrowDirections = UIPopoverArrowDirectionDown | UIPopoverArrowDirectionUp;
+    }
     [self presentViewController:alert animated:YES completion:nil];
 #endif
 }
