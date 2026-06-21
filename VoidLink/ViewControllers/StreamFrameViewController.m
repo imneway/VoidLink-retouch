@@ -875,6 +875,13 @@ static BOOL VoidGyroToggleEnabled(void) {
     return [[UIColor whiteColor] colorWithAlphaComponent:0.22];
 }
 
+- (CGSize)streamCountdownLabelSizeForText:(NSString *)text insets:(UIEdgeInsets)insets {
+    UIFont *font = _countdownLabel.font ?: [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    CGSize textSize = [text sizeWithAttributes:@{NSFontAttributeName: font}];
+    return CGSizeMake(ceil(textSize.width) + insets.left + insets.right,
+                      ceil(textSize.height) + insets.top + insets.bottom);
+}
+
 - (void)createStreamCountdownDisplayIfNeeded {
     if (!_countdownHitAreaView) {
         _countdownHitAreaView = [[UIView alloc] initWithFrame:CGRectZero];
@@ -898,7 +905,7 @@ static BOOL VoidGyroToggleEnabled(void) {
 
     if (!_countdownLabel) {
         _countdownLabel = [[PaddedLabel alloc] initWithFrame:CGRectZero];
-        _countdownLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+        _countdownLabel.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightMedium];
         _countdownLabel.textAlignment = NSTextAlignmentCenter;
         _countdownLabel.userInteractionEnabled = NO;
         _countdownLabel.clipsToBounds = YES;
@@ -929,9 +936,8 @@ static BOOL VoidGyroToggleEnabled(void) {
                 _streamCountdownEndDate = savedEndDate;
                 _streamCountdownRemainingSeconds = remaining;
             } else {
-                _streamCountdownState = StreamCountdownStateFinished;
-                _streamCountdownRemainingSeconds = 0;
-                _streamCountdownFinishFeedbackShown = YES;
+                _streamCountdownState = StreamCountdownStateIdle;
+                _streamCountdownRemainingSeconds = _streamCountdownDurationSeconds;
             }
         } else {
             _streamCountdownState = StreamCountdownStateIdle;
@@ -946,9 +952,8 @@ static BOOL VoidGyroToggleEnabled(void) {
             _streamCountdownRemainingSeconds = _streamCountdownDurationSeconds;
         }
     } else if (savedState == StreamCountdownStateFinished) {
-        _streamCountdownState = StreamCountdownStateFinished;
-        _streamCountdownRemainingSeconds = 0;
-        _streamCountdownFinishFeedbackShown = YES;
+        _streamCountdownState = StreamCountdownStateIdle;
+        _streamCountdownRemainingSeconds = _streamCountdownDurationSeconds;
     } else {
         _streamCountdownState = StreamCountdownStateIdle;
         _streamCountdownRemainingSeconds = _streamCountdownDurationSeconds;
@@ -1074,6 +1079,21 @@ static BOOL VoidGyroToggleEnabled(void) {
     [self updateStreamCountdownDisplay];
 }
 
+- (void)resetFinishedStreamCountdownToIdleIfNeeded {
+    if (_streamCountdownState == StreamCountdownStateFinished) {
+        [self resetStreamCountdownToIdle];
+        return;
+    }
+
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if ((StreamCountdownState)[defaults integerForKey:kStreamCountdownStateKey] == StreamCountdownStateFinished) {
+        [defaults setInteger:StreamCountdownStateIdle forKey:kStreamCountdownStateKey];
+        [defaults removeObjectForKey:kStreamCountdownEndDateKey];
+        [defaults removeObjectForKey:kStreamCountdownRemainingSecondsKey];
+        [defaults synchronize];
+    }
+}
+
 - (void)finishStreamCountdownWithFeedback:(BOOL)feedback {
     _streamCountdownState = StreamCountdownStateFinished;
     _streamCountdownRemainingSeconds = 0;
@@ -1107,31 +1127,34 @@ static BOOL VoidGyroToggleEnabled(void) {
     UIColor *baseTint = [self streamCountdownBaseTintColor];
     UIColor *foregroundColor = baseTint;
     UIColor *backgroundColor = [UIColor clearColor];
-    UIEdgeInsets textInsets = UIEdgeInsetsZero;
+    UIEdgeInsets textInsets = UIEdgeInsetsMake(3, 8, 3, 8);
     NSString *displayText = [self formattedStreamCountdownSeconds:_streamCountdownDurationSeconds];
 
     if (_streamCountdownState == StreamCountdownStateRunning) {
         displayText = [self formattedStreamCountdownSeconds:_streamCountdownRemainingSeconds];
         foregroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.72];
         backgroundColor = baseTint;
-        textInsets = UIEdgeInsetsMake(3, 8, 3, 8);
     } else if (_streamCountdownState == StreamCountdownStatePaused) {
         displayText = [self formattedStreamCountdownSeconds:_streamCountdownRemainingSeconds];
         foregroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.55];
         backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.13];
-        textInsets = UIEdgeInsetsMake(3, 8, 3, 8);
     } else if (_streamCountdownState == StreamCountdownStateFinished) {
         displayText = @"DONE";
         foregroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.82];
         backgroundColor = [UIColor colorWithRed:1.0 green:0.82 blue:0.16 alpha:0.92];
-        textInsets = UIEdgeInsetsMake(3, 8, 3, 8);
     }
 
     _countdownLabel.textInsets = textInsets;
     _countdownLabel.text = displayText;
     _countdownLabel.textColor = foregroundColor;
     _countdownLabel.backgroundColor = backgroundColor;
-    [_countdownLabel sizeToFit];
+    CGSize displaySize = [self streamCountdownLabelSizeForText:displayText insets:textInsets];
+    CGSize durationSize = [self streamCountdownLabelSizeForText:[self formattedStreamCountdownSeconds:_streamCountdownDurationSeconds] insets:textInsets];
+    CGSize doneSize = [self streamCountdownLabelSizeForText:@"DONE" insets:textInsets];
+    _countdownLabel.frame = CGRectMake(_countdownLabel.frame.origin.x,
+                                       _countdownLabel.frame.origin.y,
+                                       MAX(MAX(displaySize.width, durationSize.width), doneSize.width),
+                                       MAX(MAX(displaySize.height, durationSize.height), doneSize.height));
     _countdownLabel.layer.cornerRadius = (_streamCountdownState == StreamCountdownStateIdle) ? 0 : (_countdownLabel.bounds.size.height / 2.0f);
     if (_streamCountdownState != StreamCountdownStateFinished) {
         [_countdownLabel.layer removeAllAnimations];
@@ -1149,7 +1172,7 @@ static BOOL VoidGyroToggleEnabled(void) {
     // Layout labels at bottom-left
     CGFloat leftMargin = 24.0f;
     CGFloat bottomMargin = 12.0f;
-    CGFloat spacing = 12.0f;
+    CGFloat spacing = 16.0f;
     
     CGFloat timeX = leftMargin;
     CGFloat batteryX = timeX + _timeLabel.frame.size.width + spacing;
@@ -1209,7 +1232,7 @@ static BOOL VoidGyroToggleEnabled(void) {
 
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Reset timer?"
                                                                    message:nil
-                                                            preferredStyle:UIAlertControllerStyleAlert];
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
                                               style:UIAlertActionStyleCancel
                                             handler:nil]];
@@ -1218,6 +1241,13 @@ static BOOL VoidGyroToggleEnabled(void) {
                                             handler:^(UIAlertAction * _Nonnull action) {
         [self resetStreamCountdownToIdle];
     }]];
+    UIPopoverPresentationController *popover = alert.popoverPresentationController;
+    if (popover) {
+        UIView *sourceView = _countdownHitAreaView ?: self.view;
+        popover.sourceView = sourceView;
+        popover.sourceRect = sourceView.bounds;
+        popover.permittedArrowDirections = UIPopoverArrowDirectionDown | UIPopoverArrowDirectionUp;
+    }
     [self presentViewController:alert animated:YES completion:nil];
 }
 
@@ -1385,10 +1415,10 @@ static BOOL VoidGyroToggleEnabled(void) {
     edgeGlowView.layer.masksToBounds = YES;
 
     CGFloat minSide = MIN(bounds.size.width, bounds.size.height);
-    CGFloat softWidth = MIN(120.0f, MAX(72.0f, minSide * 0.13f));
-    CGFloat hotWidth = MIN(44.0f, MAX(28.0f, minSide * 0.045f));
-    UIColor *softYellow = [UIColor colorWithRed:1.0f green:0.78f blue:0.08f alpha:0.22f];
-    UIColor *hotYellow = [UIColor colorWithRed:1.0f green:0.93f blue:0.32f alpha:0.34f];
+    CGFloat softWidth = MIN(92.0f, MAX(50.0f, minSide * 0.095f));
+    CGFloat hotWidth = MIN(38.0f, MAX(24.0f, minSide * 0.04f));
+    UIColor *softYellow = [UIColor colorWithRed:1.0f green:0.78f blue:0.08f alpha:0.14f];
+    UIColor *hotWhite = [UIColor colorWithWhite:1.0f alpha:0.30f];
 
     [self addStreamCountdownEdgeGlowBandToView:edgeGlowView
                                          width:softWidth
@@ -1396,45 +1426,39 @@ static BOOL VoidGyroToggleEnabled(void) {
                                      blendMode:@"screenBlendMode"];
     [self addStreamCountdownEdgeGlowBandToView:edgeGlowView
                                          width:hotWidth
-                                         color:hotYellow
+                                         color:hotWhite
                                      blendMode:@"plusLighter"];
 
     _streamCountdownEdgeGlowView = edgeGlowView;
     [self.view addSubview:edgeGlowView];
     [self.view bringSubviewToFront:edgeGlowView];
 
-    [UIView animateKeyframesWithDuration:3.0
+    [UIView animateKeyframesWithDuration:2.4
                                    delay:0
                                  options:UIViewKeyframeAnimationOptionCalculationModeCubic
                               animations:^{
-        [UIView addKeyframeWithRelativeStartTime:0.00 relativeDuration:0.06 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.00 relativeDuration:0.075 animations:^{
             edgeGlowView.alpha = 1.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.06 relativeDuration:0.14 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.075 relativeDuration:0.175 animations:^{
             edgeGlowView.alpha = 0.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.20 relativeDuration:0.06 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.25 relativeDuration:0.075 animations:^{
             edgeGlowView.alpha = 1.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.26 relativeDuration:0.14 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.325 relativeDuration:0.175 animations:^{
             edgeGlowView.alpha = 0.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.40 relativeDuration:0.06 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.50 relativeDuration:0.075 animations:^{
             edgeGlowView.alpha = 1.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.46 relativeDuration:0.14 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.575 relativeDuration:0.175 animations:^{
             edgeGlowView.alpha = 0.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.60 relativeDuration:0.06 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.75 relativeDuration:0.075 animations:^{
             edgeGlowView.alpha = 1.0f;
         }];
-        [UIView addKeyframeWithRelativeStartTime:0.66 relativeDuration:0.14 animations:^{
-            edgeGlowView.alpha = 0.0f;
-        }];
-        [UIView addKeyframeWithRelativeStartTime:0.80 relativeDuration:0.06 animations:^{
-            edgeGlowView.alpha = 1.0f;
-        }];
-        [UIView addKeyframeWithRelativeStartTime:0.86 relativeDuration:0.14 animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0.825 relativeDuration:0.175 animations:^{
             edgeGlowView.alpha = 0.0f;
         }];
     } completion:^(BOOL finished) {
@@ -2173,6 +2197,8 @@ static BOOL VoidGyroToggleEnabled(void) {
 }
 
 - (void)returnToMainFrameAllowingBackgroundAutoResume:(BOOL)allowBackgroundResume {
+    [self resetFinishedStreamCountdownToIdleIfNeeded];
+
     // Reset display mode back to default
     [self updatePreferredDisplayMode:NO];
     if (@available(iOS 13.0, *)) {
@@ -2354,6 +2380,7 @@ static BOOL VoidGyroToggleEnabled(void) {
 
 // This fires when the home button is pressed
 - (void)applicationDidEnterBackground:(UIApplication *)application {
+    [self resetFinishedStreamCountdownToIdleIfNeeded];
 
     NSLog(@"did enter background, %d, %@, %d", _settings.enablePIP, self.pipController, self.pipController.isPictureInPictureActive);
     if (_settings.enablePIP && self.pipController && self.pipController.isPictureInPictureActive) {
@@ -2547,6 +2574,7 @@ static BOOL VoidGyroToggleEnabled(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         // Allow the display to go to sleep now
         [UIApplication sharedApplication].idleTimerDisabled = NO;
+        [self resetFinishedStreamCountdownToIdleIfNeeded];
         
         NSString* title;
         NSString* message;
@@ -2648,6 +2676,7 @@ static BOOL VoidGyroToggleEnabled(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         // Allow the display to go to sleep now
         [UIApplication sharedApplication].idleTimerDisabled = NO;
+        [self resetFinishedStreamCountdownToIdleIfNeeded];
         
         NSString* message = [NSString stringWithFormat:@"%s failed with error %d", stageName, errorCode];
         if (portTestFlags != 0) {
