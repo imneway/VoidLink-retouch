@@ -1433,7 +1433,7 @@ static BOOL VoidGyroToggleEnabled(void) {
     [self.view addSubview:edgeGlowView];
     [self.view bringSubviewToFront:edgeGlowView];
 
-    [UIView animateKeyframesWithDuration:2.4
+    [UIView animateKeyframesWithDuration:2.8
                                    delay:0
                                  options:UIViewKeyframeAnimationOptionCalculationModeCubic
                               animations:^{
