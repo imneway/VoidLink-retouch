@@ -1019,6 +1019,7 @@ static BOOL VoidGyroToggleEnabled(void) {
 }
 
 - (void)startStreamCountdownWithDuration:(NSTimeInterval)duration {
+    [self removeStreamCountdownEdgeGlowFeedback];
     _streamCountdownDurationSeconds = [self normalizedStreamCountdownDuration:duration];
     _streamCountdownRemainingSeconds = _streamCountdownDurationSeconds;
     _streamCountdownEndDate = [NSDate dateWithTimeIntervalSinceNow:_streamCountdownDurationSeconds];
@@ -1110,13 +1111,7 @@ static BOOL VoidGyroToggleEnabled(void) {
 
 - (void)applyStreamCountdownDuration:(NSTimeInterval)duration {
     _streamCountdownDurationSeconds = [self normalizedStreamCountdownDuration:duration];
-
-    if (_streamCountdownState == StreamCountdownStateRunning ||
-        _streamCountdownState == StreamCountdownStatePaused) {
-        [self startStreamCountdownWithDuration:_streamCountdownDurationSeconds];
-    } else {
-        [self resetStreamCountdownToIdle];
-    }
+    [self startStreamCountdownWithDuration:_streamCountdownDurationSeconds];
 }
 
 - (void)updateStreamCountdownDisplay {
