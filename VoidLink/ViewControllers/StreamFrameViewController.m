@@ -1344,6 +1344,38 @@ static BOOL VoidGyroToggleEnabled(void) {
 }
 #endif
 
+- (CGFloat)streamCountdownEdgeGlowCornerRadiusForBounds:(CGRect)bounds {
+    if (CGRectIsEmpty(bounds)) {
+        return 0;
+    }
+
+    UIEdgeInsets safeAreaInsets = UIEdgeInsetsZero;
+    if (@available(iOS 11.0, *)) {
+        safeAreaInsets = self.view.window ? self.view.window.safeAreaInsets : self.view.safeAreaInsets;
+    }
+
+    CGFloat maxInset = MAX(MAX(safeAreaInsets.top, safeAreaInsets.bottom), MAX(safeAreaInsets.left, safeAreaInsets.right));
+    if (maxInset <= 0) {
+        return 0;
+    }
+
+    // UIKit does not expose the physical display corner radius; infer it from safe-area insets.
+    CGFloat radius;
+    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        if (maxInset < 16.0f) {
+            return 0;
+        }
+        radius = MIN(28.0f, MAX(18.0f, maxInset));
+    } else {
+        if (maxInset < 30.0f) {
+            return 0;
+        }
+        radius = MIN(58.0f, MAX(39.0f, maxInset));
+    }
+
+    return MIN(radius, MIN(bounds.size.width, bounds.size.height) / 2.0f);
+}
+
 - (CAGradientLayer *)streamCountdownEdgeGlowGradientWithFrame:(CGRect)frame
                                                         start:(CGPoint)start
                                                           end:(CGPoint)end
@@ -1408,14 +1440,16 @@ static BOOL VoidGyroToggleEnabled(void) {
 
     CGFloat scale = [UIScreen mainScreen].scale;
     CGFloat borderWidth = 2.0f / scale;
-    CGRect strokeRect = CGRectInset(bounds, borderWidth / 2.0f, borderWidth / 2.0f);
 
-    CAShapeLayer *borderLayer = [CAShapeLayer layer];
+    CALayer *borderLayer = [CALayer layer];
     borderLayer.frame = bounds;
-    borderLayer.path = [UIBezierPath bezierPathWithRect:strokeRect].CGPath;
-    borderLayer.fillColor = nil;
-    borderLayer.strokeColor = color.CGColor;
-    borderLayer.lineWidth = borderWidth;
+    borderLayer.backgroundColor = [UIColor clearColor].CGColor;
+    borderLayer.borderColor = color.CGColor;
+    borderLayer.borderWidth = borderWidth;
+    borderLayer.cornerRadius = view.layer.cornerRadius;
+    if (@available(iOS 13.0, *)) {
+        borderLayer.cornerCurve = kCACornerCurveContinuous;
+    }
     borderLayer.compositingFilter = blendMode;
     borderLayer.contentsScale = scale;
     [view.layer addSublayer:borderLayer];
@@ -1444,12 +1478,16 @@ static BOOL VoidGyroToggleEnabled(void) {
     edgeGlowView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     edgeGlowView.alpha = 0.0f;
     edgeGlowView.layer.masksToBounds = YES;
+    edgeGlowView.layer.cornerRadius = [self streamCountdownEdgeGlowCornerRadiusForBounds:bounds];
+    if (@available(iOS 13.0, *)) {
+        edgeGlowView.layer.cornerCurve = kCACornerCurveContinuous;
+    }
 
     CGFloat minSide = MIN(bounds.size.width, bounds.size.height);
     CGFloat softWidth = MIN(106.0f, MAX(61.0f, minSide * 0.1125f));
     CGFloat hotWidth = MIN(30.0f, MAX(18.0f, minSide * 0.03f));
     UIColor *softYellow = [UIColor colorWithRed:1.0f green:0.78f blue:0.08f alpha:0.18f];
-    UIColor *hotWhite = [UIColor colorWithWhite:1.0f alpha:0.42f];
+    UIColor *hotWhite = [UIColor colorWithWhite:1.0f alpha:0.64f];
     UIColor *borderWhite = [UIColor colorWithWhite:1.0f alpha:0.85f];
 
     [self addStreamCountdownEdgeGlowBandToView:edgeGlowView
