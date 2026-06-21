@@ -1344,9 +1344,44 @@ static BOOL VoidGyroToggleEnabled(void) {
 }
 #endif
 
+- (UIScreen *)streamCountdownCurrentScreen {
+    return self.view.window.screen ?: [UIScreen mainScreen];
+}
+
+- (BOOL)streamCountdownBounds:(CGRect)bounds fillsScreen:(UIScreen *)screen {
+    if (!screen || CGRectIsEmpty(bounds)) {
+        return NO;
+    }
+
+    CGSize viewSize = bounds.size;
+    CGSize screenSize = screen.bounds.size;
+    CGFloat viewShortSide = MIN(viewSize.width, viewSize.height);
+    CGFloat viewLongSide = MAX(viewSize.width, viewSize.height);
+    CGFloat screenShortSide = MIN(screenSize.width, screenSize.height);
+    CGFloat screenLongSide = MAX(screenSize.width, screenSize.height);
+    return fabs(viewShortSide - screenShortSide) < 1.0f && fabs(viewLongSide - screenLongSide) < 1.0f;
+}
+
+- (BOOL)streamCountdownIsIPadPro11InchM4WithScreen:(UIScreen *)screen {
+    if (UI_USER_INTERFACE_IDIOM() != UIUserInterfaceIdiomPad || !screen) {
+        return NO;
+    }
+
+    CGSize nativeSize = screen.nativeBounds.size;
+    CGFloat nativeShortSide = MIN(nativeSize.width, nativeSize.height);
+    CGFloat nativeLongSide = MAX(nativeSize.width, nativeSize.height);
+    return fabs(nativeShortSide - 1668.0f) < 1.0f && fabs(nativeLongSide - 2420.0f) < 1.0f;
+}
+
 - (CGFloat)streamCountdownEdgeGlowCornerRadiusForBounds:(CGRect)bounds {
     if (CGRectIsEmpty(bounds)) {
         return 0;
+    }
+
+    UIScreen *screen = [self streamCountdownCurrentScreen];
+    if ([self streamCountdownIsIPadPro11InchM4WithScreen:screen] &&
+        [self streamCountdownBounds:bounds fillsScreen:screen]) {
+        return 24.0f;
     }
 
     UIEdgeInsets safeAreaInsets = UIEdgeInsetsZero;
