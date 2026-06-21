@@ -1398,6 +1398,29 @@ static BOOL VoidGyroToggleEnabled(void) {
     }
 }
 
+- (void)addStreamCountdownEdgeGlowBorderToView:(UIView *)view
+                                         color:(UIColor *)color
+                                     blendMode:(NSString *)blendMode {
+    CGRect bounds = view.bounds;
+    if (CGRectIsEmpty(bounds)) {
+        return;
+    }
+
+    CGFloat scale = [UIScreen mainScreen].scale;
+    CGFloat borderWidth = 2.0f / scale;
+    CGRect strokeRect = CGRectInset(bounds, borderWidth / 2.0f, borderWidth / 2.0f);
+
+    CAShapeLayer *borderLayer = [CAShapeLayer layer];
+    borderLayer.frame = bounds;
+    borderLayer.path = [UIBezierPath bezierPathWithRect:strokeRect].CGPath;
+    borderLayer.fillColor = nil;
+    borderLayer.strokeColor = color.CGColor;
+    borderLayer.lineWidth = borderWidth;
+    borderLayer.compositingFilter = blendMode;
+    borderLayer.contentsScale = scale;
+    [view.layer addSublayer:borderLayer];
+}
+
 - (void)removeStreamCountdownEdgeGlowFeedback {
     [_streamCountdownEdgeGlowView.layer removeAllAnimations];
     [_streamCountdownEdgeGlowView removeFromSuperview];
@@ -1423,10 +1446,11 @@ static BOOL VoidGyroToggleEnabled(void) {
     edgeGlowView.layer.masksToBounds = YES;
 
     CGFloat minSide = MIN(bounds.size.width, bounds.size.height);
-    CGFloat softWidth = MIN(92.0f, MAX(50.0f, minSide * 0.095f));
-    CGFloat hotWidth = MIN(38.0f, MAX(24.0f, minSide * 0.04f));
-    UIColor *softYellow = [UIColor colorWithRed:1.0f green:0.78f blue:0.08f alpha:0.14f];
+    CGFloat softWidth = MIN(106.0f, MAX(61.0f, minSide * 0.1125f));
+    CGFloat hotWidth = MIN(30.0f, MAX(18.0f, minSide * 0.03f));
+    UIColor *softYellow = [UIColor colorWithRed:1.0f green:0.78f blue:0.08f alpha:0.18f];
     UIColor *hotWhite = [UIColor colorWithWhite:1.0f alpha:0.42f];
+    UIColor *borderWhite = [UIColor colorWithWhite:1.0f alpha:0.85f];
 
     [self addStreamCountdownEdgeGlowBandToView:edgeGlowView
                                          width:softWidth
@@ -1436,6 +1460,9 @@ static BOOL VoidGyroToggleEnabled(void) {
                                          width:hotWidth
                                          color:hotWhite
                                      blendMode:@"plusLighter"];
+    [self addStreamCountdownEdgeGlowBorderToView:edgeGlowView
+                                           color:borderWhite
+                                       blendMode:@"plusLighter"];
 
     _streamCountdownEdgeGlowView = edgeGlowView;
     [self.view addSubview:edgeGlowView];
