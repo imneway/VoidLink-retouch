@@ -66,6 +66,8 @@
 @property (nonatomic, retain) NSNumber * asyncNativeTouchPriority;
 @property (nonatomic) BOOL multiController;
 @property (nonatomic) BOOL swapABXYButtons;
+@property (nonatomic) BOOL swapABButtons;
+@property (nonatomic) BOOL swapXYButtons;
 @property (nonatomic) BOOL playAudioOnPC;
 @property (nonatomic) BOOL optimizeGames;
 @property (nonatomic) BOOL enableHdr;

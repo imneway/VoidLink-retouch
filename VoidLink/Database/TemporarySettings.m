@@ -12,6 +12,17 @@
 #import "TemporarySettings.h"
 #import "OnScreenControls.h"
 
+#if TARGET_OS_TV
+static BOOL BoolForUserDefaultKeyWithLegacyFallback(NSString *key, NSString *legacyKey) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    id value = [defaults objectForKey:key];
+    if (value != nil) {
+        return [value boolValue];
+    }
+    return [defaults boolForKey:legacyKey];
+}
+#endif
+
 @implementation TemporarySettings
 
 - (id) initFromSettings:(Settings*)settings {
@@ -48,6 +59,9 @@
     self.optimizeGames = [[NSUserDefaults standardUserDefaults] boolForKey:@"optimizeGames"];
     self.multiController = [[NSUserDefaults standardUserDefaults] boolForKey:@"multipleControllers"];
     self.swapABXYButtons = [[NSUserDefaults standardUserDefaults] boolForKey:@"swapABXYButtons"];
+    self.swapABButtons = BoolForUserDefaultKeyWithLegacyFallback(@"swapABButtons", @"swapABXYButtons");
+    self.swapXYButtons = BoolForUserDefaultKeyWithLegacyFallback(@"swapXYButtons", @"swapABXYButtons");
+    self.swapABXYButtons = self.swapABButtons || self.swapXYButtons;
     self.btMouseSupport = [[NSUserDefaults standardUserDefaults] boolForKey:@"btMouseSupport"];
     self.statsOverlay = [[NSUserDefaults standardUserDefaults] boolForKey:@"statsOverlay"];
     self.enableGraphs = [[NSUserDefaults standardUserDefaults] boolForKey:@"enableGraphs"];
@@ -93,7 +107,9 @@
     self.enableHdr = settings.enableHdr;
     self.optimizeGames = settings.optimizeGames;
     self.multiController = settings.multiController;
-    self.swapABXYButtons = settings.swapABXYButtons;
+    self.swapABButtons = [[settings valueForKey:@"swapABButtons"] boolValue];
+    self.swapXYButtons = [[settings valueForKey:@"swapXYButtons"] boolValue];
+    self.swapABXYButtons = self.swapABButtons || self.swapXYButtons;
     self.onscreenControls = settings.onscreenControls;
     self.gyroMode = settings.gyroMode;
     self.emulatedControllerType = settings.emulatedControllerType;

@@ -66,7 +66,8 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     bool _oscEnabled;
     char _controllerNumbers;
     bool _multiController;
-    bool _swapABXYButtons;
+    bool _swapABButtons;
+    bool _swapXYButtons;
     int _gyroMode;
     int _mapGyroTo;          // MapGyroTo enum, see DataManager.h
     BOOL _gyroInvertPitch;   // flip Y axis output (vertical flip)
@@ -1117,15 +1118,20 @@ static inline int16_t clamp_int16(CGFloat v) {
                 short rightStickX, rightStickY;
                 unsigned char leftTrigger, rightTrigger;
                 
-                if (self->_swapABXYButtons) {
+                if (self->_swapABButtons) {
                     UPDATE_BUTTON_FLAG(voidController, B_FLAG, gamepad.buttonA.pressed);
                     UPDATE_BUTTON_FLAG(voidController, A_FLAG, gamepad.buttonB.pressed);
-                    UPDATE_BUTTON_FLAG(voidController, Y_FLAG, gamepad.buttonX.pressed);
-                    UPDATE_BUTTON_FLAG(voidController, X_FLAG, gamepad.buttonY.pressed);
                 }
                 else {
                     UPDATE_BUTTON_FLAG(voidController, A_FLAG, gamepad.buttonA.pressed);
                     UPDATE_BUTTON_FLAG(voidController, B_FLAG, gamepad.buttonB.pressed);
+                }
+
+                if (self->_swapXYButtons) {
+                    UPDATE_BUTTON_FLAG(voidController, Y_FLAG, gamepad.buttonX.pressed);
+                    UPDATE_BUTTON_FLAG(voidController, X_FLAG, gamepad.buttonY.pressed);
+                }
+                else {
                     UPDATE_BUTTON_FLAG(voidController, X_FLAG, gamepad.buttonX.pressed);
                     UPDATE_BUTTON_FLAG(voidController, Y_FLAG, gamepad.buttonY.pressed);
                 }
@@ -1544,7 +1550,8 @@ static inline int16_t clamp_int16(CGFloat v) {
 - (void)updateCommonConfig:(StreamConfiguration* )streamConfig{
     _streamConfig = streamConfig;
     _multiController = streamConfig.multiController;
-    _swapABXYButtons = streamConfig.swapABXYButtons;
+    _swapABButtons = streamConfig.swapABButtons;
+    _swapXYButtons = streamConfig.swapXYButtons;
 
     _oscController.playerIndex = 0;
 

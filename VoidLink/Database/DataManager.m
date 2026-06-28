@@ -13,6 +13,8 @@
 #import "TemporaryApp.h"
 #import "TemporarySettings.h"
 
+static NSString * const kSwapButtonSplitMigratedKey = @"swapButtonSplitMigrated";
+
 @implementation DataManager {
     NSManagedObjectContext *_managedObjectContext;
     AppDelegate *_appDelegate;
@@ -78,7 +80,8 @@
              showKeyboardToolbar:(BOOL)showKeyboardToolbar
                    optimizeGames:(BOOL)optimizeGames
                  multiController:(BOOL)multiController
-                 swapABXYButtons:(BOOL)swapABXYButtons
+                    swapABButtons:(BOOL)swapABButtons
+                    swapXYButtons:(BOOL)swapXYButtons
                        audioOnPC:(BOOL)audioOnPC
                   preferredCodec:(uint32_t)preferredCodec
                        enableYUV444:(BOOL)enableYUV444
@@ -125,7 +128,9 @@
         settingsToSave.showKeyboardToolbar = showKeyboardToolbar;
         settingsToSave.optimizeGames = optimizeGames;
         settingsToSave.multiController = multiController;
-        settingsToSave.swapABXYButtons = swapABXYButtons;
+        [settingsToSave setValue:@(swapABButtons) forKey:@"swapABButtons"];
+        [settingsToSave setValue:@(swapXYButtons) forKey:@"swapXYButtons"];
+        settingsToSave.swapABXYButtons = swapABButtons || swapXYButtons;
         settingsToSave.playAudioOnPC = audioOnPC;
         settingsToSave.preferredCodec = preferredCodec;
         settingsToSave.enableYUV444 = enableYUV444;
@@ -206,17 +211,35 @@
     return tempSettings;
 }
 
+- (void)migrateSplitSwapButtonSettingsIfNeeded:(Settings*)settings {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if ([defaults boolForKey:kSwapButtonSplitMigratedKey]) {
+        return;
+    }
+
+    BOOL legacySwap = settings.swapABXYButtons;
+    [settings setValue:@(legacySwap) forKey:@"swapABButtons"];
+    [settings setValue:@(legacySwap) forKey:@"swapXYButtons"];
+    [defaults setBool:YES forKey:kSwapButtonSplitMigratedKey];
+    [defaults synchronize];
+    if (!settings.isInserted) {
+        [self saveData];
+    }
+}
+
 - (Settings*) retrieveSettings {
     NSArray* fetchedRecords = [self fetchRecords:@"Settings"];
     if (fetchedRecords.count == 0) {
         // create a new settings object with the default values
         NSEntityDescription* entity = [NSEntityDescription entityForName:@"Settings" inManagedObjectContext:_managedObjectContext];
         Settings* settings = [[Settings alloc] initWithEntity:entity insertIntoManagedObjectContext:_managedObjectContext];
-        
+        [self migrateSplitSwapButtonSettingsIfNeeded:settings];
         return settings;
     } else {
         // we should only ever have 1 settings object stored
-        return [fetchedRecords objectAtIndex:0];
+        Settings* settings = [fetchedRecords objectAtIndex:0];
+        [self migrateSplitSwapButtonSettingsIfNeeded:settings];
+        return settings;
     }
 }
 
@@ -301,4 +324,3 @@
 }
 
 @end
-

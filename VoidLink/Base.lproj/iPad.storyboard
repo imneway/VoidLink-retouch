@@ -1146,6 +1146,7 @@
                         <outlet property="softKeyboardToolbarSwitch" destination="ztk-Xx-60P" id="A35-6y-cyp"/>
                         <outlet property="statsOverlaySelector" destination="NLH-qN-qCo" id="EF8-JF-O3S"/>
                         <outlet property="statsOverlayStack" destination="UcP-0b-nJD" id="UdI-NS-O6k"/>
+                        <outlet property="swapAbSwitch" destination="hv7-6b-rez" id="vl-swap-ab-switch"/>
                         <outlet property="swapAbaxyStack" destination="2rP-Ui-wVU" id="gUR-Vz-ORP"/>
                         <outlet property="touchModeLabel" destination="MUY-2Y-bHi" id="6jD-aq-rmE"/>
                         <outlet property="touchModeSelector" destination="bhC-da-VGd" id="hna-Cr-kyd"/>

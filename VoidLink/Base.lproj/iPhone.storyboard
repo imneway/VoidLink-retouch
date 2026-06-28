@@ -1908,7 +1908,7 @@
                         <outlet property="statsOverlaySelector" destination="Bda-3L-Wtg" id="9kj-wY-VjF"/>
                         <outlet property="statsOverlayStack" destination="dby-k3-aiH" id="1Ha-Y3-su4"/>
                         <outlet property="swapAbaxyStack" destination="reE-vr-Mdk" id="y3v-ac-LHy"/>
-                        <outlet property="swapAbxySwitch" destination="T5q-1k-zB3" id="153-6O-0Pv"/>
+                        <outlet property="swapAbSwitch" destination="T5q-1k-zB3" id="153-6O-0Pv"/>
                         <outlet property="touchModeLabel" destination="v5B-5J-veL" id="ewI-fd-FnI"/>
                         <outlet property="touchModeSelector" destination="A9r-dE-rT4" id="DBR-8D-QTL"/>
                         <outlet property="touchModeStack" destination="2bi-tR-7sa" id="Fh0-Q4-fiq"/>

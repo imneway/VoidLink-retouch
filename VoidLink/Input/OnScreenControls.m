@@ -74,7 +74,8 @@ static NSSet *validPositionButtonNames;
     ControllerSupport *_controllerSupport;
     VoidController *_controller;
     NSMutableArray* _deadTouches;
-    BOOL _swapABXY;
+    BOOL _swapABButtons;
+    BOOL _swapXYButtons;
     BOOL _largerStickLR1;
     CGFloat _oscTapExlusionAreaSizeFactor;
     OSCProfilesManager *profilesManager;
@@ -420,7 +421,8 @@ static float L3_Y;
     _controller = [controllerSupport getOscController];
     _deadTouches = [[NSMutableArray alloc] init];
     if (streamConfig) {
-        _swapABXY = streamConfig.swapABXYButtons;
+        _swapABButtons = streamConfig.swapABButtons;
+        _swapXYButtons = streamConfig.swapXYButtons;
     }
     
     _originalControllerLayerOpacityDict = [[NSMutableDictionary alloc] init];
@@ -862,21 +864,21 @@ static float L3_Y;
     _aButton.allowsEdgeAntialiasing = YES;
     _aButton.edgeAntialiasingMask = kCALayerLeftEdge | kCALayerRightEdge | kCALayerBottomEdge | kCALayerTopEdge;
 
-    _aButton.frame = _swapABXY ? bButtonFrame : aButtonFrame;
+    _aButton.frame = _swapABButtons ? bButtonFrame : aButtonFrame;
     [_view.layer addSublayer:_aButton];      // rendering OSC Button here
     
     // create B button
-    _bButton.frame = _swapABXY ? aButtonFrame : bButtonFrame;
+    _bButton.frame = _swapABButtons ? aButtonFrame : bButtonFrame;
     _bButton.contents = (id) bButtonHdImage.CGImage;
     [_view.layer addSublayer:_bButton];
     
     // create X Button
-    _xButton.frame = _swapABXY ? yButtonFrame : xButtonFrame;
+    _xButton.frame = _swapXYButtons ? yButtonFrame : xButtonFrame;
     _xButton.contents = (id) xButtonHdImage.CGImage;
     [_view.layer addSublayer:_xButton];
     
     // create Y Button
-    _yButton.frame = _swapABXY ? xButtonFrame : yButtonFrame;
+    _yButton.frame = _swapXYButtons ? xButtonFrame : yButtonFrame;
     _yButton.contents = (id) yButtonHdImage.CGImage;
     [_view.layer addSublayer:_yButton];
     

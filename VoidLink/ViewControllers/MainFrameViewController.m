@@ -842,7 +842,9 @@ static NSMutableSet* hostList;
     _streamConfig.bitRate = [streamSettings.bitrate intValue];
     _streamConfig.optimizeGameSettings = streamSettings.optimizeGames;
     _streamConfig.playAudioOnPC = streamSettings.playAudioOnPC;
-    _streamConfig.swapABXYButtons = streamSettings.swapABXYButtons;
+    _streamConfig.swapABButtons = streamSettings.swapABButtons;
+    _streamConfig.swapXYButtons = streamSettings.swapXYButtons;
+    _streamConfig.swapABXYButtons = streamSettings.swapABButtons || streamSettings.swapXYButtons;
     _streamConfig.asyncNativeTouchPriority = streamSettings.asyncNativeTouchPriority; // new streamConfig segment
     _streamConfig.gyroMode = [streamSettings.gyroMode intValue];
     _streamConfig.emulatedControllerType = streamSettings.emulatedControllerType.intValue;

@@ -72,7 +72,8 @@
 @property (strong, nonatomic) IBOutlet UILabel *onscreenControllerLabel;
 @property (strong, nonatomic) IBOutlet UISegmentedControl *onScreenWidgetSelector;
 //@property (strong, nonatomic) IBOutlet UISegmentedControl *asyncNativeTouchPrioritySelector;
-@property (strong, nonatomic) IBOutlet UISwitch *swapAbxySwitch;
+@property (strong, nonatomic) IBOutlet UISwitch *swapAbSwitch;
+@property (strong, nonatomic) UISwitch *swapXySwitch;
 @property (strong, nonatomic) IBOutlet UISegmentedControl *codecSelector;
 @property (strong, nonatomic) IBOutlet UISwitch *hdrSwitch;
 @property (strong, nonatomic) IBOutlet UISwitch *yuv444Switch;

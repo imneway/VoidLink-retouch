@@ -555,7 +555,76 @@ BOOL isCustomResolution(int resolutionSelected) {
     if(added) [self addDynamicLabelForStack:stack];
     [menuSection addSubStackView:stack];
 }
-    
+
+- (UILabel*)labelFromSwapStack {
+    for (UIView *view in self.swapAbaxyStack.arrangedSubviews) {
+        if ([view isKindOfClass:[UILabel class]]) {
+            return (UILabel*)view;
+        }
+    }
+    return nil;
+}
+
+- (UIStackView*)swapButtonRowWithLabel:(UILabel*)label switch:(UISwitch*)switchControl {
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    switchControl.translatesAutoresizingMaskIntoConstraints = NO;
+
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[label, switchControl]];
+    row.axis = UILayoutConstraintAxisHorizontal;
+    row.alignment = UIStackViewAlignmentCenter;
+    row.distribution = UIStackViewDistributionFill;
+    row.spacing = 20;
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+
+    label.adjustsFontForContentSizeCategory = YES;
+    label.adjustsFontSizeToFitWidth = YES;
+    label.minimumScaleFactor = 0.65;
+    label.numberOfLines = 1;
+    [label setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    [switchControl setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [switchControl setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+
+    return row;
+}
+
+- (void)configureSplitSwapButtonControls {
+    if (!self.swapAbaxyStack || !self.swapAbSwitch || self.swapXySwitch) {
+        return;
+    }
+
+    UILabel *swapAbLabel = [self labelFromSwapStack];
+    if (!swapAbLabel) {
+        swapAbLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+        swapAbLabel.font = [UIFont systemFontOfSize:17];
+    }
+
+    [self.swapAbaxyStack removeArrangedSubview:swapAbLabel];
+    [swapAbLabel removeFromSuperview];
+    [self.swapAbaxyStack removeArrangedSubview:self.swapAbSwitch];
+    [self.swapAbSwitch removeFromSuperview];
+
+    swapAbLabel.text = @"Swap A/B Buttons";
+    UIStackView *swapAbRow = [self swapButtonRowWithLabel:swapAbLabel switch:self.swapAbSwitch];
+
+    UILabel *swapXyLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    swapXyLabel.font = swapAbLabel.font;
+    swapXyLabel.textColor = swapAbLabel.textColor;
+    swapXyLabel.highlightedTextColor = swapAbLabel.highlightedTextColor;
+    swapXyLabel.textAlignment = swapAbLabel.textAlignment;
+    swapXyLabel.text = @"Swap X/Y Buttons";
+
+    self.swapXySwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    self.swapXySwitch.onTintColor = self.swapAbSwitch.onTintColor;
+    UIStackView *swapXyRow = [self swapButtonRowWithLabel:swapXyLabel switch:self.swapXySwitch];
+
+    self.swapAbaxyStack.axis = UILayoutConstraintAxisVertical;
+    self.swapAbaxyStack.alignment = UIStackViewAlignmentFill;
+    self.swapAbaxyStack.distribution = UIStackViewDistributionFill;
+    self.swapAbaxyStack.spacing = 8;
+    [self.swapAbaxyStack addArrangedSubview:swapAbRow];
+    [self.swapAbaxyStack addArrangedSubview:swapXyRow];
+}
+
 - (void)layoutSections{
     videoSection = [[MenuSectionView alloc] init];
     videoSection.delegate = self;
@@ -1334,6 +1403,7 @@ BOOL isCustomResolution(int resolutionSelected) {
         [view removeFromSuperview];
     }
     [self initParentStack];
+    [self configureSplitSwapButtonControls];
     [self layoutSections];
 
 
@@ -1477,7 +1547,8 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self.citrixX1MouseSwitch setOn:currentSettings.btMouseSupport];
     [self.optimizeGamesSwitch setOn: currentSettings.optimizeGames];
     [self.multiControllerSwitch setOn:currentSettings.multiController];
-    [self.swapAbxySwitch setOn:currentSettings.swapABXYButtons];
+    [self.swapAbSwitch setOn:currentSettings.swapABButtons];
+    [self.swapXySwitch setOn:currentSettings.swapXYButtons];
     
     [self.gyroModeSelector setSelectedSegmentIndex:currentSettings.gyroMode.intValue];
     [self.gyroSensitivitySlider setValue: (uint16_t)(currentSettings.gyroSensitivity.floatValue * 100) animated:YES]; // Load old setting.
@@ -2527,7 +2598,8 @@ BOOL isCustomResolution(int resolutionSelected) {
     BOOL showKeyboardToolbar = self.softKeyboardToolbarSwitch.isOn;
     BOOL optimizeGames = self.optimizeGamesSwitch.isOn;
     BOOL multiController = self.multiControllerSwitch.isOn;
-    BOOL swapABXYButtons = self.swapAbxySwitch.isOn;
+    BOOL swapABButtons = self.swapAbSwitch.isOn;
+    BOOL swapXYButtons = self.swapXySwitch.isOn;
     NSInteger gyroMode = self.gyroModeSelector.selectedSegmentIndex;
     NSInteger emulatedControllerType = [self segmentIndexToControllerType:self.emulatedControllerTypeSelector.selectedSegmentIndex]; //self.emulatedControllerTypeSelector.selectedSegmentIndex;
     BOOL audioOnPC = self.audioOnPcSwitch.isOn;
@@ -2583,7 +2655,8 @@ BOOL isCustomResolution(int resolutionSelected) {
                  showKeyboardToolbar:showKeyboardToolbar
                        optimizeGames:optimizeGames
                      multiController:multiController
-                     swapABXYButtons:swapABXYButtons
+                        swapABButtons:swapABButtons
+                        swapXYButtons:swapXYButtons
                            audioOnPC:audioOnPC
                       preferredCodec:preferredCodec
                         enableYUV444:enableYUV444

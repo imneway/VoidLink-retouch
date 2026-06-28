@@ -32,6 +32,8 @@
 @property BOOL optimizeGameSettings;
 @property BOOL playAudioOnPC;
 @property BOOL swapABXYButtons;
+@property BOOL swapABButtons;
+@property BOOL swapXYButtons;
 @property BOOL asyncNativeTouchPriority;
 @property int gyroMode;
 @property int emulatedControllerType;

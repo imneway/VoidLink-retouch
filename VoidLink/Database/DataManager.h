@@ -93,7 +93,8 @@ typedef NS_ENUM(NSInteger, SettingsMenuMode) {
              showKeyboardToolbar:(BOOL)showKeyboardToolbar
                    optimizeGames:(BOOL)optimizeGames
                  multiController:(BOOL)multiController
-                 swapABXYButtons:(BOOL)swapABXYButtons
+                    swapABButtons:(BOOL)swapABButtons
+                    swapXYButtons:(BOOL)swapXYButtons
                        audioOnPC:(BOOL)audioOnPC
                   preferredCodec:(uint32_t)preferredCodec
                        enableYUV444:(BOOL)enableYUV444
