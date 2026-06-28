@@ -420,10 +420,12 @@ static float L3_Y;
     }
     _controller = [controllerSupport getOscController];
     _deadTouches = [[NSMutableArray alloc] init];
-    if (streamConfig) {
-        _swapABButtons = streamConfig.swapABButtons;
-        _swapXYButtons = streamConfig.swapXYButtons;
-    }
+    // Face-button swap settings are intentionally physical-controller-only.
+    // Keep the virtual OSC button layout canonical even when swap is enabled.
+    // if (streamConfig) {
+    //     _swapABButtons = streamConfig.swapABButtons;
+    //     _swapXYButtons = streamConfig.swapXYButtons;
+    // }
     
     _originalControllerLayerOpacityDict = [[NSMutableDictionary alloc] init];
     _mirroredButtonNames = [[NSMutableSet alloc] init];
@@ -864,21 +866,26 @@ static float L3_Y;
     _aButton.allowsEdgeAntialiasing = YES;
     _aButton.edgeAntialiasingMask = kCALayerLeftEdge | kCALayerRightEdge | kCALayerBottomEdge | kCALayerTopEdge;
 
-    _aButton.frame = _swapABButtons ? bButtonFrame : aButtonFrame;
+    // Physical controller swap does not apply to virtual OSC buttons.
+    // _aButton.frame = _swapABButtons ? bButtonFrame : aButtonFrame;
+    _aButton.frame = aButtonFrame;
     [_view.layer addSublayer:_aButton];      // rendering OSC Button here
     
     // create B button
-    _bButton.frame = _swapABButtons ? aButtonFrame : bButtonFrame;
+    // _bButton.frame = _swapABButtons ? aButtonFrame : bButtonFrame;
+    _bButton.frame = bButtonFrame;
     _bButton.contents = (id) bButtonHdImage.CGImage;
     [_view.layer addSublayer:_bButton];
     
     // create X Button
-    _xButton.frame = _swapXYButtons ? yButtonFrame : xButtonFrame;
+    // _xButton.frame = _swapXYButtons ? yButtonFrame : xButtonFrame;
+    _xButton.frame = xButtonFrame;
     _xButton.contents = (id) xButtonHdImage.CGImage;
     [_view.layer addSublayer:_xButton];
     
     // create Y Button
-    _yButton.frame = _swapXYButtons ? xButtonFrame : yButtonFrame;
+    // _yButton.frame = _swapXYButtons ? xButtonFrame : yButtonFrame;
+    _yButton.frame = yButtonFrame;
     _yButton.contents = (id) yButtonHdImage.CGImage;
     [_view.layer addSublayer:_yButton];
     
