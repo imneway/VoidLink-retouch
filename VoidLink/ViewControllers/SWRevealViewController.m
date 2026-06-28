@@ -824,6 +824,12 @@ const int FrontViewPositionNone = 0xff;
         return gOSCEditorLockedMask;
     }
 
+    extern BOOL gStreamOrientationLocked;
+    extern UIInterfaceOrientationMask gStreamOrientationLockedMask;
+    if (gStreamOrientationLocked) {
+        return gStreamOrientationLockedMask;
+    }
+
     DataManager* dataMan = [[DataManager alloc] init];
     Settings *currentSettings = [dataMan retrieveSettings];
 

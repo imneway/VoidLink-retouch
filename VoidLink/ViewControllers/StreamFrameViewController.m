@@ -133,6 +133,7 @@ typedef NS_ENUM(NSInteger, StreamCountdownState) {
 #pragma mark Snap ratio button
     UIButton *_snapRatioButton;
     UIButton *_oscToggleButton;
+    UIButton *_rotationLockToggleButton;
     UIButton *_gyroToggleButton;
 #else
     UITapGestureRecognizer *_menuTapGestureRecognizer;
@@ -145,6 +146,10 @@ typedef NS_ENUM(NSInteger, StreamCountdownState) {
 // MARK: - 方向锁定 持久化Key（与其它页面一致）
 static NSString * const kOSCLockedPortraitProfileName = @"OSCLockedPortraitProfileName";
 static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapeProfileName";
+static NSString * const kStreamOrientationLockEnabledKey = @"streamOrientationLockEnabled";
+
+BOOL gStreamOrientationLocked = NO;
+UIInterfaceOrientationMask gStreamOrientationLockedMask = UIInterfaceOrientationMaskLandscape;
 
 static NSString * const kStreamCountdownDurationSecondsKey = @"StreamCountdownDurationSeconds";
 static NSString * const kStreamCountdownStateKey = @"StreamCountdownState";
@@ -629,6 +634,9 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
         [_streamView liftMetalVideoViewIfNeeded:0];
         // Hide button if not enabled
         if (_snapRatioButton) _snapRatioButton.hidden = YES;
+        if (_oscToggleButton) _oscToggleButton.hidden = YES;
+        if (_rotationLockToggleButton) _rotationLockToggleButton.hidden = YES;
+        if (_gyroToggleButton) _gyroToggleButton.hidden = YES;
         return;
     }
 
@@ -676,6 +684,54 @@ static BOOL VoidGyroToggleEnabled(void) {
     return storedValue == nil ? YES : [storedValue boolValue];
 }
 
+static BOOL VoidStreamOrientationLockEnabled(void) {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:kStreamOrientationLockEnabledKey];
+}
+
+- (BOOL)stream_orientationLockActive {
+    return VoidStreamOrientationLockEnabled() && !self->_streamView.widgetToolOpened;
+}
+
+- (UIViewController *)stream_orientationRootViewController {
+    UIViewController *root = self.view.window.rootViewController;
+    if (!root) {
+        root = self.navigationController.view.window.rootViewController;
+    }
+    if (!root) {
+        root = self.presentingViewController;
+    }
+    return root ?: self;
+}
+
+- (void)stream_requestOrientationRefresh {
+    UIViewController *root = [self stream_orientationRootViewController];
+    if (@available(iOS 16.0, *)) {
+        [root setNeedsUpdateOfSupportedInterfaceOrientations];
+        [self setNeedsUpdateOfSupportedInterfaceOrientations];
+    } else {
+        [UIViewController attemptRotationToDeviceOrientation];
+    }
+}
+
+- (void)stream_publishOrientationLockAndRefresh {
+    gStreamOrientationLocked = [self stream_orientationLockActive];
+    if (gStreamOrientationLocked) {
+        gStreamOrientationLockedMask = [self osc_lockedOrientationMask];
+    }
+    [self stream_requestOrientationRefresh];
+}
+
+- (void)stream_suspendOrientationLockAndRefresh {
+    gStreamOrientationLocked = NO;
+    [self stream_requestOrientationRefresh];
+}
+
+- (void)stream_updateOrientationLockButton {
+    BOOL locked = VoidStreamOrientationLockEnabled();
+    [_rotationLockToggleButton setTitle:(locked ? @"ROT LOCK" : @"ROT FREE") forState:UIControlStateNormal];
+    _rotationLockToggleButton.accessibilityLabel = locked ? @"屏幕方向已锁定" : @"屏幕方向已解锁";
+}
+
 - (void)updateSnapRatioButton {
     if (!_snapRatioButton) {
         // Custom (not System) buttons: System buttons cross-fade their title
@@ -700,6 +756,16 @@ static BOOL VoidGyroToggleEnabled(void) {
         [self.view addSubview:_oscToggleButton];
     }
 
+    if (!_rotationLockToggleButton) {
+        _rotationLockToggleButton = [UIButton buttonWithType:UIButtonTypeCustom];
+        _rotationLockToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+        [_rotationLockToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
+        [_rotationLockToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
+        _rotationLockToggleButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
+        [_rotationLockToggleButton addTarget:self action:@selector(toggleStreamOrientationLock) forControlEvents:UIControlEventTouchUpInside];
+        [self.view addSubview:_rotationLockToggleButton];
+    }
+
     // Persistent gyro on/off toggle — independent of any GYRO widget hold
     // gate. Stored in NSUserDefaults so the choice survives app restart.
     if (!_gyroToggleButton) {
@@ -721,21 +787,25 @@ static BOOL VoidGyroToggleEnabled(void) {
     NSString *oscTitle = (currentLevel == OnScreenControlsLevelOff) ? @"OSC OFF" : @"OSC ON";
     [_oscToggleButton setTitle:oscTitle forState:UIControlStateNormal];
 
+    [self stream_updateOrientationLockButton];
+
     BOOL gyroForceOn = VoidGyroToggleEnabled();
     [_gyroToggleButton setTitle:(gyroForceOn ? @"GYRO ON" : @"GYRO OFF") forState:UIControlStateNormal];
 
-    // Hide all three buttons if snap screen is not enabled (matches OSC behavior)
+    // Hide all bottom-right stream toggles if snap screen is not enabled.
     _snapRatioButton.hidden = !_settings.snapScreenToTop;
     _oscToggleButton.hidden = !_settings.snapScreenToTop;
+    _rotationLockToggleButton.hidden = !_settings.snapScreenToTop;
     _gyroToggleButton.hidden = !_settings.snapScreenToTop;
 
     if (_snapRatioButton.hidden) return;
 
-    // Layout all three buttons at bottom-right. Each gets a fixed width sized
+    // Layout all buttons at bottom-right. Each gets a fixed width sized
     // to its widest possible title so toggling text never shifts neighbours.
-    // Order, right -> left: snap ratio, gyro, osc (gyro & osc swapped per UX).
+    // Order, right -> left: snap ratio, gyro, rotation lock, osc.
     CGFloat snapW = VoidFixedToggleWidth(_snapRatioButton, @[@"16:9", @"FULL"]);
     CGFloat oscW  = VoidFixedToggleWidth(_oscToggleButton,  @[@"OSC ON", @"OSC OFF"]);
+    CGFloat rotationW = VoidFixedToggleWidth(_rotationLockToggleButton, @[@"ROT LOCK", @"ROT FREE"]);
     CGFloat gyroW = VoidFixedToggleWidth(_gyroToggleButton, @[@"GYRO ON", @"GYRO OFF"]);
     CGFloat btnH  = [_snapRatioButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)].height;
 
@@ -748,7 +818,10 @@ static BOOL VoidGyroToggleEnabled(void) {
     CGFloat gyroX = snapX - gap - gyroW;
     _gyroToggleButton.frame = CGRectMake(gyroX, baseY - btnH, gyroW, btnH);
 
-    CGFloat oscX = gyroX - gap - oscW;
+    CGFloat rotationX = gyroX - gap - rotationW;
+    _rotationLockToggleButton.frame = CGRectMake(rotationX, baseY - btnH, rotationW, btnH);
+
+    CGFloat oscX = rotationX - gap - oscW;
     _oscToggleButton.frame = CGRectMake(oscX, baseY - btnH, oscW, btnH);
 }
 
@@ -764,6 +837,14 @@ static BOOL VoidGyroToggleEnabled(void) {
     [[NSUserDefaults standardUserDefaults] synchronize];
     [_gyroToggleButton setTitle:(newValue ? @"GYRO ON" : @"GYRO OFF") forState:UIControlStateNormal];
     [[NSNotificationCenter defaultCenter] postNotificationName:VoidGyroSettingsDidChangeNotification object:nil];
+}
+
+- (void)toggleStreamOrientationLock {
+    BOOL newValue = !VoidStreamOrientationLockEnabled();
+    [[NSUserDefaults standardUserDefaults] setBool:newValue forKey:kStreamOrientationLockEnabledKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    [self stream_updateOrientationLockButton];
+    [self stream_publishOrientationLockAndRefresh];
 }
 
 - (void)createTimeBatteryDisplay {
@@ -1654,6 +1735,7 @@ static BOOL VoidGyroToggleEnabled(void) {
 - (void)viewDidAppear:(BOOL)animated
 {
     [super viewDidAppear:animated];
+    [self stream_publishOrientationLockAndRefresh];
     
     _deviceWindow = self.view.window;
     if (@available(iOS 13.0, *)) {
@@ -1842,6 +1924,7 @@ static BOOL VoidGyroToggleEnabled(void) {
     _reconnectProbeTick = 0;
     
     _streamView = [[StreamView alloc] initWithFrame:self.view.frame];
+    [self stream_publishOrientationLockAndRefresh];
     
     toolBoxViewController = [[ToolboxViewController alloc] init];
     toolBoxViewController.specialEntryDelegate = self;
@@ -2127,6 +2210,7 @@ static BOOL VoidGyroToggleEnabled(void) {
 
 - (void)openWidgetLayoutTool{
     _streamView.widgetToolOpened = true;
+    [self stream_suspendOrientationLockAndRefresh];
     [self->_streamView disableOnScreenControls];
     [self->_streamView clearOnScreenWidgets]; // clear all onScreenKeyboardButtons before entering edit mode
     _layoutOnScreenControlsVC.toolbarStackView.hidden = false;
@@ -2151,6 +2235,7 @@ static BOOL VoidGyroToggleEnabled(void) {
                                         andConfig:(StreamConfiguration*)_streamConfig];
     [self->_streamView showOnScreenControls];
     [self->_streamView reloadOnScreenWidgetViews]; //update keyboard buttons here
+    [self stream_publishOrientationLockAndRefresh];
 }
 
 - (void)setUserInteractionEnabledForStreamView:(bool)enabled{
@@ -2168,6 +2253,7 @@ static BOOL VoidGyroToggleEnabled(void) {
     // Only cleanup when we're being destroyed
     if (parent == nil) {
         //NSLog(@"gyro cleanup, count: %ld", _controller.count);
+        [self stream_suspendOrientationLockAndRefresh];
         [_controllerSupport cleanup];
 
         [UIApplication sharedApplication].idleTimerDisabled = NO;
@@ -3054,6 +3140,7 @@ static BOOL VoidGyroToggleEnabled(void) {
 
 - (BOOL)shouldAutorotate {
     if ([self osc_editorRotationLocked]) { return NO; } // honored on iOS < 16
+    if ([self stream_orientationLockActive]) { return NO; }
     return YES;
 }
 
@@ -3063,6 +3150,9 @@ static BOOL VoidGyroToggleEnabled(void) {
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
     if ([self osc_editorRotationLocked]) {
         return [self osc_lockedOrientationMask];
+    }
+    if ([self stream_orientationLockActive]) {
+        return gStreamOrientationLockedMask;
     }
     return [super supportedInterfaceOrientations]; // unchanged default when not locked
 }
