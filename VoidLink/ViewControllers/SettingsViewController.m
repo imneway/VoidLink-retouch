@@ -569,6 +569,14 @@ BOOL isCustomResolution(int resolutionSelected) {
     label.translatesAutoresizingMaskIntoConstraints = NO;
     switchControl.translatesAutoresizingMaskIntoConstraints = NO;
 
+    NSMutableArray<NSLayoutConstraint*> *switchWidthConstraints = [[NSMutableArray alloc] init];
+    for (NSLayoutConstraint *constraint in switchControl.constraints) {
+        if (constraint.firstItem == switchControl && constraint.firstAttribute == NSLayoutAttributeWidth) {
+            [switchWidthConstraints addObject:constraint];
+        }
+    }
+    [NSLayoutConstraint deactivateConstraints:switchWidthConstraints];
+
     UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[label, switchControl]];
     row.axis = UILayoutConstraintAxisHorizontal;
     row.alignment = UIStackViewAlignmentCenter;
