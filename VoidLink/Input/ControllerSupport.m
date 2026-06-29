@@ -17,6 +17,7 @@ NSString* const VoidGyroSettingsDidChangeNotification = @"VoidGyroSettingsDidCha
 #import "OnScreenControls.h"
 
 #import "DataManager.h"
+#import "VoidLink-Swift.h"
 #include "Limelight.h"
 
 @import GameController;
@@ -26,6 +27,10 @@ NSString* const VoidGyroSettingsDidChangeNotification = @"VoidGyroSettingsDidCha
 @import AudioToolbox;
 
 static const double MOUSE_SPEED_DIVISOR = 1.25;
+static NSString * const PhysicalControllerComboDefaultsKey = @"physicalControllerComboMappingsV1";
+static NSString * const PhysicalControllerComboDidChangeNotification = @"PhysicalControllerComboMappingsDidChangeNotification";
+static const float PHYSICAL_COMBO_TRIGGER_PRESS_THRESHOLD = 0.55f;
+static const float PHYSICAL_COMBO_TRIGGER_RELEASE_THRESHOLD = 0.25f;
 
 @interface ControllerSupport()
 
@@ -45,9 +50,11 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     id _keyboardConnectObserver;
     id _keyboardDisconnectObserver;
     id _gyroSettingsObserver;
+    id _physicalControllerComboSettingsObserver;
 
     NSLock *_controllerStreamLock;
     NSMutableDictionary *_voidControllers;
+    NSMutableDictionary<NSString*, NSDictionary*> *_physicalControllerComboCommandsBySource;
     id<ControllerSupportDelegate> _delegate;
     StreamConfiguration* _streamConfig;
     
@@ -160,6 +167,327 @@ static inline int16_t clamp_int16(CGFloat v) {
     self.hasGyroToggleButton = NO;
     self.hasGyroPauseButton = NO;
     [self resetMotionButtonHolds];
+}
+
+// MARK: - Physical controller combo mapping
+
+- (void)ensurePhysicalControllerComboStateForController:(VoidController *)controller {
+    if (!controller) return;
+    @synchronized(controller) {
+        if (!controller.comboSourcePressedStates) controller.comboSourcePressedStates = [[NSMutableDictionary alloc] init];
+        if (!controller.comboSourceGenerations) controller.comboSourceGenerations = [[NSMutableDictionary alloc] init];
+        if (!controller.comboActiveTargetsBySource) controller.comboActiveTargetsBySource = [[NSMutableDictionary alloc] init];
+        if (!controller.comboTargetHoldCounts) controller.comboTargetHoldCounts = [[NSMutableDictionary alloc] init];
+    }
+}
+
+- (void)reloadPhysicalControllerComboMappings {
+    NSArray *storedMappings = [[NSUserDefaults standardUserDefaults] arrayForKey:PhysicalControllerComboDefaultsKey];
+    NSMutableDictionary<NSString*, NSDictionary*> *commandsBySource = [[NSMutableDictionary alloc] init];
+
+    for (id item in storedMappings) {
+        if (![item isKindOfClass:[NSDictionary class]]) continue;
+        NSDictionary *mapping = (NSDictionary *)item;
+        id enabledValue = mapping[@"enabled"];
+        if (enabledValue != nil && ![enabledValue boolValue]) continue;
+
+        NSString *source = [CommandManager normalizedPhysicalControllerComboSource:mapping[@"source"]];
+        NSString *command = [mapping[@"command"] isKindOfClass:[NSString class]] ? mapping[@"command"] : nil;
+        NSArray<NSString *> *tokens = command.length > 0 ? [CommandManager extractPhysicalControllerComboTokensFrom:command] : nil;
+        if (source.length == 0 || tokens.count == 0) continue;
+
+        NSMutableArray<NSString *> *targets = [tokens mutableCopy];
+        uint32_t delayMs = 0;
+        NSString *last = targets.lastObject;
+        if ([last hasSuffix:@"MS"]) {
+            NSString *delayText = [last substringToIndex:last.length - 2];
+            delayMs = (uint32_t)delayText.integerValue;
+            [targets removeLastObject];
+        }
+        if (targets.count == 0) continue;
+
+        commandsBySource[source] = @{
+            @"targets": [targets copy],
+            @"delayMs": @(delayMs)
+        };
+    }
+
+    @synchronized(self) {
+        _physicalControllerComboCommandsBySource = commandsBySource;
+    }
+}
+
+- (NSDictionary *)physicalControllerComboCommandForSource:(NSString *)source {
+    if (source.length == 0) return nil;
+    @synchronized(self) {
+        return _physicalControllerComboCommandsBySource[source];
+    }
+}
+
+- (BOOL)physicalControllerComboHasMappingForSource:(NSString *)source {
+    return [self physicalControllerComboCommandForSource:source] != nil;
+}
+
+- (NSInteger)nextPhysicalControllerComboGenerationForSource:(NSString *)source controller:(VoidController *)controller {
+    [self ensurePhysicalControllerComboStateForController:controller];
+    @synchronized(controller) {
+        NSInteger generation = [controller.comboSourceGenerations[source] integerValue] + 1;
+        controller.comboSourceGenerations[source] = @(generation);
+        return generation;
+    }
+}
+
+- (int)physicalControllerComboButtonFlagForTarget:(NSString *)target {
+    if ([target isEqualToString:@"OSCA"]) return A_FLAG;
+    if ([target isEqualToString:@"OSCB"]) return B_FLAG;
+    if ([target isEqualToString:@"OSCX"]) return X_FLAG;
+    if ([target isEqualToString:@"OSCY"]) return Y_FLAG;
+    if ([target isEqualToString:@"OSCL1"]) return LB_FLAG;
+    if ([target isEqualToString:@"OSCR1"]) return RB_FLAG;
+    if ([target isEqualToString:@"OSCL3"]) return LS_CLK_FLAG;
+    if ([target isEqualToString:@"OSCR3"]) return RS_CLK_FLAG;
+    if ([target isEqualToString:@"OSCSTART"]) return PLAY_FLAG;
+    if ([target isEqualToString:@"OSCSELECT"]) return BACK_FLAG;
+    if ([target isEqualToString:@"OSCUP"]) return UP_FLAG;
+    if ([target isEqualToString:@"OSCDOWN"]) return DOWN_FLAG;
+    if ([target isEqualToString:@"OSCLEFT"]) return LEFT_FLAG;
+    if ([target isEqualToString:@"OSCRIGHT"]) return RIGHT_FLAG;
+    if ([target isEqualToString:@"DS4TCHBTN"]) return TOUCHPAD_FLAG;
+    if ([target isEqualToString:@"PADDLE1"]) return PADDLE1_FLAG;
+    if ([target isEqualToString:@"PADDLE2"]) return PADDLE2_FLAG;
+    if ([target isEqualToString:@"PADDLE3"]) return PADDLE3_FLAG;
+    if ([target isEqualToString:@"PADDLE4"]) return PADDLE4_FLAG;
+    if ([target isEqualToString:@"MISC"]) return MISC_FLAG;
+    return 0;
+}
+
+- (BOOL)physicalControllerComboIsLeftTriggerTarget:(NSString *)target {
+    return [target isEqualToString:@"OSCL2"];
+}
+
+- (BOOL)physicalControllerComboIsRightTriggerTarget:(NSString *)target {
+    return [target isEqualToString:@"OSCR2"];
+}
+
+- (uint32_t)physicalControllerComboSupportedButtonFlags {
+    uint32_t flags = 0;
+    @synchronized(self) {
+        for (NSDictionary *command in _physicalControllerComboCommandsBySource.allValues) {
+            NSArray<NSString *> *targets = command[@"targets"];
+            for (NSString *target in targets) {
+                flags |= [self physicalControllerComboButtonFlagForTarget:target];
+            }
+        }
+    }
+    return flags;
+}
+
+- (void)physicalControllerComboReleaseTarget:(NSString *)target controller:(VoidController *)controller {
+    [self ensurePhysicalControllerComboStateForController:controller];
+    @synchronized(controller) {
+        NSInteger count = [controller.comboTargetHoldCounts[target] integerValue];
+        if (count <= 1) {
+            [controller.comboTargetHoldCounts removeObjectForKey:target];
+            int flag = [self physicalControllerComboButtonFlagForTarget:target];
+            if (flag != 0) {
+                controller.comboButtonFlags &= ~flag;
+            } else if ([self physicalControllerComboIsLeftTriggerTarget:target]) {
+                controller.comboLeftTrigger = 0;
+            } else if ([self physicalControllerComboIsRightTriggerTarget:target]) {
+                controller.comboRightTrigger = 0;
+            }
+        } else {
+            controller.comboTargetHoldCounts[target] = @(count - 1);
+        }
+    }
+    [self updateFinished:controller];
+}
+
+- (BOOL)physicalControllerComboPressTarget:(NSString *)target source:(NSString *)source generation:(NSInteger)generation controller:(VoidController *)controller {
+    [self ensurePhysicalControllerComboStateForController:controller];
+    @synchronized(controller) {
+        BOOL sourceStillPressed = [controller.comboSourcePressedStates[source] boolValue];
+        NSInteger currentGeneration = [controller.comboSourceGenerations[source] integerValue];
+        if (!sourceStillPressed || currentGeneration != generation) {
+            return NO;
+        }
+
+        NSMutableArray<NSString *> *activeTargets = controller.comboActiveTargetsBySource[source];
+        if (!activeTargets) {
+            activeTargets = [[NSMutableArray alloc] init];
+            controller.comboActiveTargetsBySource[source] = activeTargets;
+        }
+        [activeTargets addObject:target];
+
+        NSInteger count = [controller.comboTargetHoldCounts[target] integerValue] + 1;
+        controller.comboTargetHoldCounts[target] = @(count);
+
+        int flag = [self physicalControllerComboButtonFlagForTarget:target];
+        if (flag != 0) {
+            controller.comboButtonFlags |= flag;
+        } else if ([self physicalControllerComboIsLeftTriggerTarget:target]) {
+            controller.comboLeftTrigger = 0xFF;
+        } else if ([self physicalControllerComboIsRightTriggerTarget:target]) {
+            controller.comboRightTrigger = 0xFF;
+        }
+    }
+    [self updateFinished:controller];
+    return YES;
+}
+
+- (BOOL)physicalControllerComboPressTargets:(NSArray<NSString *> *)targets source:(NSString *)source generation:(NSInteger)generation controller:(VoidController *)controller {
+    if (targets.count == 0) return NO;
+    [self ensurePhysicalControllerComboStateForController:controller];
+    @synchronized(controller) {
+        BOOL sourceStillPressed = [controller.comboSourcePressedStates[source] boolValue];
+        NSInteger currentGeneration = [controller.comboSourceGenerations[source] integerValue];
+        if (!sourceStillPressed || currentGeneration != generation) {
+            return NO;
+        }
+
+        NSMutableArray<NSString *> *activeTargets = controller.comboActiveTargetsBySource[source];
+        if (!activeTargets) {
+            activeTargets = [[NSMutableArray alloc] init];
+            controller.comboActiveTargetsBySource[source] = activeTargets;
+        }
+
+        for (NSString *target in targets) {
+            [activeTargets addObject:target];
+
+            NSInteger count = [controller.comboTargetHoldCounts[target] integerValue] + 1;
+            controller.comboTargetHoldCounts[target] = @(count);
+
+            int flag = [self physicalControllerComboButtonFlagForTarget:target];
+            if (flag != 0) {
+                controller.comboButtonFlags |= flag;
+            } else if ([self physicalControllerComboIsLeftTriggerTarget:target]) {
+                controller.comboLeftTrigger = 0xFF;
+            } else if ([self physicalControllerComboIsRightTriggerTarget:target]) {
+                controller.comboRightTrigger = 0xFF;
+            }
+        }
+    }
+    [self updateFinished:controller];
+    return YES;
+}
+
+- (void)schedulePhysicalControllerComboTargets:(NSArray<NSString *> *)targets
+                                        source:(NSString *)source
+                                    generation:(NSInteger)generation
+                                       delayMs:(uint32_t)delayMs
+                                         index:(NSUInteger)index
+                                    controller:(VoidController *)controller {
+    if (index >= targets.count) return;
+    if (delayMs == 0) {
+        [self physicalControllerComboPressTargets:targets source:source generation:generation controller:controller];
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    void (^pressStep)(void) = ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        BOOL didPress = [strongSelf physicalControllerComboPressTarget:targets[index]
+                                                                source:source
+                                                            generation:generation
+                                                            controller:controller];
+        if (!didPress) return;
+        [strongSelf schedulePhysicalControllerComboTargets:targets
+                                                    source:source
+                                                generation:generation
+                                                   delayMs:delayMs
+                                                     index:index + 1
+                                                controller:controller];
+    };
+
+    if (index == 0 || delayMs == 0) {
+        pressStep();
+    } else {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayMs * NSEC_PER_MSEC),
+                       dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0),
+                       pressStep);
+    }
+}
+
+- (void)physicalControllerComboReleaseSource:(NSString *)source controller:(VoidController *)controller {
+    NSArray<NSString *> *targetsToRelease;
+    [self ensurePhysicalControllerComboStateForController:controller];
+    @synchronized(controller) {
+        targetsToRelease = [controller.comboActiveTargetsBySource[source] copy];
+        [controller.comboActiveTargetsBySource removeObjectForKey:source];
+    }
+
+    for (NSString *target in [targetsToRelease reverseObjectEnumerator]) {
+        [self physicalControllerComboReleaseTarget:target controller:controller];
+    }
+}
+
+- (BOOL)handlePhysicalControllerComboSource:(NSString *)source pressed:(BOOL)pressed controller:(VoidController *)controller {
+    NSDictionary *command = [self physicalControllerComboCommandForSource:source];
+    if (!command || !controller) return NO;
+
+    [self ensurePhysicalControllerComboStateForController:controller];
+    BOOL previousPressed;
+    @synchronized(controller) {
+        previousPressed = [controller.comboSourcePressedStates[source] boolValue];
+        if (previousPressed == pressed) {
+            return YES;
+        }
+        controller.comboSourcePressedStates[source] = @(pressed);
+    }
+
+    NSInteger generation = [self nextPhysicalControllerComboGenerationForSource:source controller:controller];
+    if (pressed) {
+        NSArray<NSString *> *targets = command[@"targets"];
+        uint32_t delayMs = (uint32_t)[command[@"delayMs"] unsignedIntegerValue];
+        @synchronized(controller) {
+            controller.comboActiveTargetsBySource[source] = [[NSMutableArray alloc] init];
+        }
+        [self schedulePhysicalControllerComboTargets:targets
+                                              source:source
+                                          generation:generation
+                                             delayMs:delayMs
+                                               index:0
+                                          controller:controller];
+    } else {
+        [self physicalControllerComboReleaseSource:source controller:controller];
+    }
+
+    return YES;
+}
+
+- (BOOL)physicalControllerComboTriggerPressedForSource:(NSString *)source value:(float)value controller:(VoidController *)controller {
+    [self ensurePhysicalControllerComboStateForController:controller];
+    @synchronized(controller) {
+        BOOL previousPressed = [controller.comboSourcePressedStates[source] boolValue];
+        if (previousPressed) {
+            return value > PHYSICAL_COMBO_TRIGGER_RELEASE_THRESHOLD;
+        }
+        return value > PHYSICAL_COMBO_TRIGGER_PRESS_THRESHOLD;
+    }
+}
+
+- (void)clearPhysicalControllerCombosForController:(VoidController *)controller {
+    if (!controller) return;
+    [self ensurePhysicalControllerComboStateForController:controller];
+    @synchronized(controller) {
+        for (NSString *source in controller.comboSourceGenerations.allKeys) {
+            controller.comboSourceGenerations[source] = @([controller.comboSourceGenerations[source] integerValue] + 1);
+        }
+        [controller.comboSourcePressedStates removeAllObjects];
+        [controller.comboActiveTargetsBySource removeAllObjects];
+        [controller.comboTargetHoldCounts removeAllObjects];
+        controller.comboButtonFlags = 0;
+        controller.comboLeftTrigger = 0;
+        controller.comboRightTrigger = 0;
+    }
+    [self updateFinished:controller];
+}
+
+- (void)clearPhysicalControllerCombosForAllControllers {
+    for (VoidController *controller in _voidControllers.allValues) {
+        [self clearPhysicalControllerCombosForController:controller];
+    }
 }
 
 -(void) rumble:(unsigned short)controllerNumber lowFreqMotor:(unsigned short)lowFreqMotor highFreqMotor:(unsigned short)highFreqMotor
@@ -676,12 +1004,16 @@ static inline int16_t clamp_int16(CGFloat v) {
             int16_t leftStickY = controller.lastLeftStickY;
             int16_t rightStickX = controller.lastRightStickX;
             int16_t rightStickY = controller.lastRightStickY;
+
+            buttonFlags |= controller.comboButtonFlags;
+            leftTrigger = MAX(leftTrigger, controller.comboLeftTrigger);
+            rightTrigger = MAX(rightTrigger, controller.comboRightTrigger);
             
             // If this is merged with another controller, combine the inputs
             if (controller.mergedWithController) {
-                buttonFlags |= controller.mergedWithController.lastButtonFlags;
-                leftTrigger = MAX(leftTrigger, controller.mergedWithController.lastLeftTrigger);
-                rightTrigger = MAX(rightTrigger, controller.mergedWithController.lastRightTrigger);
+                buttonFlags |= controller.mergedWithController.lastButtonFlags | controller.mergedWithController.comboButtonFlags;
+                leftTrigger = MAX(leftTrigger, MAX(controller.mergedWithController.lastLeftTrigger, controller.mergedWithController.comboLeftTrigger));
+                rightTrigger = MAX(rightTrigger, MAX(controller.mergedWithController.lastRightTrigger, controller.mergedWithController.comboRightTrigger));
                 leftStickX = MAX_MAGNITUDE(leftStickX, controller.mergedWithController.lastLeftStickX);
                 leftStickY = MAX_MAGNITUDE(leftStickY, controller.mergedWithController.lastLeftStickY);
                 rightStickX = MAX_MAGNITUDE(rightStickX, controller.mergedWithController.lastRightStickX);
@@ -985,6 +1317,8 @@ static inline int16_t clamp_int16(CGFloat v) {
                 type = LI_CTYPE_PS;
                 capabilities |= LI_CCAP_GYRO | LI_CCAP_ACCEL;
             }
+
+            supportedButtonFlags |= [self physicalControllerComboSupportedButtonFlags];
         }
     }
     else {
@@ -1091,14 +1425,21 @@ static inline int16_t clamp_int16(CGFloat v) {
                 
                 // Get off the main thread
                 dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-                    [self setButtonFlag:voidController flags:PLAY_FLAG];
-                    [self updateFinished:voidController];
+                    BOOL mappedStart = [self handlePhysicalControllerComboSource:@"START" pressed:YES controller:voidController];
+                    if (!mappedStart) {
+                        [self setButtonFlag:voidController flags:PLAY_FLAG];
+                        [self updateFinished:voidController];
+                    }
                     
                     // Pause for 100 ms
                     usleep(100 * 1000);
                     
-                    [self clearButtonFlag:voidController flags:PLAY_FLAG];
-                    [self updateFinished:voidController];
+                    if (mappedStart) {
+                        [self handlePhysicalControllerComboSource:@"START" pressed:NO controller:voidController];
+                    } else {
+                        [self clearButtonFlag:voidController flags:PLAY_FLAG];
+                        [self updateFinished:voidController];
+                    }
                 });
             };
         }
@@ -1114,85 +1455,130 @@ static inline int16_t clamp_int16(CGFloat v) {
             
             controller.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *gamepad, GCControllerElement *element) {
                 VoidController* voidController = [self->_voidControllers objectForKey:[NSNumber numberWithInteger:gamepad.controller.playerIndex]];
+                if (voidController == nil) return;
                 short leftStickX, leftStickY;
                 short rightStickX, rightStickY;
                 unsigned char leftTrigger, rightTrigger;
+                BOOL comboA = [self handlePhysicalControllerComboSource:@"A" pressed:gamepad.buttonA.pressed controller:voidController];
+                BOOL comboB = [self handlePhysicalControllerComboSource:@"B" pressed:gamepad.buttonB.pressed controller:voidController];
+                BOOL comboX = [self handlePhysicalControllerComboSource:@"X" pressed:gamepad.buttonX.pressed controller:voidController];
+                BOOL comboY = [self handlePhysicalControllerComboSource:@"Y" pressed:gamepad.buttonY.pressed controller:voidController];
                 
                 if (self->_swapABButtons) {
-                    UPDATE_BUTTON_FLAG(voidController, B_FLAG, gamepad.buttonA.pressed);
-                    UPDATE_BUTTON_FLAG(voidController, A_FLAG, gamepad.buttonB.pressed);
+                    if (!comboA) UPDATE_BUTTON_FLAG(voidController, B_FLAG, gamepad.buttonA.pressed);
+                    if (!comboB) UPDATE_BUTTON_FLAG(voidController, A_FLAG, gamepad.buttonB.pressed);
                 }
                 else {
-                    UPDATE_BUTTON_FLAG(voidController, A_FLAG, gamepad.buttonA.pressed);
-                    UPDATE_BUTTON_FLAG(voidController, B_FLAG, gamepad.buttonB.pressed);
+                    if (!comboA) UPDATE_BUTTON_FLAG(voidController, A_FLAG, gamepad.buttonA.pressed);
+                    if (!comboB) UPDATE_BUTTON_FLAG(voidController, B_FLAG, gamepad.buttonB.pressed);
                 }
 
                 if (self->_swapXYButtons) {
-                    UPDATE_BUTTON_FLAG(voidController, Y_FLAG, gamepad.buttonX.pressed);
-                    UPDATE_BUTTON_FLAG(voidController, X_FLAG, gamepad.buttonY.pressed);
+                    if (!comboX) UPDATE_BUTTON_FLAG(voidController, Y_FLAG, gamepad.buttonX.pressed);
+                    if (!comboY) UPDATE_BUTTON_FLAG(voidController, X_FLAG, gamepad.buttonY.pressed);
                 }
                 else {
-                    UPDATE_BUTTON_FLAG(voidController, X_FLAG, gamepad.buttonX.pressed);
-                    UPDATE_BUTTON_FLAG(voidController, Y_FLAG, gamepad.buttonY.pressed);
+                    if (!comboX) UPDATE_BUTTON_FLAG(voidController, X_FLAG, gamepad.buttonX.pressed);
+                    if (!comboY) UPDATE_BUTTON_FLAG(voidController, Y_FLAG, gamepad.buttonY.pressed);
                 }
                 
-                UPDATE_BUTTON_FLAG(voidController, UP_FLAG, gamepad.dpad.up.pressed);
-                UPDATE_BUTTON_FLAG(voidController, DOWN_FLAG, gamepad.dpad.down.pressed);
-                UPDATE_BUTTON_FLAG(voidController, LEFT_FLAG, gamepad.dpad.left.pressed);
-                UPDATE_BUTTON_FLAG(voidController, RIGHT_FLAG, gamepad.dpad.right.pressed);
+                if (![self handlePhysicalControllerComboSource:@"UP" pressed:gamepad.dpad.up.pressed controller:voidController]) {
+                    UPDATE_BUTTON_FLAG(voidController, UP_FLAG, gamepad.dpad.up.pressed);
+                }
+                if (![self handlePhysicalControllerComboSource:@"DOWN" pressed:gamepad.dpad.down.pressed controller:voidController]) {
+                    UPDATE_BUTTON_FLAG(voidController, DOWN_FLAG, gamepad.dpad.down.pressed);
+                }
+                if (![self handlePhysicalControllerComboSource:@"LEFT" pressed:gamepad.dpad.left.pressed controller:voidController]) {
+                    UPDATE_BUTTON_FLAG(voidController, LEFT_FLAG, gamepad.dpad.left.pressed);
+                }
+                if (![self handlePhysicalControllerComboSource:@"RIGHT" pressed:gamepad.dpad.right.pressed controller:voidController]) {
+                    UPDATE_BUTTON_FLAG(voidController, RIGHT_FLAG, gamepad.dpad.right.pressed);
+                }
                 
-                UPDATE_BUTTON_FLAG(voidController, LB_FLAG, gamepad.leftShoulder.pressed);
-                UPDATE_BUTTON_FLAG(voidController, RB_FLAG, gamepad.rightShoulder.pressed);
+                if (![self handlePhysicalControllerComboSource:@"L1" pressed:gamepad.leftShoulder.pressed controller:voidController]) {
+                    UPDATE_BUTTON_FLAG(voidController, LB_FLAG, gamepad.leftShoulder.pressed);
+                }
+                if (![self handlePhysicalControllerComboSource:@"R1" pressed:gamepad.rightShoulder.pressed controller:voidController]) {
+                    UPDATE_BUTTON_FLAG(voidController, RB_FLAG, gamepad.rightShoulder.pressed);
+                }
                 
                 // Yay, iOS 12.1 now supports analog stick buttons
                 if (@available(iOS 12.1, tvOS 12.1, *)) {
                     if (gamepad.leftThumbstickButton != nil) {
-                        UPDATE_BUTTON_FLAG(voidController, LS_CLK_FLAG, gamepad.leftThumbstickButton.pressed);
+                        if (![self handlePhysicalControllerComboSource:@"L3" pressed:gamepad.leftThumbstickButton.pressed controller:voidController]) {
+                            UPDATE_BUTTON_FLAG(voidController, LS_CLK_FLAG, gamepad.leftThumbstickButton.pressed);
+                        }
                     }
                     if (gamepad.rightThumbstickButton != nil) {
-                        UPDATE_BUTTON_FLAG(voidController, RS_CLK_FLAG, gamepad.rightThumbstickButton.pressed);
+                        if (![self handlePhysicalControllerComboSource:@"R3" pressed:gamepad.rightThumbstickButton.pressed controller:voidController]) {
+                            UPDATE_BUTTON_FLAG(voidController, RS_CLK_FLAG, gamepad.rightThumbstickButton.pressed);
+                        }
                     }
                 }
                 
                 if (@available(iOS 13.0, tvOS 13.0, *)) {
                     // Options button is optional (only present on Xbox One S and PS4 gamepads)
                     if (gamepad.buttonOptions != nil) {
-                        UPDATE_BUTTON_FLAG(voidController, BACK_FLAG, gamepad.buttonOptions.pressed);
+                        if (![self handlePhysicalControllerComboSource:@"SELECT" pressed:gamepad.buttonOptions.pressed controller:voidController]) {
+                            UPDATE_BUTTON_FLAG(voidController, BACK_FLAG, gamepad.buttonOptions.pressed);
+                        }
 
                         // For older MFi gamepads, the menu button will already be handled by
                         // the controllerPausedHandler.
-                        UPDATE_BUTTON_FLAG(voidController, PLAY_FLAG, gamepad.buttonMenu.pressed);
+                        if (![self handlePhysicalControllerComboSource:@"START" pressed:gamepad.buttonMenu.pressed controller:voidController]) {
+                            UPDATE_BUTTON_FLAG(voidController, PLAY_FLAG, gamepad.buttonMenu.pressed);
+                        }
                     }
                 }
                 
                 if (@available(iOS 14.0, tvOS 14.0, *)) {
                     // Home/Guide button is optional (only present on Xbox One S and PS4 gamepads)
                     if (gamepad.buttonHome != nil) {
-                        UPDATE_BUTTON_FLAG(voidController, SPECIAL_FLAG, gamepad.buttonHome.pressed);
+                        if (![self handlePhysicalControllerComboSource:@"HOME" pressed:gamepad.buttonHome.pressed controller:voidController]) {
+                            UPDATE_BUTTON_FLAG(voidController, SPECIAL_FLAG, gamepad.buttonHome.pressed);
+                        }
                     }
                     
                     // Xbox One/Series controllers
                     if (gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleOne]) {
-                        UPDATE_BUTTON_FLAG(voidController, PADDLE1_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleOne].pressed);
+                        GCControllerButtonInput *button = gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleOne];
+                        if (![self handlePhysicalControllerComboSource:@"PADDLE1" pressed:button.pressed controller:voidController]) {
+                            UPDATE_BUTTON_FLAG(voidController, PADDLE1_FLAG, button.pressed);
+                        }
                     }
                     if (gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleTwo]) {
-                        UPDATE_BUTTON_FLAG(voidController, PADDLE2_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleTwo].pressed);
+                        GCControllerButtonInput *button = gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleTwo];
+                        if (![self handlePhysicalControllerComboSource:@"PADDLE2" pressed:button.pressed controller:voidController]) {
+                            UPDATE_BUTTON_FLAG(voidController, PADDLE2_FLAG, button.pressed);
+                        }
                     }
                     if (gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleThree]) {
-                        UPDATE_BUTTON_FLAG(voidController, PADDLE3_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleThree].pressed);
+                        GCControllerButtonInput *button = gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleThree];
+                        if (![self handlePhysicalControllerComboSource:@"PADDLE3" pressed:button.pressed controller:voidController]) {
+                            UPDATE_BUTTON_FLAG(voidController, PADDLE3_FLAG, button.pressed);
+                        }
                     }
                     if (gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleFour]) {
-                        UPDATE_BUTTON_FLAG(voidController, PADDLE4_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleFour].pressed);
+                        GCControllerButtonInput *button = gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleFour];
+                        if (![self handlePhysicalControllerComboSource:@"PADDLE4" pressed:button.pressed controller:voidController]) {
+                            UPDATE_BUTTON_FLAG(voidController, PADDLE4_FLAG, button.pressed);
+                        }
                     }
                     if (@available(iOS 15.0, tvOS 15.0, *)) {
                         if (gamepad.controller.physicalInputProfile.buttons[GCInputButtonShare]) {
-                            UPDATE_BUTTON_FLAG(voidController, MISC_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputButtonShare].pressed);
+                            GCControllerButtonInput *button = gamepad.controller.physicalInputProfile.buttons[GCInputButtonShare];
+                            if (![self handlePhysicalControllerComboSource:@"SHARE" pressed:button.pressed controller:voidController]) {
+                                UPDATE_BUTTON_FLAG(voidController, MISC_FLAG, button.pressed);
+                            }
                         }
                     }
                     
                     // DualShock/DualSense controllers
                     if (gamepad.controller.physicalInputProfile.buttons[GCInputDualShockTouchpadButton]) {
-                        UPDATE_BUTTON_FLAG(voidController, TOUCHPAD_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputDualShockTouchpadButton].pressed);
+                        GCControllerButtonInput *button = gamepad.controller.physicalInputProfile.buttons[GCInputDualShockTouchpadButton];
+                        if (![self handlePhysicalControllerComboSource:@"TOUCHPAD" pressed:button.pressed controller:voidController]) {
+                            UPDATE_BUTTON_FLAG(voidController, TOUCHPAD_FLAG, button.pressed);
+                        }
                     }
                     if (gamepad.controller.physicalInputProfile.dpads[GCInputDualShockTouchpadOne]) {
                         [self handleControllerTouchpad:voidController
@@ -1212,8 +1598,20 @@ static inline int16_t clamp_int16(CGFloat v) {
                 rightStickX = gamepad.rightThumbstick.xAxis.value * 0x7FFE;
                 rightStickY = gamepad.rightThumbstick.yAxis.value * 0x7FFE;
                 
-                leftTrigger = gamepad.leftTrigger.value * 0xFF;
-                rightTrigger = gamepad.rightTrigger.value * 0xFF;
+                if ([self physicalControllerComboHasMappingForSource:@"L2"]) {
+                    BOOL pressed = [self physicalControllerComboTriggerPressedForSource:@"L2" value:gamepad.leftTrigger.value controller:voidController];
+                    [self handlePhysicalControllerComboSource:@"L2" pressed:pressed controller:voidController];
+                    leftTrigger = 0;
+                } else {
+                    leftTrigger = gamepad.leftTrigger.value * 0xFF;
+                }
+                if ([self physicalControllerComboHasMappingForSource:@"R2"]) {
+                    BOOL pressed = [self physicalControllerComboTriggerPressedForSource:@"R2" value:gamepad.rightTrigger.value controller:voidController];
+                    [self handlePhysicalControllerComboSource:@"R2" pressed:pressed controller:voidController];
+                    rightTrigger = 0;
+                } else {
+                    rightTrigger = gamepad.rightTrigger.value * 0xFF;
+                }
                 
                 [self updateLeftStick:voidController x:leftStickX y:leftStickY];
                 [self updateRightStick:voidController x:rightStickX y:rightStickY];
@@ -1552,6 +1950,7 @@ static inline int16_t clamp_int16(CGFloat v) {
     _multiController = streamConfig.multiController;
     _swapABButtons = streamConfig.swapABButtons;
     _swapXYButtons = streamConfig.swapXYButtons;
+    [self reloadPhysicalControllerComboMappings];
 
     _oscController.playerIndex = 0;
 
@@ -1651,6 +2050,8 @@ static inline int16_t clamp_int16(CGFloat v) {
     _controllerStreamLock = [[NSLock alloc] init];
     _voidControllers = [[NSMutableDictionary alloc] init];
     _activeGCControllers = [[NSMutableSet alloc] init];
+    _physicalControllerComboCommandsBySource = [[NSMutableDictionary alloc] init];
+    [self reloadPhysicalControllerComboMappings];
     _controllerNumbers = 0;
     
     _captureMouse = (streamConfig.localMousePointerMode == 0);
@@ -1712,6 +2113,7 @@ static inline int16_t clamp_int16(CGFloat v) {
         VoidController* voidController = [self->_voidControllers objectForKey:[NSNumber numberWithInteger:controller.playerIndex]];
         if (voidController) {
             [self stopTimerForController:voidController];
+            [self clearPhysicalControllerCombosForController:voidController];
             
             // Stop haptics on this controller
             [self cleanupControllerHaptics:voidController];
@@ -1823,6 +2225,16 @@ static inline int16_t clamp_int16(CGFloat v) {
         if (previousMapGyroTo != strongSelf->_mapGyroTo) {
             [strongSelf applyGyroModeSetting];
         }
+    }];
+
+    _physicalControllerComboSettingsObserver = [[NSNotificationCenter defaultCenter] addObserverForName:PhysicalControllerComboDidChangeNotification
+                                                                                                  object:nil
+                                                                                                   queue:[NSOperationQueue mainQueue]
+                                                                                              usingBlock:^(NSNotification * _Nonnull note) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        [strongSelf reloadPhysicalControllerComboMappings];
+        [strongSelf clearPhysicalControllerCombosForAllControllers];
     }];
 
     [self updateCommonConfig:streamConfig];
@@ -1948,6 +2360,7 @@ static inline int16_t clamp_int16(CGFloat v) {
     [[NSNotificationCenter defaultCenter] removeObserver:_keyboardConnectObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_keyboardDisconnectObserver];
     if (_gyroSettingsObserver) [[NSNotificationCenter defaultCenter] removeObserver:_gyroSettingsObserver];
+    if (_physicalControllerComboSettingsObserver) [[NSNotificationCenter defaultCenter] removeObserver:_physicalControllerComboSettingsObserver];
     
     _controllerConnectObserver = nil;
     _controllerDisconnectObserver = nil;
@@ -1955,6 +2368,8 @@ static inline int16_t clamp_int16(CGFloat v) {
     _mouseDisconnectObserver = nil;
     _keyboardConnectObserver = nil;
     _keyboardDisconnectObserver = nil;
+    _gyroSettingsObserver = nil;
+    _physicalControllerComboSettingsObserver = nil;
     
     _controllerNumbers = 0;
     

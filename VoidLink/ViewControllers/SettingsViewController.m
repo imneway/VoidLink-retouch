@@ -15,6 +15,7 @@
 #import "ControllerSupport.h"   // VoidGyroSettingsDidChangeNotification
 #import "ThemeManager.h"
 #import "Plot.h"
+#import "VoidLink-Swift.h"
 
 #import <UIKit/UIGestureRecognizerSubclass.h>
 #import <VideoToolbox/VideoToolbox.h>
@@ -45,6 +46,9 @@
     MenuSectionView *otherSection;
     MenuSectionView *experimentalSection;
     NSMutableSet* hiddenStacks;
+    UIStackView *_physicalControllerComboStack;
+    UILabel *_physicalControllerComboSummaryLabel;
+    UIButton *_physicalControllerComboConfigureButton;
 }
 
 @dynamic overrideUserInterfaceStyle;
@@ -633,6 +637,213 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self.swapAbaxyStack addArrangedSubview:swapXyRow];
 }
 
+- (NSMutableArray<NSMutableDictionary*> *)physicalControllerComboMappings {
+    NSArray *storedMappings = [[NSUserDefaults standardUserDefaults] arrayForKey:CommandManager.physicalControllerComboDefaultsKey];
+    NSMutableArray<NSMutableDictionary*> *mappings = [[NSMutableArray alloc] init];
+    for (id item in storedMappings) {
+        if (![item isKindOfClass:[NSDictionary class]]) continue;
+        NSDictionary *mapping = (NSDictionary *)item;
+        NSString *source = [CommandManager normalizedPhysicalControllerComboSource:mapping[@"source"]];
+        NSString *command = [mapping[@"command"] isKindOfClass:[NSString class]] ? mapping[@"command"] : nil;
+        NSArray<NSString *> *tokens = command.length > 0 ? [CommandManager extractPhysicalControllerComboTokensFrom:command] : nil;
+        if (source.length == 0 || tokens.count == 0) continue;
+        BOOL enabled = mapping[@"enabled"] == nil ? YES : [mapping[@"enabled"] boolValue];
+        [mappings addObject:[@{
+            @"source": source,
+            @"command": [tokens componentsJoinedByString:@"-"],
+            @"enabled": @(enabled)
+        } mutableCopy]];
+    }
+    return mappings;
+}
+
+- (void)savePhysicalControllerComboMappings:(NSArray<NSDictionary*> *)mappings {
+    [[NSUserDefaults standardUserDefaults] setObject:mappings forKey:CommandManager.physicalControllerComboDefaultsKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    [[NSNotificationCenter defaultCenter] postNotificationName:CommandManager.physicalControllerComboDidChangeNotification object:nil];
+    [self updatePhysicalControllerComboSummary];
+}
+
+- (NSString *)physicalControllerComboDisplayTextForMapping:(NSDictionary *)mapping {
+    NSString *source = mapping[@"source"] ?: @"";
+    NSString *command = mapping[@"command"] ?: @"";
+    BOOL enabled = mapping[@"enabled"] == nil ? YES : [mapping[@"enabled"] boolValue];
+    NSString *prefix = enabled ? @"" : @"[Off] ";
+    return [NSString stringWithFormat:@"%@%@ -> %@", prefix, source, command];
+}
+
+- (void)updatePhysicalControllerComboSummary {
+    NSMutableArray<NSMutableDictionary*> *mappings = [self physicalControllerComboMappings];
+    NSUInteger enabledCount = 0;
+    for (NSDictionary *mapping in mappings) {
+        if (mapping[@"enabled"] == nil || [mapping[@"enabled"] boolValue]) enabledCount++;
+    }
+    if (mappings.count == 0) {
+        _physicalControllerComboSummaryLabel.text = [LocalizationHelper localizedStringForKey:@"No mappings"];
+    } else if (enabledCount == mappings.count) {
+        _physicalControllerComboSummaryLabel.text = [LocalizationHelper localizedStringForKey:@"%lu mappings", (unsigned long)mappings.count];
+    } else {
+        _physicalControllerComboSummaryLabel.text = [LocalizationHelper localizedStringForKey:@"%lu / %lu enabled", (unsigned long)enabledCount, (unsigned long)mappings.count];
+    }
+}
+
+- (void)installPhysicalControllerComboControl {
+    if (_physicalControllerComboStack) return;
+
+    UILabel *titleLabel = [[UILabel alloc] init];
+    titleLabel.text = [LocalizationHelper localizedStringForKey:@"Controller Combo Mapping"];
+    titleLabel.font = [UIFont systemFontOfSize:18];
+    titleLabel.textColor = [UIColor whiteColor];
+    titleLabel.numberOfLines = 1;
+    titleLabel.adjustsFontSizeToFitWidth = YES;
+    titleLabel.minimumScaleFactor = 0.72;
+
+    _physicalControllerComboSummaryLabel = [[UILabel alloc] init];
+    _physicalControllerComboSummaryLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    _physicalControllerComboSummaryLabel.textColor = [ThemeManager appPrimaryColor];
+    _physicalControllerComboSummaryLabel.numberOfLines = 1;
+    [_physicalControllerComboSummaryLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+
+    _physicalControllerComboConfigureButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [_physicalControllerComboConfigureButton setTitle:[LocalizationHelper localizedStringForKey:@"Configure"] forState:UIControlStateNormal];
+    _physicalControllerComboConfigureButton.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+    [_physicalControllerComboConfigureButton addTarget:self action:@selector(physicalControllerComboConfigureTapped:) forControlEvents:UIControlEventTouchUpInside];
+    [_physicalControllerComboConfigureButton setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[_physicalControllerComboSummaryLabel, _physicalControllerComboConfigureButton]];
+    row.axis = UILayoutConstraintAxisHorizontal;
+    row.alignment = UIStackViewAlignmentCenter;
+    row.spacing = 12;
+
+    _physicalControllerComboStack = [[UIStackView alloc] initWithArrangedSubviews:@[titleLabel, row]];
+    _physicalControllerComboStack.axis = UILayoutConstraintAxisVertical;
+    _physicalControllerComboStack.alignment = UIStackViewAlignmentFill;
+    _physicalControllerComboStack.spacing = 5;
+    _physicalControllerComboStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self updatePhysicalControllerComboSummary];
+}
+
+- (void)presentInvalidPhysicalControllerComboAlert:(NSString *)message {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Invalid Input"]
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"OK"] style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)presentPhysicalControllerComboEditorAtIndex:(NSInteger)index {
+    NSMutableArray<NSMutableDictionary*> *mappings = [self physicalControllerComboMappings];
+    BOOL editing = index >= 0 && index < mappings.count;
+    NSDictionary *existing = editing ? mappings[index] : nil;
+
+    NSString *title = editing ? [LocalizationHelper localizedStringForKey:@"Edit Controller Combo"] : [LocalizationHelper localizedStringForKey:@"Add Controller Combo"];
+    NSString *message = [LocalizationHelper localizedStringForKey:@"Use a physical source like R2, and gamepad targets like OSCB-OSCR2-50MS."];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
+
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.placeholder = @"Source (R2)";
+        textField.text = existing ? existing[@"source"] : nil;
+        textField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
+        textField.autocorrectionType = UITextAutocorrectionTypeNo;
+        textField.spellCheckingType = UITextSpellCheckingTypeNo;
+    }];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.placeholder = @"Command (OSCB-OSCR2-50MS)";
+        textField.text = existing ? existing[@"command"] : nil;
+        textField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
+        textField.autocorrectionType = UITextAutocorrectionTypeNo;
+        textField.spellCheckingType = UITextSpellCheckingTypeNo;
+    }];
+
+    UIAlertAction *saveAction = [UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Save"]
+                                                         style:UIAlertActionStyleDefault
+                                                       handler:^(UIAlertAction *action) {
+        NSString *source = [CommandManager normalizedPhysicalControllerComboSource:alert.textFields[0].text];
+        NSString *rawCommand = [alert.textFields[1].text uppercaseString];
+        NSArray<NSString *> *tokens = [CommandManager extractPhysicalControllerComboTokensFrom:rawCommand];
+        if (source.length == 0) {
+            [self presentInvalidPhysicalControllerComboAlert:[LocalizationHelper localizedStringForKey:@"Unsupported controller source. Try R2, A, L1, START, or UP."]];
+            return;
+        }
+        if (tokens.count == 0) {
+            [self presentInvalidPhysicalControllerComboAlert:[LocalizationHelper localizedStringForKey:@"Unsupported command. Only gamepad tokens like OSCB-OSCR2-50MS are supported."]];
+            return;
+        }
+
+        NSString *command = [tokens componentsJoinedByString:@"-"];
+        NSMutableArray<NSMutableDictionary*> *updated = [[NSMutableArray alloc] init];
+        for (NSUInteger i = 0; i < mappings.count; i++) {
+            if (editing && (NSInteger)i == index) continue;
+            NSDictionary *mapping = mappings[i];
+            if ([mapping[@"source"] isEqualToString:source]) continue;
+            [updated addObject:[mapping mutableCopy]];
+        }
+        [updated addObject:[@{
+            @"source": source,
+            @"command": command,
+            @"enabled": editing ? ((existing[@"enabled"] != nil) ? existing[@"enabled"] : @YES) : @YES
+        } mutableCopy]];
+        [self savePhysicalControllerComboMappings:updated];
+    }];
+
+    [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:saveAction];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)presentPhysicalControllerComboActionsAtIndex:(NSInteger)index {
+    NSMutableArray<NSMutableDictionary*> *mappings = [self physicalControllerComboMappings];
+    if (index < 0 || index >= mappings.count) return;
+    NSMutableDictionary *mapping = mappings[index];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[self physicalControllerComboDisplayTextForMapping:mapping]
+                                                                   message:nil
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Edit"]
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *action) {
+        [self presentPhysicalControllerComboEditorAtIndex:index];
+    }]];
+    BOOL enabled = mapping[@"enabled"] == nil ? YES : [mapping[@"enabled"] boolValue];
+    NSString *toggleTitle = enabled ? [LocalizationHelper localizedStringForKey:@"Disable"] : [LocalizationHelper localizedStringForKey:@"Enable"];
+    [alert addAction:[UIAlertAction actionWithTitle:toggleTitle
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *action) {
+        mapping[@"enabled"] = @(!enabled);
+        [self savePhysicalControllerComboMappings:mappings];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Delete"]
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(UIAlertAction *action) {
+        [mappings removeObjectAtIndex:index];
+        [self savePhysicalControllerComboMappings:mappings];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)physicalControllerComboConfigureTapped:(id)sender {
+    NSMutableArray<NSMutableDictionary*> *mappings = [self physicalControllerComboMappings];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Controller Combo Mapping"]
+                                                                   message:nil
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    for (NSUInteger i = 0; i < mappings.count; i++) {
+        NSDictionary *mapping = mappings[i];
+        NSInteger mappingIndex = (NSInteger)i;
+        [alert addAction:[UIAlertAction actionWithTitle:[self physicalControllerComboDisplayTextForMapping:mapping]
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *action) {
+            [self presentPhysicalControllerComboActionsAtIndex:mappingIndex];
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Add Mapping"]
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *action) {
+        [self presentPhysicalControllerComboEditorAtIndex:NSNotFound];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)layoutSections{
     videoSection = [[MenuSectionView alloc] init];
     videoSection.delegate = self;
@@ -674,6 +885,8 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self addSetting:self.mousePointerVelocityStack ofId:@"mousePointerVelocityStack" withInfoTag:NO withDynamicLabel:YES to:touchAndControlSection];
     [self addSetting:self.onScreenWidgetStack ofId:@"onScreenWidgetStack" withInfoTag:YES withDynamicLabel:YES to:touchAndControlSection];
     [self addSetting:self.swapAbaxyStack ofId:@"swapAbaxyStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
+    [self installPhysicalControllerComboControl];
+    [self addSetting:_physicalControllerComboStack ofId:@"physicalControllerComboStack" withInfoTag:YES withDynamicLabel:NO to:touchAndControlSection];
     [self addSetting:self.emulatedControllerTypeStack ofId:@"emulatedControllerTypeStack" withInfoTag:YES withDynamicLabel:NO to:touchAndControlSection];
     [self addSetting:self.gyroModeStack ofId:@"gyroModeStack" withInfoTag:YES withDynamicLabel:YES to:touchAndControlSection];
     [self addSetting:self.gyroSensitivityStack ofId:@"gyroSensitivityStack" withInfoTag:NO withDynamicLabel:YES to:touchAndControlSection];
@@ -1160,6 +1373,10 @@ BOOL isCustomResolution(int resolutionSelected) {
         tipText = [LocalizationHelper localizedStringForKey:@"onScreenWidgetStackTip"];
         showOnlineDocAction = true;
         onlineDocLink = [LocalizationHelper localizedStringForKey:@"onScreenWidgetStackDoc"];
+    }
+    if([sender.superview.accessibilityIdentifier isEqualToString: @"physicalControllerComboStack"]){
+        tipText = [LocalizationHelper localizedStringForKey:@"Map a physical controller button to a gamepad combo. Example: source R2 with command OSCB-OSCR2-50MS presses B first, then R2 after 50 ms, and holds both until physical R2 is released. A mapped source is intercepted and will not also pass through as its original input."];
+        showOnlineDocAction = false;
     }
     if([sender.superview.accessibilityIdentifier isEqualToString: @"externalDisplayModeStack"]){
         tipText = [LocalizationHelper localizedStringForKey:@"externalDisplayModeStackTip"];

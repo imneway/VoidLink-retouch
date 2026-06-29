@@ -130,6 +130,27 @@ import UIKit
     // toggles the gyro at the same time.
     @objc public static let motionControlButtonCmds: [String] = ["GYRO", "GYROPAUSE"]
 
+    @objc public static let physicalControllerComboDefaultsKey = "physicalControllerComboMappingsV1"
+    @objc public static let physicalControllerComboDidChangeNotification = "PhysicalControllerComboMappingsDidChangeNotification"
+    @objc public static let physicalControllerComboSources: [String] = [
+        "A", "B", "X", "Y",
+        "L1", "R1", "L2", "R2",
+        "L3", "R3",
+        "START", "SELECT", "HOME",
+        "UP", "DOWN", "LEFT", "RIGHT",
+        "PADDLE1", "PADDLE2", "PADDLE3", "PADDLE4",
+        "SHARE", "TOUCHPAD"
+    ]
+    @objc public static let physicalControllerComboTargets: [String] = [
+        "OSCA", "OSCB", "OSCX", "OSCY",
+        "OSCL1", "OSCR1", "OSCL2", "OSCR2",
+        "OSCL3", "OSCR3",
+        "OSCSTART", "OSCSELECT",
+        "OSCUP", "OSCDOWN", "OSCLEFT", "OSCRIGHT",
+        "PADDLE1", "PADDLE2", "PADDLE3", "PADDLE4",
+        "MISC", "DS4TCHBTN"
+    ]
+
     @objc public static let aimRelativeActivationOff = "OFF"
     @objc public static let aimRelativeActivationOn = "ON"
     @objc public static let aimRelativeActivationControllerButtons: [String] = [
@@ -607,6 +628,122 @@ import UIKit
         }
         
         return validCmdStrings
+    }
+
+    @objc(normalizedPhysicalControllerComboSource:)
+    public static func normalizedPhysicalControllerComboSource(_ input: String?) -> String {
+        let raw = (input ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        switch raw {
+        case "OSCA": return "A"
+        case "OSCB": return "B"
+        case "OSCX": return "X"
+        case "OSCY": return "Y"
+        case "LB", "OSCL1": return "L1"
+        case "RB", "OSCR1": return "R1"
+        case "LT", "OSCL2": return "L2"
+        case "RT", "OSCR2": return "R2"
+        case "LS", "OSCL3": return "L3"
+        case "RS", "OSCR3": return "R3"
+        case "PLAY", "MENU", "OSCSTART", "OSCPLAY": return "START"
+        case "BACK", "OPTIONS", "OSCSELECT", "OSCBACK": return "SELECT"
+        case "GUIDE", "SPECIAL": return "HOME"
+        case "DUP", "D_PAD_UP", "DPAD_UP", "OSCUP": return "UP"
+        case "DDOWN", "D_PAD_DOWN", "DPAD_DOWN", "OSCDOWN": return "DOWN"
+        case "DLEFT", "D_PAD_LEFT", "DPAD_LEFT", "OSCLEFT": return "LEFT"
+        case "DRIGHT", "D_PAD_RIGHT", "DPAD_RIGHT", "OSCRIGHT": return "RIGHT"
+        case "MISC": return "SHARE"
+        case "DS4TCHBTN", "TOUCHPAD_BUTTON": return "TOUCHPAD"
+        default:
+            return physicalControllerComboSources.contains(raw) ? raw : ""
+        }
+    }
+
+    @objc(normalizedPhysicalControllerComboTarget:)
+    public static func normalizedPhysicalControllerComboTarget(_ input: String?) -> String {
+        let raw = (input ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        switch raw {
+        case "A": return "OSCA"
+        case "B": return "OSCB"
+        case "X": return "OSCX"
+        case "Y": return "OSCY"
+        case "L1", "LB": return "OSCL1"
+        case "R1", "RB": return "OSCR1"
+        case "L2", "LT": return "OSCL2"
+        case "R2", "RT": return "OSCR2"
+        case "L3", "LS": return "OSCL3"
+        case "R3", "RS": return "OSCR3"
+        case "START", "PLAY", "OSCPLAY": return "OSCSTART"
+        case "SELECT", "BACK", "OSCBACK": return "OSCSELECT"
+        case "UP": return "OSCUP"
+        case "DOWN": return "OSCDOWN"
+        case "LEFT": return "OSCLEFT"
+        case "RIGHT": return "OSCRIGHT"
+        case "SHARE": return "MISC"
+        case "TOUCHPAD": return "DS4TCHBTN"
+        default:
+            return physicalControllerComboTargets.contains(raw) ? raw : ""
+        }
+    }
+
+    @objc(physicalControllerComboTitleFor:)
+    public static func physicalControllerComboTitle(for token: String) -> String {
+        let source = normalizedPhysicalControllerComboSource(token)
+        let normalized = source.isEmpty ? normalizedPhysicalControllerComboTarget(token) : source
+        switch normalized {
+        case "OSCA", "A": return "A"
+        case "OSCB", "B": return "B"
+        case "OSCX", "X": return "X"
+        case "OSCY", "Y": return "Y"
+        case "OSCL1", "L1": return "L1"
+        case "OSCR1", "R1": return "R1"
+        case "OSCL2", "L2": return "L2"
+        case "OSCR2", "R2": return "R2"
+        case "OSCL3", "L3": return "L3"
+        case "OSCR3", "R3": return "R3"
+        case "OSCSTART", "START": return "Start"
+        case "OSCSELECT", "SELECT": return "Select"
+        case "HOME": return "Home"
+        case "OSCUP", "UP": return "D-Pad Up"
+        case "OSCDOWN", "DOWN": return "D-Pad Down"
+        case "OSCLEFT", "LEFT": return "D-Pad Left"
+        case "OSCRIGHT", "RIGHT": return "D-Pad Right"
+        case "PADDLE1": return "Paddle 1"
+        case "PADDLE2": return "Paddle 2"
+        case "PADDLE3": return "Paddle 3"
+        case "PADDLE4": return "Paddle 4"
+        case "MISC", "SHARE": return "Share"
+        case "DS4TCHBTN", "TOUCHPAD": return "Touchpad"
+        default: return token
+        }
+    }
+
+    @objc(extractPhysicalControllerComboTokensFrom:)
+    public static func extractPhysicalControllerComboTokens(from input: String) -> [String]? {
+        let parts = input
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+            .split(separator: "-")
+            .map { String($0) }
+        guard !parts.isEmpty else { return nil }
+
+        var tokens: [String] = []
+        for (index, part) in parts.enumerated() {
+            if index == parts.count - 1, part.hasSuffix("MS") {
+                let delayText = String(part.dropLast(2))
+                if !delayText.isEmpty, delayText.allSatisfy({ $0.isNumber }) {
+                    tokens.append(part)
+                    continue
+                }
+                return nil
+            }
+
+            let normalized = normalizedPhysicalControllerComboTarget(part)
+            guard !normalized.isEmpty else { return nil }
+            tokens.append(normalized)
+        }
+
+        guard tokens.contains(where: { !$0.hasSuffix("MS") }) else { return nil }
+        return tokens
     }
 
     @objc public func addCommand(_ command: RemoteCommand) -> Bool {

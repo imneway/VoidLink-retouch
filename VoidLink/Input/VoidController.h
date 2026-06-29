@@ -45,6 +45,17 @@ typedef NS_ENUM(NSInteger, ControllerDeviceBatteryState) {
 @property (nonatomic)                   short gyroStickX;
 @property (nonatomic)                   short gyroStickY;
 
+// Physical-controller combo overlay. These values are merged with the live
+// physical state at send time so combo-generated output never clobbers real
+// buttons the user is holding separately.
+@property (nonatomic)                   int comboButtonFlags;
+@property (nonatomic)                   unsigned char comboLeftTrigger;
+@property (nonatomic)                   unsigned char comboRightTrigger;
+@property(nonatomic, strong) NSMutableDictionary<NSString*, NSNumber*>* _Nullable comboSourcePressedStates;
+@property(nonatomic, strong) NSMutableDictionary<NSString*, NSNumber*>* _Nullable comboSourceGenerations;
+@property(nonatomic, strong) NSMutableDictionary<NSString*, NSMutableArray<NSString*>*>* _Nullable comboActiveTargetsBySource;
+@property(nonatomic, strong) NSMutableDictionary<NSString*, NSNumber*>* _Nullable comboTargetHoldCounts;
+
 @property (nonatomic)                   controller_touch_context_t primaryTouch;
 @property (nonatomic)                   controller_touch_context_t secondaryTouch;
 
