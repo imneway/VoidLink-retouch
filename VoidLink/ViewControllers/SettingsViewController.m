@@ -1375,7 +1375,7 @@ BOOL isCustomResolution(int resolutionSelected) {
         onlineDocLink = [LocalizationHelper localizedStringForKey:@"onScreenWidgetStackDoc"];
     }
     if([sender.superview.accessibilityIdentifier isEqualToString: @"physicalControllerComboStack"]){
-        tipText = [LocalizationHelper localizedStringForKey:@"Map a physical controller button to a gamepad combo. Example: source R2 with command OSCB-OSCR2-50MS presses B first, then R2 after 50 ms, and holds both until physical R2 is released. A mapped source is intercepted and will not also pass through as its original input."];
+        tipText = [LocalizationHelper localizedStringForKey:@"Map a physical controller button to a gamepad combo. Example: source R2 with command OSCB-OSCR2-50MS presses B first, then R2 after 50 ms, and holds both until physical R2 is released. Add * to a token (e.g. OSCB*) to tap it — press then auto-release — instead of holding. A mapped source is intercepted and will not also pass through as its original input."];
         showOnlineDocAction = false;
     }
     if([sender.superview.accessibilityIdentifier isEqualToString: @"externalDisplayModeStack"]){

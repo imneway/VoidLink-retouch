@@ -34,11 +34,15 @@ import UIKit
         if let controls = sender as? OnScreenControls {
             self.onScreenControls = controls
             // Tell ControllerSupport which kind of gyro gate this widget needs.
-            // Without this the gyro tick stays in legacy always-on mode.
-            switch self.motionControlButtonString {
-            case "GYRO":      controls.markGyroToggleButtonRegistered()
-            case "GYROPAUSE": controls.markGyroPauseButtonRegistered()
-            default: break
+            // Without this the gyro tick stays in legacy always-on mode. A conditional
+            // widget carries gyro in its base and/or armed branch (not motionControlButtonString),
+            // so register for every motion token this widget can emit.
+            for motion in [self.motionControlButtonString, self.conditionBaseMotionString, self.conditionArmedMotionString] {
+                switch motion {
+                case "GYRO":      controls.markGyroToggleButtonRegistered()
+                case "GYROPAUSE": controls.markGyroPauseButtonRegistered()
+                default: break
+                }
             }
             print("ClassA received OnScreenControls instance: \(controls)")
         } else {
@@ -88,10 +92,17 @@ import UIKit
     private var conditionArmedStrings: [String] = []
     private var conditionArmedTapFlags: [Bool] = []
     private var conditionArmedIntervalMs: UInt32 = 0
+    // Per-branch gyro/motion (GYRO/GYROPAUSE pulled out of each output combo). Gyro is a
+    // hold-tied mode, not a press, so it lives outside comboButtonStrings and activates for
+    // whichever branch actually fired — armed-only gyro stays off during the base output.
+    private var conditionBaseMotionString: String = ""
+    private var conditionArmedMotionString: String = ""
     // Branch latched at button-down so button-up releases exactly what went down,
     // even if the arming state changed while the button was held.
     private var heldDispatchStrings: [String]? = nil
     private var heldDispatchIntervalMs: UInt32 = 0
+    // Motion string actually activated at button-down, so button-up deactivates the same one.
+    private var heldMotionString: String = ""
 
     @objc public var pressed: Bool
     private var restoreAlphaAfterRelease: Bool = false
@@ -411,38 +422,47 @@ import UIKit
             // separately and consulted at press time (see resolveDispatch / handleButtonDown).
             self.isConditional = true
             self.widgetType = WidgetTypeEnum.button
-            let baseParsed = OnScreenWidgetView.parseComboString(condComps[0])
-            self.comboButtonStrings = baseParsed.tokens
-            self.comboButtonTapFlags = baseParsed.taps
-            self.comboKeyTimeIntervalMs = baseParsed.intervalMs
-            self.buttonString = baseParsed.tokens.first ?? ""
-            self.conditionArmTokens = OnScreenWidgetView.parseComboString(condComps[1]).tokens
-            let armedParsed = OnScreenWidgetView.parseComboString(condComps[2])
-            self.conditionArmedStrings = armedParsed.tokens
-            self.conditionArmedTapFlags = armedParsed.taps
-            self.conditionArmedIntervalMs = armedParsed.intervalMs
+            let base = OnScreenWidgetView.parseButtonOutput(condComps[0])
+            self.comboButtonStrings = base.tokens
+            self.comboButtonTapFlags = base.taps
+            self.comboKeyTimeIntervalMs = base.intervalMs
+            self.conditionBaseMotionString = base.motion
+            self.buttonString = base.tokens.first ?? ""
+            self.conditionArmTokens = OnScreenWidgetView.parseButtonOutput(condComps[1]).tokens
+            let armed = OnScreenWidgetView.parseButtonOutput(condComps[2])
+            self.conditionArmedStrings = armed.tokens
+            self.conditionArmedTapFlags = armed.taps
+            self.conditionArmedIntervalMs = armed.intervalMs
+            self.conditionArmedMotionString = armed.motion
         }
         else if !self.cmdString.contains("+"){
             // 安全解包并处理 `comboKeyStrings`
-            if var comboStrings = CommandManager.shared.extractSinglCmdStringsFromComboKeys(from: self.cmdString) {
-                
-                // extract timeInterval
-                if let lastString = comboStrings.last, lastString.contains("MS") {
-                    // 移除 "MS" 后的部分并转换为整数
-                    let timeIntervalString = lastString.replacingOccurrences(of: "MS", with: "")
-                    // 安全地将字符串转换为整数
-                    if let timeInterval = UInt32(timeIntervalString) {
-                        self.comboKeyTimeIntervalMs = timeInterval
-                    } else {print("无法将时间字符串转换为整数")}
-                    comboStrings.removeLast()
-                }
-                
+            // Validate against the known-token grammar on a tap-marker-stripped copy ('*' is a
+            // per-token tap flag the grammar doesn't recognize), then tokenize WITH tap flags so
+            // a plain combo widget can also use "OSCB*-OSCR2" — not just conditional outputs.
+            let tapStripped = OnScreenWidgetView.stripTrailingTapMarkers(self.cmdString)
+            if CommandManager.shared.extractSinglCmdStringsFromComboKeys(from: tapStripped) != nil {
+
+                let parsed = OnScreenWidgetView.parseComboString(self.cmdString)  // tokens (* stripped), tap flags, interval
+                self.comboKeyTimeIntervalMs = parsed.intervalMs
+                let comboStrings = parsed.tokens
+
                 if CommandManager.touchPadCmds.contains(comboStrings.first ?? "") {self.widgetType = WidgetTypeEnum.touchPad}
                 else {self.widgetType = WidgetTypeEnum.button}
-                
+
                 let touchPadString = Set(comboStrings).intersection(Set(CommandManager.touchPadCmds)).first ?? ""
                 let motionString = Set(comboStrings).intersection(Set(CommandManager.motionControlButtonCmds)).first ?? ""
-                self.comboButtonStrings = comboStrings.filter{$0 != touchPadString && $0 != motionString}
+                // Drop the touchpad/motion tokens but keep each remaining button's tap flag aligned.
+                var buttonTokens: [String] = []
+                var buttonTaps: [Bool] = []
+                for (index, token) in comboStrings.enumerated() {
+                    if token != touchPadString && token != motionString {
+                        buttonTokens.append(token)
+                        buttonTaps.append(index < parsed.taps.count ? parsed.taps[index] : false)
+                    }
+                }
+                self.comboButtonStrings = buttonTokens
+                self.comboButtonTapFlags = buttonTaps
                 self.touchPadString = touchPadString
                 self.motionControlButtonString = motionString
                 self.buttonString = self.comboButtonStrings.first ?? ""
@@ -1881,24 +1901,29 @@ import UIKit
     // these two methods; the underlying ControllerSupport counters stay balanced.
     private var motionButtonHeld: Bool = false
 
-    private func handleMotionControlButtonDown() {
-        guard !self.motionControlButtonString.isEmpty, !self.motionButtonHeld else { return }
-        switch self.motionControlButtonString {
+    // Gyro is tied to the button hold and is per-branch (the resolved output's motion token):
+    // a conditional widget can have gyro in its armed output but not its base. Latch the one
+    // we turned on so the matching up turns off the same one.
+    private func activateMotion(_ motion: String) {
+        guard !motion.isEmpty, !self.motionButtonHeld else { return }
+        switch motion {
         case "GYRO":      self.onScreenControls.pushMotionButtonHold()
         case "GYROPAUSE": self.onScreenControls.pushMotionButtonPause()
         default: return
         }
         self.motionButtonHeld = true
+        self.heldMotionString = motion
     }
 
-    private func handleMotionControlButtonUp() {
-        guard !self.motionControlButtonString.isEmpty, self.motionButtonHeld else { return }
-        switch self.motionControlButtonString {
+    private func deactivateMotion() {
+        guard self.motionButtonHeld, !self.heldMotionString.isEmpty else { return }
+        switch self.heldMotionString {
         case "GYRO":      self.onScreenControls.popMotionButtonHold()
         case "GYROPAUSE": self.onScreenControls.popMotionButtonPause()
         default: break
         }
         self.motionButtonHeld = false
+        self.heldMotionString = ""
     }
 
     //==== wholeButtonPress visual effect=============================================
@@ -1922,7 +1947,7 @@ import UIKit
                 if !dispatch.strings.isEmpty {
                     CommandManager.shared.recordLastActivationTokens(dispatch.strings)
                 }
-                self.handleMotionControlButtonDown()
+                self.activateMotion(dispatch.motion)
                 // Mirror the press onto the matching legacy OSC button(s) — visual only.
                 // Buttons only (touchpads / sticks never run handleButtonDown); a no-op when
                 // the legacy button isn't currently shown (guarded in OnScreenControls).
@@ -1956,7 +1981,7 @@ import UIKit
             // mid-press change in arming can't strand keys held.
             let releaseStrings = self.heldDispatchStrings ?? self.comboButtonStrings
             self.sendComboButtonsUpEvent(comboStrings: releaseStrings, intervalMs: self.heldDispatchIntervalMs)
-            self.handleMotionControlButtonUp()
+            self.deactivateMotion()
             // Release the mirrored legacy-button highlight (visual only; see handleButtonDown).
             if self.widgetType == WidgetTypeEnum.button {
                 for token in releaseStrings {
@@ -2438,9 +2463,15 @@ import UIKit
     private static func parseComboString(_ raw: String) -> (tokens: [String], taps: [Bool], intervalMs: UInt32) {
         var parts = raw.uppercased().split(separator: "-").map(String.init)
         var intervalMs: UInt32 = 0
-        if let last = parts.last, last.hasSuffix("MS"), let value = UInt32(last.dropLast(2)) {
-            intervalMs = value
-            parts.removeLast()
+        if var last = parts.last {
+            // Tolerate a stray '*' on the interval token (e.g. "50MS*"): the marker is
+            // meaningless there, but the editor validation already strips it, so match that
+            // here instead of letting "50MS" leak in as a bogus button token at 0ms.
+            if last.hasSuffix("*") { last = String(last.dropLast()) }
+            if last.hasSuffix("MS"), let value = UInt32(last.dropLast(2)) {
+                intervalMs = value
+                parts.removeLast()
+            }
         }
         var tokens: [String] = []
         var taps: [Bool] = []
@@ -2456,6 +2487,40 @@ import UIKit
         return (tokens, taps, intervalMs)
     }
 
+    // Strips a single trailing '*' tap marker from each '-'-separated token, leaving the
+    // rest intact (matches parseComboString) — used to validate against the known-token
+    // grammar, which doesn't know about '*'.
+    private static func stripTrailingTapMarkers(_ combo: String) -> String {
+        return combo
+            .split(separator: "-", omittingEmptySubsequences: false)
+            .map { part -> String in
+                var token = String(part)
+                if token.hasSuffix("*") { token.removeLast() }
+                return token
+            }
+            .joined(separator: "-")
+    }
+
+    // parseComboString + pulls the GYRO/GYROPAUSE motion token out of the press sequence.
+    // Motion is a hold-tied mode (activated on button-down, released on button-up), so it
+    // must not flow through the press/release combo path. Returns the remaining button
+    // tokens (with aligned tap flags), the interval, and the motion token ("" if none).
+    private static func parseButtonOutput(_ raw: String) -> (tokens: [String], taps: [Bool], intervalMs: UInt32, motion: String) {
+        let parsed = parseComboString(raw)
+        var buttonTokens: [String] = []
+        var buttonTaps: [Bool] = []
+        var motion = ""
+        for (index, token) in parsed.tokens.enumerated() {
+            if CommandManager.motionControlButtonCmds.contains(token) {
+                if motion.isEmpty { motion = token }
+            } else {
+                buttonTokens.append(token)
+                buttonTaps.append(index < parsed.taps.count ? parsed.taps[index] : false)
+            }
+        }
+        return (buttonTokens, buttonTaps, parsed.intervalMs, motion)
+    }
+
     // True when this is a conditional widget AND every arm token is in the last activation.
     private func conditionIsArmed() -> Bool {
         guard isConditional, !conditionArmTokens.isEmpty else { return false }
@@ -2464,11 +2529,14 @@ import UIKit
 
     // The (tokens, tap flags, interval) to fire for this press: the armed output when a
     // conditional widget is armed, otherwise the base combo (also the non-conditional path).
-    private func resolveDispatch() -> (strings: [String], taps: [Bool], intervalMs: UInt32) {
+    private func resolveDispatch() -> (strings: [String], taps: [Bool], intervalMs: UInt32, motion: String) {
         if isConditional && conditionIsArmed() {
-            return (conditionArmedStrings, conditionArmedTapFlags, conditionArmedIntervalMs)
+            return (conditionArmedStrings, conditionArmedTapFlags, conditionArmedIntervalMs, conditionArmedMotionString)
         }
-        return (comboButtonStrings, comboButtonTapFlags, comboKeyTimeIntervalMs)
+        if isConditional {
+            return (comboButtonStrings, comboButtonTapFlags, comboKeyTimeIntervalMs, conditionBaseMotionString)
+        }
+        return (comboButtonStrings, comboButtonTapFlags, comboKeyTimeIntervalMs, motionControlButtonString)
     }
 
     private func pressComboToken(_ token: String) {
@@ -2693,9 +2761,11 @@ import UIKit
             // this will also deal with button events
             // Pure GYRO / GYROPAUSE widgets have empty comboButtonStrings — without
             // the motionControlButtonString check, the press would never reach
-            // handleButtonDown and the gyro would never toggle.
+            // handleButtonDown and the gyro would never toggle. Conditional widgets always
+            // dispatch something (resolveDispatch picks base/armed), including a base that is
+            // pure gyro, so let them through regardless of comboButtonStrings.
             if self.widgetType == WidgetTypeEnum.button &&
-               (!self.comboButtonStrings.isEmpty || !self.motionControlButtonString.isEmpty) {
+               (!self.comboButtonStrings.isEmpty || !self.motionControlButtonString.isEmpty || self.isConditional) {
                 self.handleButtonDown()
                 self.capturedTouches.union(touches)
                 //self.handleButtonSliding(touches: touches)

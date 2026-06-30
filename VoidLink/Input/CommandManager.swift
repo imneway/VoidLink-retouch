@@ -711,6 +711,12 @@ import UIKit
             .joined(separator: "-")
     }
 
+    // ObjC-facing: strip '*' tap markers so a plain combo command containing them (e.g.
+    // "OSCB*-OSCR2-50MS") can be validated against the known-token grammar in the editor.
+    @objc public func comboStringStrippingTapMarkers(_ input: String) -> String {
+        return CommandManager.stripTrailingTapMarkers(input)
+    }
+
     @objc public func isValidConditionalCommand(_ input: String) -> Bool {
         guard let comps = conditionalCommandComponents(input) else { return false }
         let base = comps[0], arm = comps[1], armed = comps[2]
@@ -828,9 +834,15 @@ import UIKit
                 return nil
             }
 
-            let normalized = normalizedPhysicalControllerComboTarget(part)
+            // '*' = tap target (press then auto-release instead of holding until the source
+            // is released). Strip it before normalizing, then re-attach so the marker rides
+            // through to the press/release logic (ControllerSupport strips it at flag lookup).
+            var core = part
+            let isTap = core.hasSuffix("*")
+            if isTap { core = String(core.dropLast()) }
+            let normalized = normalizedPhysicalControllerComboTarget(core)
             guard !normalized.isEmpty else { return nil }
-            tokens.append(normalized)
+            tokens.append(isTap ? normalized + "*" : normalized)
         }
 
         guard tokens.contains(where: { !$0.hasSuffix("MS") }) else { return nil }

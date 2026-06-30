@@ -31,6 +31,9 @@ static NSString * const PhysicalControllerComboDefaultsKey = @"physicalControlle
 static NSString * const PhysicalControllerComboDidChangeNotification = @"PhysicalControllerComboMappingsDidChangeNotification";
 static const float PHYSICAL_COMBO_TRIGGER_PRESS_THRESHOLD = 0.55f;
 static const float PHYSICAL_COMBO_TRIGGER_RELEASE_THRESHOLD = 0.25f;
+// How long a '*' tap target stays down before it auto-releases (vs. a normal target,
+// which is held until the physical source is released).
+static const uint32_t PHYSICAL_COMBO_TAP_HOLD_MS = 50;
 
 @interface ControllerSupport()
 
@@ -237,7 +240,14 @@ static inline int16_t clamp_int16(CGFloat v) {
     }
 }
 
+// A '*' tap marker can ride on a target string (e.g. "OSCA*" = press then auto-release);
+// strip it for flag / trigger lookups so the target still resolves to its button.
+- (NSString *)physicalControllerComboStrippedTarget:(NSString *)target {
+    return [target hasSuffix:@"*"] ? [target substringToIndex:target.length - 1] : target;
+}
+
 - (int)physicalControllerComboButtonFlagForTarget:(NSString *)target {
+    target = [self physicalControllerComboStrippedTarget:target];
     if ([target isEqualToString:@"OSCA"]) return A_FLAG;
     if ([target isEqualToString:@"OSCB"]) return B_FLAG;
     if ([target isEqualToString:@"OSCX"]) return X_FLAG;
@@ -262,11 +272,11 @@ static inline int16_t clamp_int16(CGFloat v) {
 }
 
 - (BOOL)physicalControllerComboIsLeftTriggerTarget:(NSString *)target {
-    return [target isEqualToString:@"OSCL2"];
+    return [[self physicalControllerComboStrippedTarget:target] isEqualToString:@"OSCL2"];
 }
 
 - (BOOL)physicalControllerComboIsRightTriggerTarget:(NSString *)target {
-    return [target isEqualToString:@"OSCR2"];
+    return [[self physicalControllerComboStrippedTarget:target] isEqualToString:@"OSCR2"];
 }
 
 - (uint32_t)physicalControllerComboSupportedButtonFlags {
@@ -331,6 +341,11 @@ static inline int16_t clamp_int16(CGFloat v) {
             controller.comboRightTrigger = 0xFF;
         }
     }
+    // '*' tap target: auto-release shortly after pressing, rather than holding it until
+    // the physical source is released.
+    if ([target hasSuffix:@"*"]) {
+        [self schedulePhysicalControllerComboTapReleaseForTarget:target source:source generation:generation controller:controller];
+    }
     [self updateFinished:controller];
     return YES;
 }
@@ -367,8 +382,34 @@ static inline int16_t clamp_int16(CGFloat v) {
             }
         }
     }
+    // '*' tap targets in the batch: auto-release each shortly after pressing.
+    for (NSString *target in targets) {
+        if ([target hasSuffix:@"*"]) {
+            [self schedulePhysicalControllerComboTapReleaseForTarget:target source:source generation:generation controller:controller];
+        }
+    }
     [self updateFinished:controller];
     return YES;
+}
+
+// Releases a '*' tap target a short time after it was pressed (vs. holding to source release).
+// The hold-count machinery makes the eventual source-release of the same target a harmless
+// no-op (count already at 0), so taps never leak a stuck button.
+- (void)schedulePhysicalControllerComboTapReleaseForTarget:(NSString *)target source:(NSString *)source generation:(NSInteger)generation controller:(VoidController *)controller {
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)PHYSICAL_COMBO_TAP_HOLD_MS * NSEC_PER_MSEC),
+                   dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        // Skip if a newer source press/release has superseded this one (generation bumps on
+        // every source state change). Otherwise a fast re-press within the tap window would
+        // have its hold cut short by the previous press's timer; the superseding event does
+        // its own release (source-release frees all active targets anyway).
+        @synchronized(controller) {
+            if ([controller.comboSourceGenerations[source] integerValue] != generation) return;
+        }
+        [strongSelf physicalControllerComboReleaseTarget:target controller:controller];
+    });
 }
 
 - (void)schedulePhysicalControllerComboTargets:(NSArray<NSString *> *)targets

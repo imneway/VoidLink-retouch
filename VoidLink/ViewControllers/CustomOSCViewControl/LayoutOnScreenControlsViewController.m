@@ -1052,10 +1052,53 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         [widgetInitParams setObject: alertController.textFields[3].text forKey:@"shape"]; // convert to uppercase
         [self createWidgetFromParams:widgetInitParams];
     }];
+    UIAlertAction *syntaxHelpAction = [UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Conditional / Tap Syntax"]
+                                                              style:UIAlertActionStyleDefault
+                                                            handler:^(UIAlertAction *action){
+        [self presentConditionalSyntaxHelp];
+    }];
+    [alertController addAction:syntaxHelpAction];
     [alertController addAction:readInstruction];
     [alertController addAction:cancelAction];
     [alertController addAction:okAction];
     [self presentViewController:alertController animated:YES completion:nil];
+}
+
+// Help popup for the COND: / '*' tap / GYRO combo syntax, with a one-tap "Copy Template"
+// that drops a ready-to-edit command on the clipboard to paste into the Command field.
+- (void)presentConditionalSyntaxHelp {
+    NSString *helpText =
+        @"Conditional button — COND:base:arm:armedOutput\n"
+        @"  base: normal output (also used when NOT armed)\n"
+        @"  arm: token(s) that must ALL have just been pressed\n"
+        @"  armedOutput: fired instead, when armed\n\n"
+        @"Combo extras (in any output):\n"
+        @"  '*' tap: OSCB* = press then auto-release (no * = hold)\n"
+        @"  GYRO: gyro ON while held (no '*', put before -NNms)\n\n"
+        @"Examples:\n"
+        @"  COND:OSCL2:OSCX:OSCL2-OSCA\n"
+        @"  COND:OSCR2:OSCL2-OSCA:OSCB*-OSCR2-GYRO-50MS";
+    NSString *commandTemplate = @"cond:oscr2:osca:oscb*-oscr2-gyro-50ms";
+
+    UIAlertController *help = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Conditional / Tap Syntax"]
+                                                                 message:helpText
+                                                          preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertAction *copyAction = [UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Copy Template"]
+                                                         style:UIAlertActionStyleDefault
+                                                       handler:^(UIAlertAction *action){
+        [UIPasteboard generalPasteboard].string = commandTemplate;
+        UIAlertController *copied = [UIAlertController alertControllerWithTitle:@""
+                                                                       message:[LocalizationHelper localizedStringForKey:@"Template copied. Paste it into the Command field."]
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [copied addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"OK"] style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:copied animated:YES completion:nil];
+    }];
+    UIAlertAction *closeAction = [UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Close"]
+                                                          style:UIAlertActionStyleCancel
+                                                        handler:nil];
+    [help addAction:copyAction];
+    [help addAction:closeAction];
+    [self presentViewController:help animated:YES completion:nil];
 }
 
 
@@ -1136,7 +1179,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         
     widgetInitParams[@"cmdString"] = cmdString;
     bool noValidKeyboardString = [CommandManager.shared extractKeyStringsFromComboCommandFrom:cmdString] == nil; // this is a invalid string.
-    bool noValidSuperComboButtonString = [CommandManager.shared extractSinglCmdStringsFromComboKeysFrom:cmdString] == nil; // this is a invalid string.
+    bool noValidSuperComboButtonString = [CommandManager.shared extractSinglCmdStringsFromComboKeysFrom:[CommandManager.shared comboStringStrippingTapMarkers:cmdString]] == nil; // '*' tap markers stripped before grammar check
     bool noValidMouseButtonString = ![CommandManager.mouseButtonMappings.allKeys containsObject:cmdString];
     bool noValidTouchPadString = ![CommandManager.touchPadCmds containsObject:cmdString];
     bool noValidOscButtonString = ![CommandManager.oscButtonMappings.allKeys containsObject:cmdString];
