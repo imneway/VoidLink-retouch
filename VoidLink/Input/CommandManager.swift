@@ -630,6 +630,97 @@ import UIKit
         return validCmdStrings
     }
 
+    // MARK: - Conditional widget "last activation" tracking
+    //
+    // Records the token set of the most recent on-screen button activation so a
+    // conditional widget can decide its output from what was pressed just before it.
+    // Both writers run on the main thread — legacy OSC button taps via
+    // OnScreenControls.handleTouchDownEvent, and custom-widget presses via
+    // OnScreenWidgetView.handleButtonDown — and the reader (handleButtonDown again)
+    // is also main-thread, so no locking is needed. Each press OVERWRITES the set;
+    // we only ever care about "the last press", never history.
+    private var _lastActivationTokens: Set<String> = []
+
+    // Collapses OSC aliases to one canonical spelling so the arm/record comparison matches
+    // regardless of which alias the user typed (e.g. "L1"/"LB"/"OSCL1" all → "OSCL1", and
+    // legacy taps recorded as "OSCL1" by armTokenForTouchLocation: line up too). Tokens with
+    // no alias (OSCA, keyboard, mouse, …) pass through uppercased.
+    private static let tokenCanonicalMap: [String: String] = [
+        "L1": "OSCL1", "LB": "OSCL1",
+        "R1": "OSCR1", "RB": "OSCR1",
+        "L2": "OSCL2", "LT": "OSCL2",
+        "R2": "OSCR2", "RT": "OSCR2",
+        "L3": "OSCL3", "LS": "OSCL3",
+        "R3": "OSCR3", "RS": "OSCR3",
+        "OSCPLAY": "OSCSTART",
+        "OSCBACK": "OSCSELECT"
+    ]
+
+    private static func canonicalToken(_ token: String) -> String {
+        let upper = token.uppercased()
+        return tokenCanonicalMap[upper] ?? upper
+    }
+
+    // Legacy single-button tap (one flag = one token).
+    @objc public func recordLastActivationToken(_ token: String) {
+        _lastActivationTokens = [CommandManager.canonicalToken(token)]
+    }
+
+    // Custom widget press (a combo widget fires a whole token set "together").
+    @objc public func recordLastActivationTokens(_ tokens: [String]) {
+        _lastActivationTokens = Set(tokens.map { CommandManager.canonicalToken($0) })
+    }
+
+    // AND / subset test: every arm token must be present in the last activation.
+    public func lastActivationContainsAll(_ tokens: [String]) -> Bool {
+        guard !tokens.isEmpty else { return false }
+        let snapshot = _lastActivationTokens
+        return tokens.allSatisfy { snapshot.contains(CommandManager.canonicalToken($0)) }
+    }
+
+    // MARK: - Conditional command syntax  —  COND:<base>:<arm>:<armedOutput>
+    //
+    // <base>        the button's normal binding (also the "condition not met" output)
+    // <arm>         tokens that must ALL be in the last activation to arm (AND semantics)
+    // <armedOutput> combo fired when armed; may carry '*' tap markers (see OnScreenWidgetView)
+    // Each of the three is a normal combo string (internal '-' / trailing '<n>MS').
+
+    @objc public func isConditionalCommand(_ input: String) -> Bool {
+        return input.uppercased().hasPrefix("COND:")
+    }
+
+    // Returns [base, arm, armedOutput] (original case preserved) or nil if malformed.
+    @objc public func conditionalCommandComponents(_ input: String) -> [String]? {
+        let parts = input.components(separatedBy: ":")
+        guard parts.count == 4, parts[0].uppercased() == "COND" else { return nil }
+        guard !parts[1].isEmpty, !parts[2].isEmpty, !parts[3].isEmpty else { return nil }
+        return [parts[1], parts[2], parts[3]]
+    }
+
+    // Mirrors OnScreenWidgetView.parseComboString: '*' is a tap marker only at a token's
+    // END. A naive global strip would wrongly accept "O*SCR2", which the runtime then
+    // can't map → silent no-op. Strip a single trailing '*' per token only.
+    private static func stripTrailingTapMarkers(_ combo: String) -> String {
+        return combo
+            .split(separator: "-", omittingEmptySubsequences: false)
+            .map { part -> String in
+                var token = String(part)
+                if token.hasSuffix("*") { token.removeLast() }
+                return token
+            }
+            .joined(separator: "-")
+    }
+
+    @objc public func isValidConditionalCommand(_ input: String) -> Bool {
+        guard let comps = conditionalCommandComponents(input) else { return false }
+        let base = comps[0], arm = comps[1], armed = comps[2]
+        // armedOutput may carry '*' tap markers; base/arm normally don't, but strip
+        // consistently so validation matches exactly what the runtime parser accepts.
+        return extractSinglCmdStringsFromComboKeys(from: CommandManager.stripTrailingTapMarkers(base)) != nil
+            && extractSinglCmdStringsFromComboKeys(from: CommandManager.stripTrailingTapMarkers(arm)) != nil
+            && extractSinglCmdStringsFromComboKeys(from: CommandManager.stripTrailingTapMarkers(armed)) != nil
+    }
+
     @objc(normalizedPhysicalControllerComboSource:)
     public static func normalizedPhysicalControllerComboSource(_ input: String?) -> String {
         let raw = (input ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()

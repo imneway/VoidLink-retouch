@@ -75,6 +75,23 @@ import UIKit
     // super combo key string set
     private var comboButtonStrings: [String] = []
     private var comboKeyTimeIntervalMs: UInt32 = 0
+    // Per-token "tap" flags parallel to comboButtonStrings: true = press then auto-release
+    // mid-sequence (don't hold to widget release). Empty array = all-hold (legacy behavior).
+    private var comboButtonTapFlags: [Bool] = []
+
+    // Conditional widget (cmdString "COND:base:arm:armedOutput", see CommandManager).
+    // When armed (arm tokens ⊆ last activation), the press fires armedOutput instead of
+    // the base combo (comboButtonStrings). base IS the "not armed" branch, so the normal
+    // comboButtonStrings/comboButtonTapFlags/comboKeyTimeIntervalMs hold the base output.
+    private var isConditional: Bool = false
+    private var conditionArmTokens: [String] = []
+    private var conditionArmedStrings: [String] = []
+    private var conditionArmedTapFlags: [Bool] = []
+    private var conditionArmedIntervalMs: UInt32 = 0
+    // Branch latched at button-down so button-up releases exactly what went down,
+    // even if the arming state changed while the button was held.
+    private var heldDispatchStrings: [String]? = nil
+    private var heldDispatchIntervalMs: UInt32 = 0
 
     @objc public var pressed: Bool
     private var restoreAlphaAfterRelease: Bool = false
@@ -386,8 +403,26 @@ import UIKit
         
         self.cmdString = cmdString
         self.touchPadString = ""
-        
-        if !self.cmdString.contains("+"){
+
+        if let condComps = CommandManager.shared.conditionalCommandComponents(cmdString),
+           CommandManager.shared.isConditionalCommand(cmdString) {
+            // Conditional widget: "COND:base:arm:armedOutput". The base drives the normal
+            // button behavior (and is the "not armed" output); arm/armedOutput are parsed
+            // separately and consulted at press time (see resolveDispatch / handleButtonDown).
+            self.isConditional = true
+            self.widgetType = WidgetTypeEnum.button
+            let baseParsed = OnScreenWidgetView.parseComboString(condComps[0])
+            self.comboButtonStrings = baseParsed.tokens
+            self.comboButtonTapFlags = baseParsed.taps
+            self.comboKeyTimeIntervalMs = baseParsed.intervalMs
+            self.buttonString = baseParsed.tokens.first ?? ""
+            self.conditionArmTokens = OnScreenWidgetView.parseComboString(condComps[1]).tokens
+            let armedParsed = OnScreenWidgetView.parseComboString(condComps[2])
+            self.conditionArmedStrings = armedParsed.tokens
+            self.conditionArmedTapFlags = armedParsed.taps
+            self.conditionArmedIntervalMs = armedParsed.intervalMs
+        }
+        else if !self.cmdString.contains("+"){
             // 安全解包并处理 `comboKeyStrings`
             if var comboStrings = CommandManager.shared.extractSinglCmdStringsFromComboKeys(from: self.cmdString) {
                 
@@ -1869,14 +1904,32 @@ import UIKit
     //==== wholeButtonPress visual effect=============================================
     private func handleButtonDown() {
         if !OnScreenWidgetView.editMode && !CommandManager.specialOverlayButtonCmds.contains(self.cmdString) {
-            self.sendComboButtonsDownEvent(comboStrings: self.comboButtonStrings)
-            self.handleMotionControlButtonDown()
-            // Mirror the press onto the matching legacy OSC button(s) — visual only.
-            // Buttons only (touchpads / sticks never run handleButtonDown); a no-op when
-            // the legacy button isn't currently shown (guarded in OnScreenControls).
-            if self.widgetType == WidgetTypeEnum.button {
-                for token in self.comboButtonStrings {
-                    self.onScreenControls.mirrorLegacyButtonHighlight(forString: token, pressed: true)
+            // Resolve + fire only on the FIRST touch of a press cycle. A button can receive
+            // several handleButtonDown calls (multi-finger, or slide-in from handleButtonSliding)
+            // before its matching up; re-resolving on a later touch could latch a different
+            // branch than button-up will release, stranding a key down. heldDispatchStrings != nil
+            // means "already held", so later touches no-op here (the key is already down) — the
+            // same idempotent multi-touch result non-conditional buttons already produced.
+            if self.heldDispatchStrings == nil {
+                // Pick base vs armed output, and latch it so button-up releases the same set.
+                let dispatch = self.resolveDispatch()
+                self.heldDispatchStrings = dispatch.strings
+                self.heldDispatchIntervalMs = dispatch.intervalMs
+                self.sendComboButtonsDownEvent(comboStrings: dispatch.strings, tapFlags: dispatch.taps, intervalMs: dispatch.intervalMs)
+                // Record what was actually emitted so a conditional widget pressed next can arm
+                // off it (this is also what powers the single-press cascade). Main-thread write.
+                // Skip empty dispatches (e.g. legacy "+" combos) so they don't wipe the arm state.
+                if !dispatch.strings.isEmpty {
+                    CommandManager.shared.recordLastActivationTokens(dispatch.strings)
+                }
+                self.handleMotionControlButtonDown()
+                // Mirror the press onto the matching legacy OSC button(s) — visual only.
+                // Buttons only (touchpads / sticks never run handleButtonDown); a no-op when
+                // the legacy button isn't currently shown (guarded in OnScreenControls).
+                if self.widgetType == WidgetTypeEnum.button {
+                    for token in dispatch.strings {
+                        self.onScreenControls.mirrorLegacyButtonHighlight(forString: token, pressed: true)
+                    }
                 }
             }
         }
@@ -1899,14 +1952,18 @@ import UIKit
     
     private func handlebuttonUp() {
         if !OnScreenWidgetView.editMode && !CommandManager.specialOverlayButtonCmds.contains(self.cmdString) {
-            self.sendComboButtonsUpEvent(comboStrings: self.comboButtonStrings)
+            // Release exactly the branch that went down (latched at button-down), so a
+            // mid-press change in arming can't strand keys held.
+            let releaseStrings = self.heldDispatchStrings ?? self.comboButtonStrings
+            self.sendComboButtonsUpEvent(comboStrings: releaseStrings, intervalMs: self.heldDispatchIntervalMs)
             self.handleMotionControlButtonUp()
             // Release the mirrored legacy-button highlight (visual only; see handleButtonDown).
             if self.widgetType == WidgetTypeEnum.button {
-                for token in self.comboButtonStrings {
+                for token in releaseStrings {
                     self.onScreenControls.mirrorLegacyButtonHighlight(forString: token, pressed: false)
                 }
             }
+            self.heldDispatchStrings = nil
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -2372,39 +2429,109 @@ import UIKit
     }
     
 //==============================================================================
-    private func sendComboButtonsDownEvent(comboStrings: [String]) {
+    // Trailing tap (a '*' token in the last combo slot, with no following press to
+    // ride) is held this long before release so the host still sees a distinct press.
+    private static let trailingTapHoldMs: UInt32 = 50
+
+    // Parse a combo string ("OSCB*-OSCR2-50MS") into ordered tokens, parallel tap flags
+    // ('*' suffix = press-then-auto-release), and the trailing inter-key interval.
+    private static func parseComboString(_ raw: String) -> (tokens: [String], taps: [Bool], intervalMs: UInt32) {
+        var parts = raw.uppercased().split(separator: "-").map(String.init)
+        var intervalMs: UInt32 = 0
+        if let last = parts.last, last.hasSuffix("MS"), let value = UInt32(last.dropLast(2)) {
+            intervalMs = value
+            parts.removeLast()
+        }
+        var tokens: [String] = []
+        var taps: [Bool] = []
+        for part in parts {
+            if part.hasSuffix("*") {
+                taps.append(true)
+                tokens.append(String(part.dropLast()))
+            } else {
+                taps.append(false)
+                tokens.append(part)
+            }
+        }
+        return (tokens, taps, intervalMs)
+    }
+
+    // True when this is a conditional widget AND every arm token is in the last activation.
+    private func conditionIsArmed() -> Bool {
+        guard isConditional, !conditionArmTokens.isEmpty else { return false }
+        return CommandManager.shared.lastActivationContainsAll(conditionArmTokens)
+    }
+
+    // The (tokens, tap flags, interval) to fire for this press: the armed output when a
+    // conditional widget is armed, otherwise the base combo (also the non-conditional path).
+    private func resolveDispatch() -> (strings: [String], taps: [Bool], intervalMs: UInt32) {
+        if isConditional && conditionIsArmed() {
+            return (conditionArmedStrings, conditionArmedTapFlags, conditionArmedIntervalMs)
+        }
+        return (comboButtonStrings, comboButtonTapFlags, comboKeyTimeIntervalMs)
+    }
+
+    private func pressComboToken(_ token: String) {
+        if CommandManager.oscButtonMappings.keys.contains(token) {
+            self.sendOscButtonDownEvent(oscString: token)
+        }
+        if CommandManager.keyboardButtonMappings.keys.contains(token) {
+            LiSendKeyboardEvent(CommandManager.keyboardButtonMappings[token]!, Int8(KEY_ACTION_DOWN), 0)
+        }
+        if CommandManager.mouseButtonMappings.keys.contains(token) {
+            LiSendMouseButtonEvent(CChar(BUTTON_ACTION_PRESS), Int32(CommandManager.mouseButtonMappings[token]!))
+        }
+    }
+
+    private func releaseComboToken(_ token: String) {
+        if CommandManager.oscButtonMappings.keys.contains(token) {
+            self.sendOscButtonUpEvent(oscString: token)
+        }
+        if CommandManager.keyboardButtonMappings.keys.contains(token) {
+            LiSendKeyboardEvent(CommandManager.keyboardButtonMappings[token]!, Int8(KEY_ACTION_UP), 0)
+        }
+        if CommandManager.mouseButtonMappings.keys.contains(token) {
+            LiSendMouseButtonEvent(CChar(BUTTON_ACTION_RELEASE), Int32(CommandManager.mouseButtonMappings[token]!))
+        }
+    }
+
+    // tapFlags empty (or shorter than comboStrings) ⇒ those tokens are held to release =
+    // exactly the legacy all-hold behavior. intervalMs nil ⇒ use this widget's own interval.
+    private func sendComboButtonsDownEvent(comboStrings: [String], tapFlags: [Bool] = [], intervalMs: UInt32? = nil) {
+        let gap = intervalMs ?? self.comboKeyTimeIntervalMs
         DispatchQueue.global(qos: .userInteractive).async {
-            for comboString in comboStrings {
-                if CommandManager.oscButtonMappings.keys.contains(comboString) {
-                    self.sendOscButtonDownEvent(oscString: comboString)
+            var pendingTapReleaseIndex: Int? = nil
+            for i in 0..<comboStrings.count {
+                if i > 0 {
+                    usleep(gap * 1000) // delay xxx ms between consecutive presses
                 }
-                if CommandManager.keyboardButtonMappings.keys.contains(comboString) {
-                    LiSendKeyboardEvent(CommandManager.keyboardButtonMappings[comboString]!,Int8(KEY_ACTION_DOWN), 0)
+                // Let a previous tap key go right as the next one goes down, so it reads
+                // as a quick tap (held ~one inter-key interval) rather than a hold.
+                if let releaseIndex = pendingTapReleaseIndex {
+                    self.releaseComboToken(comboStrings[releaseIndex])
+                    pendingTapReleaseIndex = nil
                 }
-                if CommandManager.mouseButtonMappings.keys.contains(comboString) {
-                    LiSendMouseButtonEvent(CChar(BUTTON_ACTION_PRESS), Int32(CommandManager.mouseButtonMappings[comboString]!))
+                self.pressComboToken(comboStrings[i])
+                if i < tapFlags.count && tapFlags[i] {
+                    pendingTapReleaseIndex = i
                 }
-                if comboString != comboStrings.last {
-                    usleep(self.comboKeyTimeIntervalMs*1000) // delay xxx ms
-                }
+            }
+            if let releaseIndex = pendingTapReleaseIndex {
+                usleep(OnScreenWidgetView.trailingTapHoldMs * 1000)
+                self.releaseComboToken(comboStrings[releaseIndex])
             }
         }
     }
 
-    private func sendComboButtonsUpEvent(comboStrings: [String]) {
+    // Releases every token (tap tokens were already let go during the down sequence, so
+    // releasing them again is a harmless no-op) — identical to the legacy all-release path.
+    private func sendComboButtonsUpEvent(comboStrings: [String], intervalMs: UInt32? = nil) {
+        let gap = intervalMs ?? self.comboKeyTimeIntervalMs
         DispatchQueue.global(qos: .userInteractive).async {
-            for comboString in comboStrings {
-                if CommandManager.oscButtonMappings.keys.contains(comboString) {
-                    self.sendOscButtonUpEvent(oscString: comboString)
-                }
-                if CommandManager.keyboardButtonMappings.keys.contains(comboString) {
-                    LiSendKeyboardEvent(CommandManager.keyboardButtonMappings[comboString]!,Int8(KEY_ACTION_UP), 0)
-                }
-                if CommandManager.mouseButtonMappings.keys.contains(comboString) {
-                    LiSendMouseButtonEvent(CChar(BUTTON_ACTION_RELEASE), Int32(CommandManager.mouseButtonMappings[comboString]!))
-                }
-                if comboString != comboStrings.last {
-                    usleep(self.comboKeyTimeIntervalMs*1000) // delay xxx ms
+            for i in 0..<comboStrings.count {
+                self.releaseComboToken(comboStrings[i])
+                if i != comboStrings.count - 1 {
+                    usleep(gap * 1000) // delay xxx ms
                 }
             }
         }

@@ -21,6 +21,7 @@
 #import "OnScreenButtonState.h"
 #import "OSCProfilesManager.h"
 #import "DataManager.h"
+#import "VoidLink-Swift.h"   // CommandManager (records last legacy button press for conditional widgets)
 
 #define UPDATE_BUTTON(x, y) (buttonFlags = \
 (y) ? (buttonFlags | (x)) : (buttonFlags & ~(x)))
@@ -1526,6 +1527,28 @@ static float L3_Y;
 
 
 // osc Button capturing here
+// Maps a touch landing on a discrete legacy OSC button to its canonical OSC token, for
+// the conditional-widget "last activation" record. Sticks / L3 / R3 are intentionally
+// excluded (analog / toggle, not useful arm sources). Mirrors the hit-test order of
+// handleTouchDownEvent below; re-hit-testing on a fresh touch-down is negligible.
+- (NSString *)armTokenForTouchLocation:(CGPoint)loc {
+    if ([_aButton.presentationLayer hitTest:loc])      return @"OSCA";
+    if ([_bButton.presentationLayer hitTest:loc])      return @"OSCB";
+    if ([_xButton.presentationLayer hitTest:loc])      return @"OSCX";
+    if ([_yButton.presentationLayer hitTest:loc])      return @"OSCY";
+    if ([_upButton.presentationLayer hitTest:loc])     return @"OSCUP";
+    if ([_downButton.presentationLayer hitTest:loc])   return @"OSCDOWN";
+    if ([_leftButton.presentationLayer hitTest:loc])   return @"OSCLEFT";
+    if ([_rightButton.presentationLayer hitTest:loc])  return @"OSCRIGHT";
+    if ([_startButton.presentationLayer hitTest:loc])  return @"OSCSTART";
+    if ([_selectButton.presentationLayer hitTest:loc]) return @"OSCSELECT";
+    if ([_l1Button.presentationLayer hitTest:loc])     return @"OSCL1";
+    if ([_r1Button.presentationLayer hitTest:loc])     return @"OSCR1";
+    if ([_l2Button.presentationLayer hitTest:loc])     return @"OSCL2";
+    if ([_r2Button.presentationLayer hitTest:loc])     return @"OSCR2";
+    return nil;
+}
+
 - (BOOL)handleTouchDownEvent:touches {
     BOOL updated = false;
     BOOL stickTouch = false;
@@ -1695,7 +1718,13 @@ static float L3_Y;
             updated = true;
             touchEventCapturedByOsc = true;
         }
-        if(touchEventCapturedByOsc) [touchAddrsCapturedByOnScreenControls addObject:@((uintptr_t)touch)];
+        if(touchEventCapturedByOsc) {
+            // Record a discrete legacy-button tap as the "last activation" so conditional
+            // widgets (e.g. armed by a legacy X press) can read it. Single token = single tap.
+            NSString *armToken = [self armTokenForTouchLocation:touchLocation];
+            if (armToken) [[CommandManager shared] recordLastActivationToken:armToken];
+            [touchAddrsCapturedByOnScreenControls addObject:@((uintptr_t)touch)];
+        }
     }
     if (updated) {
         [_controllerSupport updateFinished:_controller];
