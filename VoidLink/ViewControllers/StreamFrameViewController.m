@@ -2763,10 +2763,19 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
 - (void)connectionTerminated:(int)errorCode {
     Log(LOG_I, @"Connection terminated: %d", errorCode);
-    
+
     unsigned int portFlags = LiGetPortFlagsFromTerminationErrorCode(errorCode);
     unsigned int portTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);
-    
+
+    // This callback fires on a moonlight-common thread, not main. Capture the
+    // StreamManager we're tearing down in a local strong ref: we stop it below on
+    // this thread, and the main-queue block nils the ivar only if it still points
+    // at this same manager. Nil-ing the ivar directly from the main block would
+    // race the `[... stopStream]` at the tail (main could win and send stopStream
+    // to nil → old connection never torn down), and could also clobber a fresh
+    // manager a later reconnect installed.
+    StreamManager* terminatedStreamMan = _streamMan;
+
     dispatch_async(dispatch_get_main_queue(), ^{
         // Allow the display to go to sleep now
         [UIApplication sharedApplication].idleTimerDisabled = NO;
@@ -2832,6 +2841,14 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         
         // For offline/network class errors, self-heal instead of blocking
         if (portFlags != 0 || errorCode == ETIMEDOUT || errorCode == ECONNREFUSED) {
+            // Drop the dead StreamManager so startStreamManager (guarded by
+            // `if (_streamMan != nil) return`) can actually build a fresh one when
+            // the host comes back. Without this, self-heal probes detect "online"
+            // but the restart is a no-op and the stream never resumes. Only clear
+            // if the ivar still points at the manager that just terminated.
+            if (self->_streamMan == terminatedStreamMan) {
+                self->_streamMan = nil;
+            }
             [self updateOverlayText:[LocalizationHelper localizedStringForKey:@"Host offline. Retrying..."]];
             [self beginSelfHealReconnectLoopWithOverlay:NO];
         } else {
@@ -2846,7 +2863,7 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         }
     });
 
-    [_streamMan stopStream];
+    [terminatedStreamMan stopStream];
 }
 
 - (void) stageStarting:(const char*)stageName {
@@ -2866,8 +2883,13 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
 - (void) stageFailed:(const char*)stageName withError:(int)errorCode portTestFlags:(int)portTestFlags {
     Log(LOG_I, @"Stage %s failed: %d", stageName, errorCode);
-    
+
     unsigned int portTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portTestFlags);
+
+    // Callback thread, not main — capture the manager we're stopping so the main
+    // block can nil the ivar by identity without racing the tail stopStream.
+    // (See connectionTerminated: for the full rationale.)
+    StreamManager* failedStreamMan = _streamMan;
 
     dispatch_async(dispatch_get_main_queue(), ^{
         // Allow the display to go to sleep now
@@ -2886,6 +2908,12 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         
         // For offline/network/timeout-like failures, enter self-heal instead of blocking with alert
         if (portTestFlags != 0 || errorCode == ETIMEDOUT || errorCode == ECONNREFUSED) {
+            // See connectionTerminated: drop the dead StreamManager so the self-heal
+            // loop can rebuild one once the host is reachable again — by identity, to
+            // avoid clobbering a manager a concurrent reconnect may have installed.
+            if (self->_streamMan == failedStreamMan) {
+                self->_streamMan = nil;
+            }
             [self updateOverlayText:[LocalizationHelper localizedStringForKey:@"Host offline. Retrying..."]];
             [self beginSelfHealReconnectLoopWithOverlay:NO];
         } else {
@@ -2899,8 +2927,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
             [self presentViewController:alert animated:YES completion:nil];
         }
     });
-    
-    [_streamMan stopStream];
+
+    [failedStreamMan stopStream];
 }
 
 - (void) launchFailed:(NSString*)message {

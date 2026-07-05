@@ -166,6 +166,11 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     keysDown = [[NSMutableSet alloc] init];
     suppressedGestureTouchAddrs = [NSMutableSet set];
     rightEdgeGestureSuppressionDepth = 0;
+    oscGestureSuppressed = NO;
+    // Guarantee a clean, non-suppressed input state on every (re)configuration so a
+    // right-edge suppression that never received its matching "end" can't leave OSC
+    // input dead until force-quit. Clears the process-wide static too.
+    [OnScreenWidgetView forceResetGestureSuppression];
     keyInputField = [[KeyboardInputField alloc] initWithFrame:CGRectZero];
     [keyInputField setKeyboardType:UIKeyboardTypeDefault];
     [keyInputField setAutocorrectionType:UITextAutocorrectionTypeNo];
@@ -566,7 +571,9 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 
 - (void) reloadOnScreenWidgetViews{
 
-    // NSLog(@"reload on screen keyboard buttons here");
+    // Diagnostic: if this fires repeatedly during play, some loop is thrashing the
+    // widget hierarchy (each rebuild tears down widgets and drops in-flight touches).
+    NSLog(@"[InputDiag] reloadOnScreenWidgetViews");
 
     // remove all keyboard widget views first
     [self clearOnScreenWidgets];
@@ -1321,6 +1328,12 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
         if (suppressedGestureTouchAddrs.count > 0) {
             [suppressedGestureTouchAddrs removeAllObjects];
         }
+        // Even when our per-instance flag is already clear, make sure the
+        // process-wide static can't stay stuck true (it gates ALL OSC input).
+        // The instance flag and the static could desync — e.g. a new StreamView
+        // setup reset the instance flag while a prior begin left the static set —
+        // and a stuck static suppressed every widget until force-quit.
+        [OnScreenWidgetView endGestureSuppression];
         return;
     }
 
@@ -1333,6 +1346,17 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     oscGestureSuppressed = NO;
     [suppressedGestureTouchAddrs removeAllObjects];
     [OnScreenWidgetView endGestureSuppression];
+}
+
+// Unconditionally clear any right-edge gesture suppression, both the per-instance
+// state and the process-wide OnScreenWidgetView static. Called on every stream-view
+// (re)configuration so a suppression that never got a matching "end" self-heals
+// instead of killing OSC input for the rest of the process lifetime.
+- (void)resetRightEdgeGestureSuppression {
+    rightEdgeGestureSuppressionDepth = 0;
+    oscGestureSuppressed = NO;
+    [suppressedGestureTouchAddrs removeAllObjects];
+    [OnScreenWidgetView forceResetGestureSuppression];
 }
 
 - (void)willMoveToWindow:(UIWindow *)newWindow {

@@ -609,6 +609,10 @@ static inline int16_t clamp_int16(CGFloat v) {
                         NSLog(@"setup device built-in gyro accelTimer");
                         voidController.hasAccelerometer = YES;
                         voidController.accelTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
+                            // Orphan self-destruct: if this isn't the controller's current
+                            // accelTimer, a newer setup superseded us (or teardown missed us).
+                            // Kill self so a stale timer can't keep flooding input forever.
+                            if (timer != voidController.accelTimer) { [timer invalidate]; return; }
                             if (![self motionEmissionAllowed]) return;
                             // Accel only matters for the DS4 motion path. Skip when
                             // gyro is being routed to stick/mouse — sending accel
@@ -657,6 +661,8 @@ static inline int16_t clamp_int16(CGFloat v) {
                         NSLog(@"setup device built-in gyro gyroTimer");
                         voidController.hasGyroscope = YES;
                         voidController.gyroTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
+                            // Orphan self-destruct (see accel timer above).
+                            if (timer != voidController.gyroTimer) { [timer invalidate]; return; }
                             BOOL emit = [self motionEmissionAllowed] && self->_mapGyroTo != MapGyroToOff;
                             // When suppressed, drop any leftover RightStick gyro
                             // contribution to 0 once. Otherwise the last non-zero
@@ -765,6 +771,8 @@ static inline int16_t clamp_int16(CGFloat v) {
                             void (^setupAccelTimer)(void) = ^{
                                 voidController.hasAccelerometer = YES;
                                 voidController.accelTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
+                                    // Orphan self-destruct (see device accel timer above).
+                                    if (timer != voidController.accelTimer) { [timer invalidate]; return; }
                                     if (![self motionEmissionAllowed]) return;
                                     // Don't send duplicate samples
                                     GCAcceleration lastAccelSample = voidController.lastAccelSample;
@@ -804,6 +812,8 @@ static inline int16_t clamp_int16(CGFloat v) {
                             {dispatch_async(dispatch_get_main_queue(), ^{
                                 voidController.hasGyroscope = YES;
                                 voidController.gyroTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
+                                    // Orphan self-destruct (see device accel timer above).
+                                    if (timer != voidController.gyroTimer) { [timer invalidate]; return; }
                                     if (![self motionEmissionAllowed]) return;
                                     // Don't send duplicate samples
                                     GCRotationRate lastGyroSample = voidController.lastGyroSample;
@@ -852,26 +862,40 @@ static inline int16_t clamp_int16(CGFloat v) {
 
 - (void) setMotionEventState:(uint16_t)controllerNumber motionType:(uint8_t)motionType reportRateHz:(uint16_t)reportRateHz {
     if (@available(iOS 14.0, tvOS 14.0, *)) {
-        NSLog(@"gyroMode: %ld", (long)_gyroMode);
-        
-        VoidController* voidController = [_voidControllers objectForKey:[NSNumber numberWithInteger:controllerNumber]];
-        //using device motion
-        if (voidController == nil || _gyroMode == AlwaysDevice) {
-            // No connected controller for this player, use the _oscController instead
-            voidController = _oscController;
-            if(!voidController.motionTypes){
-                voidController.motionTypes = [[NSMutableSet alloc] init];
-            }
-            [voidController.motionTypes addObject:@(motionType)];
-            
-            voidController.hasGyroscope = NO;
-            voidController.hasAccelerometer = NO;
-            voidController.reportRateHz = reportRateHz;
-        }
-        
-        voidController.controllerNumber = controllerNumber;
+        // This is a moonlight-common host callback (ClSetMotionEventState) that fires
+        // on a common thread. It mutates VoidController motion state and (re)builds
+        // the accel/gyro NSTimers — all of which are otherwise only touched on the
+        // main thread, where the timers live and fire. Marshal the whole body to main
+        // so timer property reads/writes stay single-threaded (matches the setup path
+        // and the timers' own self-guard read). async is safe: no return value, and
+        // inline-if-already-main avoids a needless hop.
+        void (^work)(void) = ^{
+            NSLog(@"gyroMode: %ld", (long)self->_gyroMode);
 
-        if(voidController == _oscController) [self updateTimerStateForController:voidController];
+            VoidController* voidController = [self->_voidControllers objectForKey:[NSNumber numberWithInteger:controllerNumber]];
+            //using device motion
+            if (voidController == nil || self->_gyroMode == AlwaysDevice) {
+                // No connected controller for this player, use the _oscController instead
+                voidController = self->_oscController;
+                if(!voidController.motionTypes){
+                    voidController.motionTypes = [[NSMutableSet alloc] init];
+                }
+                [voidController.motionTypes addObject:@(motionType)];
+
+                voidController.hasGyroscope = NO;
+                voidController.hasAccelerometer = NO;
+                voidController.reportRateHz = reportRateHz;
+            }
+
+            voidController.controllerNumber = controllerNumber;
+
+            if(voidController == self->_oscController) [self updateTimerStateForController:voidController];
+        };
+        if ([NSThread isMainThread]) {
+            work();
+        } else {
+            dispatch_async(dispatch_get_main_queue(), work);
+        }
     }
 }
 
@@ -1026,8 +1050,32 @@ static inline int16_t clamp_int16(CGFloat v) {
 
 -(void) updateFinished:(VoidController*)controller
 {
+    // --- Input-path diagnostic (throttled ≈1/sec) -------------------------------
+    // Counts updateFinished calls per second and reports the last sender + payload.
+    // A runaway rate (hundreds/sec) with a stale sender pointer fingers an orphan
+    // timer flooding the stream; a normal rate while input feels dead points instead
+    // at the gesture-suppression path. Cheap enough to leave always-on.
+    {
+        static NSInteger sDiagCallCount = 0;
+        static CFTimeInterval sDiagLastLog = 0;
+        sDiagCallCount++;
+        CFTimeInterval now = CACurrentMediaTime();
+        if (sDiagLastLog == 0) sDiagLastLog = now;
+        if (now - sDiagLastLog >= 1.0) {
+            NSLog(@"[InputDiag] updateFinished x%ld/%.1fs sender=%p osc=%d btn=0x%X L=(%d,%d) R=(%d,%d)",
+                  (long)sDiagCallCount, now - sDiagLastLog, controller,
+                  controller == _oscController,
+                  (unsigned)(controller.lastButtonFlags | controller.comboButtonFlags),
+                  controller.lastLeftStickX, controller.lastLeftStickY,
+                  controller.lastRightStickX, controller.lastRightStickY);
+            sDiagCallCount = 0;
+            sDiagLastLog = now;
+        }
+    }
+    // ----------------------------------------------------------------------------
+
     BOOL exitRequested = NO;
-    
+
     [_controllerStreamLock lock];
     @synchronized(controller) {
         // Handle Start+Select+L1+R1 gamepad quit combo
@@ -1955,9 +2003,14 @@ static inline int16_t clamp_int16(CGFloat v) {
     OnScreenControlsLevel level = (OnScreenControlsLevel)[settings.onscreenControls integerValue];
     
     // Even if no gamepads are present, we will always count one if OSC is enabled,
-    // or it's set to auto and no keyboard or mouse is present. Absolute touch mode
-    // disables the OSC.
-    if (level != OnScreenControlsLevelOff && (![ControllerSupport hasKeyboardOrMouse] || level != OnScreenControlsLevelAuto) && (settings.touchMode.intValue == RelativeTouch)) {
+    // or it's set to auto and no keyboard or mouse is present. OSC is active in both
+    // RelativeTouch and NativeTouch modes (StreamView only forces it Off for
+    // AbsoluteTouch / NativeTouchOnly), so the handshake mask must advertise the OSC
+    // gamepad in either — otherwise NativeTouch sessions hand Sunshine a zero mask
+    // and rely on a post-connect arrival, widening the resume-time controller churn.
+    BOOL touchModeAllowsOsc = (settings.touchMode.intValue == RelativeTouch ||
+                               settings.touchMode.intValue == NativeTouch);
+    if (level != OnScreenControlsLevelOff && (![ControllerSupport hasKeyboardOrMouse] || level != OnScreenControlsLevelAuto) && touchModeAllowsOsc) {
         mask |= 0x1;
     }
     
@@ -2326,14 +2379,15 @@ static inline int16_t clamp_int16(CGFloat v) {
     [self resetGyroInputForController:voidController];
     if (@available(iOS 14.0, *)) {
         //NSLog(@"stop controller obj: %@, hasAcc %d, hasGyro %d", voidController, voidController.hasAccelerometer, voidController.hasGyroscope);
-        if(voidController.hasAccelerometer){
-            [voidController.accelTimer invalidate];
-            voidController.accelTimer = nil;
-        }
-        if(voidController.hasGyroscope){
-            [voidController.gyroTimer invalidate];
-            voidController.gyroTimer = nil;
-        }
+        // Invalidate unconditionally. The hasAccelerometer/hasGyroscope flags are
+        // toggled asynchronously by the timer-setup blocks and by setMotionEventState,
+        // so gating invalidation on them left a window where a live timer was skipped
+        // here and became an orphan — running forever on the main runloop, flooding the
+        // input stream every tick and stuttering/overriding real input until force-quit.
+        [voidController.accelTimer invalidate];
+        voidController.accelTimer = nil;
+        [voidController.gyroTimer invalidate];
+        voidController.gyroTimer = nil;
     }
     // Clear any leftover gyro-synthesized stick contribution so subsequent
     // physical-stick / button updateFinished calls don't keep blending in

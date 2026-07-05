@@ -15,6 +15,7 @@ import UIKit
     @objc static func beginGestureSuppression() {
         if OnScreenWidgetView.gesturesSuppressed { return }
         OnScreenWidgetView.gesturesSuppressed = true
+        NSLog("[InputDiag] gestureSuppression BEGIN (static=true)")
         DispatchQueue.main.async {
             for case let widget as OnScreenWidgetView in OnScreenWidgetView.activeInstances.allObjects {
                 widget.cancelActiveTouchesDueToGestureSuppression()
@@ -23,9 +24,39 @@ import UIKit
     }
 
     @objc static func endGestureSuppression() {
-        guard OnScreenWidgetView.gesturesSuppressed else { return }
-        DispatchQueue.main.async {
-            OnScreenWidgetView.gesturesSuppressed = false
+        // Clear the flag synchronously. The previous implementation deferred this
+        // to the next main-loop turn, which could interleave with a subsequent
+        // beginGestureSuppression (that early-returns on the already-true flag) and
+        // leave the process-wide static stuck `true` — suppressing ALL OSC input
+        // until the app was force-quit. Synchronous clear removes that race.
+        if OnScreenWidgetView.gesturesSuppressed {
+            NSLog("[InputDiag] gestureSuppression END (static=false)")
+        }
+        OnScreenWidgetView.gesturesSuppressed = false
+    }
+
+    // Hard, unconditional reset. Called whenever the stream view is (re)configured
+    // so a stuck-suppressed static self-heals without requiring a force-quit.
+    @objc static func forceResetGestureSuppression() {
+        if OnScreenWidgetView.gesturesSuppressed {
+            NSLog("[InputDiag] gestureSuppression FORCE-RESET (was stuck true)")
+        }
+        OnScreenWidgetView.gesturesSuppressed = false
+    }
+
+    // Throttled (≈1/sec) diagnostic: fires when a widget touch is dropped because
+    // gesture suppression is active. If this keeps logging while the user is trying
+    // to play, a stuck suppression flag is eating OSC input (bug-1 signature).
+    private static var lastSuppressedDropLogTime: CFTimeInterval = 0
+    private static var suppressedDropCountSinceLog: Int = 0
+    static func logSuppressedTouchDrop() {
+        suppressedDropCountSinceLog += 1
+        let now = CACurrentMediaTime()
+        if now - lastSuppressedDropLogTime >= 1.0 {
+            NSLog("[InputDiag] OSC touch dropped by gestureSuppression x%d in last %.1fs (suppression stuck?)",
+                  suppressedDropCountSinceLog, now - lastSuppressedDropLogTime)
+            lastSuppressedDropLogTime = now
+            suppressedDropCountSinceLog = 0
         }
     }
 
@@ -2609,6 +2640,7 @@ import UIKit
     // Touch event handling
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         if OnScreenWidgetView.gesturesSuppressed {
+            OnScreenWidgetView.logSuppressedTouchDrop()
             super.touchesBegan(touches, with: event)
             return
         }
