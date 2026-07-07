@@ -130,6 +130,10 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         return;
     }
     if (![[[profilesManager getSelectedProfile] name] isEqualToString:found.name]) {
+        // Persist in-progress edits into the profile they belong to BEFORE switching
+        // the selection — the reload below rebuilds from persisted data and would
+        // otherwise silently discard them.
+        [self saveTapped:nil];
         [profilesManager setProfileToSelected:found.name];
         // 在编辑界面需要重载两套控件
         [self reloadLegacyOnScreenControls];
@@ -606,6 +610,11 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 
 - (void) viewDidLoad {
     [super viewDidLoad];
+    // Transparent so the stream stays visible under the OverCurrentContext editor.
+    // Previously set from StreamFrameViewController.configOscLayoutTool via .view,
+    // which force-loaded this VC's view early — moved here so creating the editor
+    // no longer triggers viewDidLoad before presentation.
+    self.view.backgroundColor = [UIColor clearColor];
     profilesManager = [OSCProfilesManager sharedManager:self.view.bounds];
     self.onScreenWidgetViews = [[NSMutableSet alloc] init]; // will be revised to read persisted data , somewhere else
     [OSCProfilesManager setOnScreenWidgetViewsSet:self.onScreenWidgetViews];   // pass the keyboard button dict to profiles manager
@@ -772,7 +781,11 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 }
 
 - (void)handleReturnToForeground {
-    // [OSCProfilesManager setOnScreenWidgetViewsSet:self.onScreenWidgetViews];   // pass the keyboard button dict to profiles manager
+    // updateViewBounds rebuilds everything from the persisted profile, discarding
+    // whatever is on screen. Normally the resign-time auto-save (handleEnterBackground)
+    // made that lossless, but save first here too so this reload can never destroy
+    // in-progress edits if the resign save was missed or failed.
+    [self saveTapped:nil];
     [self setupWidgetPanel];
     [self updateViewBounds];
 }
@@ -836,10 +849,18 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         NSLog(@"❌ viewWillBeResized = NO，跳过处理");
         return;
     }
-    
+
+    // This is the device-orientation (tilt) entry point into a destructive reload.
+    // viewWillTransitionToSize saves at rotation start, but a tilt notification
+    // arriving while viewWillBeResized is (or is stuck) true used to reload straight
+    // from the persisted profile and wipe any edit made since that save — the
+    // "tilt the device and lose the unsaved widget" bug. Save first, always, so the
+    // reload below is lossless no matter how the flag handshake misfires.
+    [self saveTapped:nil];
+
     // 应用方向锁定（编辑界面）
     [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
-    
+
     [self setupWidgetPanel];
     [self updateViewBounds];
 }
@@ -1342,6 +1363,10 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
             [self.oscProfilesTableViewController profileViewRefresh]; // execute this will reset layout in OSC tool!
         }]];
         if(sender) [self presentViewController:savedAlertController animated:YES completion:nil];
+        // Auto-save callers (sender == nil) get no alert — leave a Console marker so a
+        // reload that follows this failed save is traceable (edits on a template are
+        // discarded by design, but it should never be a silent mystery).
+        else NSLog(@"[SaveDiag] auto-save skipped: template profile '%@' is read-only", selectedProfile.name);
     }
 }
 

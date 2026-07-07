@@ -389,6 +389,13 @@ import UIKit
     //slide buttons
     private var capturedTouches: NSMutableSet
     private let noTouch: UITouch = UITouch()
+
+    // Serial queue for combo press/release sequences. These used to run on the
+    // CONCURRENT global queue: with per-token delays (usleep) still in flight, a
+    // quick tap's UP block could overtake the delayed DOWN block and the host was
+    // left with the key stuck pressed. One serial queue per widget keeps every
+    // down/up sequence in submission order while staying off the main thread.
+    private let comboSendQueue = DispatchQueue(label: "com.voidlink.combo-send", qos: .userInteractive)
     
     //controller touch pad
     private var pointerIdPool: Set<UInt32>
@@ -2598,7 +2605,7 @@ import UIKit
     // exactly the legacy all-hold behavior. intervalMs nil ⇒ use this widget's own interval.
     private func sendComboButtonsDownEvent(comboStrings: [String], tapFlags: [Bool] = [], intervalMs: UInt32? = nil) {
         let gap = intervalMs ?? self.comboKeyTimeIntervalMs
-        DispatchQueue.global(qos: .userInteractive).async {
+        comboSendQueue.async {
             var pendingTapReleaseIndex: Int? = nil
             for i in 0..<comboStrings.count {
                 if i > 0 {
@@ -2626,7 +2633,7 @@ import UIKit
     // releasing them again is a harmless no-op) — identical to the legacy all-release path.
     private func sendComboButtonsUpEvent(comboStrings: [String], intervalMs: UInt32? = nil) {
         let gap = intervalMs ?? self.comboKeyTimeIntervalMs
-        DispatchQueue.global(qos: .userInteractive).async {
+        comboSendQueue.async {
             for i in 0..<comboStrings.count {
                 self.releaseComboToken(comboStrings[i])
                 if i != comboStrings.count - 1 {
@@ -2944,7 +2951,6 @@ import UIKit
             
             if CommandManager.specialOverlayButtonCmds.contains(self.cmdString){
                 if let touch = touches.first {
-                    NSLog("touchTapTimeStamp %f", self.touchTapTimeStamp)
                     if CACurrentMediaTime() - self.touchTapTimeStamp > 0.3 { // temporarily relocate special buttons
                         self.moveByTouch(touch: touch)
                         self.handlebuttonUp()
@@ -2981,48 +2987,42 @@ import UIKit
         self.latestTouchLocation = currentTouchLocation
     }
     
+    // All cases now read the UITouch and compute deltas on the calling (main) thread
+    // and invoke the send directly. The old per-event hop to the CONCURRENT global
+    // queue read `touch.location(in:)` off the main thread (UITouch is not
+    // thread-safe), raced the shared delta/latestTouchLocation state, and — being
+    // concurrent — could process move events out of order, which showed up as
+    // stick/mouse jitter. The Li* send functions just enqueue into the input queue
+    // (the legacy OSC path already calls them on the main thread), so the direct
+    // call also removes a queue-hop of input latency.
     private func handleTouchPadMoveEvent (_ touches: Set<UITouch>, with event: UIEvent?){
         if touches.count == 1{ // don't use event.alltouches.count here, it will counts all touches
             switch self.touchPadString{
             case "MOUSEPAD":
-                DispatchQueue.global(qos: .userInteractive).async {
-                    self.updateTouchLocation(touch: touches.first!)
-                    LiSendMouseMoveEvent(Int16(truncatingIfNeeded: Int(self.deltaX * 1.7 * self.sensitivityFactorX)), Int16(truncatingIfNeeded: Int(self.deltaY * 1.7 * self.sensitivityFactorY)))
-                }
-                break
+                self.updateTouchLocation(touch: touches.first!)
+                LiSendMouseMoveEvent(Int16(truncatingIfNeeded: Int(self.deltaX * 1.7 * self.sensitivityFactorX)), Int16(truncatingIfNeeded: Int(self.deltaY * 1.7 * self.sensitivityFactorY)))
             case "TRACKBALL":
-                DispatchQueue.global(qos: .userInteractive).async {
-                    self.updateTouchLocation(touch: touches.first!)
-                    LiSendMouseMoveEvent(Int16(truncatingIfNeeded: Int(self.deltaX * 1.7 * self.sensitivityFactorX)), Int16(truncatingIfNeeded: Int(self.deltaY * 1.7 * self.sensitivityFactorY)))
-                    self.trackballVelocity = CGPoint(x: self.deltaX * 1.7 * self.sensitivityFactorX, y: self.deltaY * 1.7 * self.sensitivityFactorY)
-                    self.stopTrackballMomentum()
-                }
-                break
+                self.updateTouchLocation(touch: touches.first!)
+                LiSendMouseMoveEvent(Int16(truncatingIfNeeded: Int(self.deltaX * 1.7 * self.sensitivityFactorX)), Int16(truncatingIfNeeded: Int(self.deltaY * 1.7 * self.sensitivityFactorY)))
+                self.trackballVelocity = CGPoint(x: self.deltaX * 1.7 * self.sensitivityFactorX, y: self.deltaY * 1.7 * self.sensitivityFactorY)
+                self.stopTrackballMomentum()
             case "LSPAD", "LSPADALT":
                 self.updateTouchLocation(touch: touches.first!)
-                DispatchQueue.global(qos: .userInteractive).async {
-                    self.sendLeftStickTouchPadEvent(inputX: self.offSetX * self.sensitivityFactorX, inputY: self.offSetY * self.sensitivityFactorY)
-                }
+                self.sendLeftStickTouchPadEvent(inputX: self.offSetX * self.sensitivityFactorX, inputY: self.offSetY * self.sensitivityFactorY)
                 if widgetType == WidgetTypeEnum.touchPad && shouldShowRuntimeStickIndicator {updateStickIndicator()}
             case "RSPAD", "RSPADALT":
                 self.updateTouchLocation(touch: touches.first!)
-                DispatchQueue.global(qos: .userInteractive).async {
-                    self.sendRightStickTouchPadEvent(inputX: self.offSetX * self.sensitivityFactorX, inputY: self.offSetY * self.sensitivityFactorY)
-                }
+                self.sendRightStickTouchPadEvent(inputX: self.offSetX * self.sensitivityFactorX, inputY: self.offSetY * self.sensitivityFactorY)
                 if widgetType == WidgetTypeEnum.touchPad && shouldShowRuntimeStickIndicator {updateStickIndicator()}
             case "RSPADALT2":
                 self.handleRightAimStickMove(touch: touches.first!)
                 if widgetType == WidgetTypeEnum.touchPad && shouldShowRuntimeStickIndicator {updateStickIndicator()}
             case "LSVPAD":
-                DispatchQueue.global(qos: .userInteractive).async {
-                    self.updateTouchLocation(touch: touches.first!)
-                    self.sendLeftStickTouchPadEvent(inputX: self.deltaX*1.5167*self.sensitivityFactorX, inputY: self.deltaY*1.5167*self.sensitivityFactorY)
-                }
+                self.updateTouchLocation(touch: touches.first!)
+                self.sendLeftStickTouchPadEvent(inputX: self.deltaX*1.5167*self.sensitivityFactorX, inputY: self.deltaY*1.5167*self.sensitivityFactorY)
             case "RSVPAD":
-                DispatchQueue.global(qos: .userInteractive).async {
-                    self.updateTouchLocation(touch: touches.first!)
-                    self.sendRightStickTouchPadEvent(inputX: self.deltaX*1.5167*self.sensitivityFactorX, inputY: self.deltaY*1.5167*self.sensitivityFactorY)
-                }
+                self.updateTouchLocation(touch: touches.first!)
+                self.sendRightStickTouchPadEvent(inputX: self.deltaX*1.5167*self.sensitivityFactorX, inputY: self.deltaY*1.5167*self.sensitivityFactorY)
             case "DPAD", "WASDPAD", "ARROWPAD":
                 self.updateTouchLocation(touch: touches.first!)
                 handleLrudTouchMove()

@@ -361,6 +361,15 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
 - (void)configOscLayoutTool{
 
     if([self isOscLayoutToolEnabled]){
+        // Never rebuild the editor VC while it is being shown: replacing the ivar
+        // mid-edit orphans the presented editor, and (worse) loading the new
+        // instance's view would run its viewDidLoad, which repoints the
+        // process-wide OSCProfilesManager widget set to the new instance's EMPTY
+        // set — every subsequent save (including the auto-save on app resign)
+        // would then silently drop all widgets from the profile.
+        if (_layoutOnScreenControlsVC != nil && _layoutOnScreenControlsVC.presentingViewController != nil) {
+            return;
+        }
         /* sets a reference to the correct 'LayoutOnScreenControlsViewController' depending on whether the user is on an iPhone or iPad */
         // _layoutOnScreenControlsVC = [[LayoutOnScreenControlsViewController alloc] init];
         BOOL isIPhone = ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPhone);
@@ -373,7 +382,10 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
             _layoutOnScreenControlsVC = [storyboard instantiateViewControllerWithIdentifier:@"LayoutOnScreenControlsViewController"];
             _layoutOnScreenControlsVC.modalPresentationStyle = UIModalPresentationFullScreen;
         }
-        _layoutOnScreenControlsVC.view.backgroundColor = UIColor.clearColor;
+        // NOTE: do NOT touch _layoutOnScreenControlsVC.view here. Accessing .view
+        // force-loads the view and runs viewDidLoad immediately (repointing the
+        // static widget set, see above). The clear background this line used to set
+        // now lives in the editor's own viewDidLoad.
         _layoutOnScreenControlsVC.modalPresentationStyle = UIModalPresentationOverCurrentContext;
     }
     //NSLog(@"in osc frameview gestures: %d", (uint32_t)[self.view.gestureRecognizers count]);

@@ -67,15 +67,21 @@
     UIImage* upButtonImage = [UIImage imageNamed:@"UpButton"];
     UIImage* leftButtonImage = [UIImage imageNamed:@"LeftButton"];
     
-    //  create dPad background layer
-    self._dPadBackground = [CALayer layer];
-    self._dPadBackground.name = @"dPad";
+    //  create (or reuse) the dPad background layer. This method runs again on every
+    //  updateControls pass (profile switch, foreground return, …) via dynamic
+    //  dispatch — allocating a fresh layer each time appended one more "dPad" entry
+    //  to OSCButtonLayers per reload, and every save then wrote the duplicates into
+    //  the profile, bloating it with stacked dPad button states.
+    if (self._dPadBackground == nil) {
+        self._dPadBackground = [CALayer layer];
+        self._dPadBackground.name = @"dPad";
+        [self.OSCButtonLayers addObject:self._dPadBackground];
+    }
     self._dPadBackground.frame = CGRectMake(self.D_PAD_CENTER_X,
                                       self.D_PAD_CENTER_Y,
                                       self._leftButton.frame.size.width * 2 + BUTTON_DIST,
                                       self._leftButton.frame.size.width * 2 + BUTTON_DIST);
     self._dPadBackground.position = CGPointMake(self.D_PAD_CENTER_X, self.D_PAD_CENTER_Y);    // since dPadBackground's dimensions have change after settings its width and height you need to reset its position again here
-    [self.OSCButtonLayers addObject:self._dPadBackground];
     [_view.layer addSublayer:self._dPadBackground];
 
     // add dPad buttons to parent layer

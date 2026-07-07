@@ -1286,6 +1286,17 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 
 - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
     [touchHandler touchesCancelled:touches withEvent:event];
+    // iOS cancels (not ends) touches on system interruptions — edge gestures for
+    // Control/Notification Center, incoming calls, 4/5-finger multitasking swipes,
+    // palm rejection — exactly the situations frantic play produces. Without routing
+    // the cancel through the OSC release path, a legacy button whose touch got
+    // cancelled kept its flag set forever ("stuck pressed"), and the touch's entry
+    // in touchAddrsCapturedByOnScreenControls leaked — UIKit recycles UITouch
+    // objects, so a later unrelated touch with the same address would be silently
+    // swallowed by the native/relative touch handlers. handleTouchUpEvent is the
+    // release path: it only acts on touches it owns and also clears the captured-
+    // address entry, so calling it here is safe in every touch mode.
+    [self->onScreenControls handleTouchUpEvent:touches];
 #if !TARGET_OS_TV
     if (settings.touchMode.intValue == NativeTouchOnly) return; //This is a native touch oriented fork, in pure native touch mode, this call back method deals with native touch only.
     if (@available(iOS 13.4, *)){ //now only pencil events are restricted

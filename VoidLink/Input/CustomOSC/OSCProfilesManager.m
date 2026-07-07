@@ -291,11 +291,27 @@ static CGRect layoutViewBounds;
 
 - (bool) updateSelectedProfile:(NSMutableArray *) oscButtonLayers {
     NSMutableArray* buttonStatesEncoded = [self convertOnScreenControllerAndWidgetsToButtonStates:oscButtonLayers];
-    
+
     // 检查当前选中的布局是否为模板布局
     OSCProfile *currentProfile = [self getSelectedProfile];
     if (currentProfile && [self isTemplateProfile:currentProfile.name]) {
         return false;
+    }
+
+    // Diagnostic tripwire for the "widgets silently vanish from the profile" class
+    // of bug: the profile had custom widgets but this save is about to write none.
+    // Legitimate when the user deleted them all; a red flag when it happens on an
+    // auto-save (see [SaveDiag] in Console).
+    if (OnScreenWidgetViews.count == 0 && currentProfile != nil) {
+        NSUInteger previousWidgetCount = 0;
+        for (NSData *stateEncoded in currentProfile.buttonStates) {
+            OnScreenButtonState *state = [self unarchiveButtonStateEncoded:stateEncoded];
+            if (state.buttonType == CustomOnScreenWidget) previousWidgetCount++;
+        }
+        if (previousWidgetCount > 0) {
+            NSLog(@"[SaveDiag] updateSelectedProfile writing 0 widgets over profile '%@' which had %lu (widget set=%p)",
+                  currentProfile.name, (unsigned long)previousWidgetCount, OnScreenWidgetViews);
+        }
     }
     OSCProfile *newProfile = [[OSCProfile alloc] initWithName:currentProfile.name
                             buttonStates:buttonStatesEncoded isSelected:YES];        // create a new 'OSCProfile'. Set the array of encoded button states created above to the 'buttonStates' property of the new profile, along with a 'name'. Set 'isSelected' argument to YES which will set this saved profile as the one that will show up in the game stream view
@@ -347,14 +363,10 @@ static CGRect layoutViewBounds;
 }
 
 - (CGPoint)normalizeWidgetPosition:(CGPoint)position {
-    CGPoint newPosition = position;
     if(position.x > 1.0 && position.y >1.0){
         position.x = position.x / layoutViewBounds.size.width;
         position.y = position.y / layoutViewBounds.size.height;
     }
-    // asdfsda;
-    NSLog(@"sef.view bounds: %f, %f", layoutViewBounds.size.width, layoutViewBounds.size.height);
-    NSLog(@"position: %f, %f, denormalized position: %f, %f", position.x, position.y, newPosition.x, newPosition.y);
     return position;
 }
 
@@ -385,9 +397,20 @@ static CGRect layoutViewBounds;
         @"startButton",
         nil]; */
     NSMutableArray *buttonStatesEncoded = [[NSMutableArray alloc] init];
-    
+
     // save on-screen game controller buttons & sticks as buttonstate:
+    // Legacy layer names are unique by design; skip duplicates so a layer list that
+    // accumulated repeats (older builds re-created the dPad layer on every reload)
+    // can't keep bloating the profile — and existing bloated profiles shrink back
+    // to one state per button on their next save.
+    NSMutableSet<NSString *> *emittedLegacyNames = [NSMutableSet set];
     for (CALayer *oscButtonLayer in oscButtonLayers) {
+        if (oscButtonLayer.name != nil) {
+            if ([emittedLegacyNames containsObject:oscButtonLayer.name]) {
+                continue;
+            }
+            [emittedLegacyNames addObject:oscButtonLayer.name];
+        }
         CGPoint normalizedPosition = [self normalizeWidgetPosition:oscButtonLayer.position];
         OnScreenButtonState *buttonState = [[OnScreenButtonState alloc] initWithButtonName:oscButtonLayer.name buttonType:LegacyOscButton andPosition:normalizedPosition];
         // add hidden attr here
@@ -415,7 +438,6 @@ static CGRect layoutViewBounds;
         OnScreenButtonState *buttonState = [[OnScreenButtonState alloc] initWithButtonName:widgetView.cmdString buttonType:CustomOnScreenWidget andPosition:normalizedPosition];
         buttonState.alias = widgetView.buttonLabel;
         buttonState.widthFactor = [self normalizeSizeWidthFactor:widgetView];
-        NSLog(@"logging widthFactor %f", buttonState.widthFactor);
         buttonState.heightFactor = [self normalizeSizeHeightFactor:widgetView];
         buttonState.backgroundAlpha = widgetView.backgroundAlpha;
         buttonState.borderWidth = widgetView.borderWidth;

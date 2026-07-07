@@ -88,6 +88,22 @@ static NSSet *validPositionButtonNames;
     NSMutableSet<NSString *> *_mirroredButtonNames;
     NSMutableDictionary<NSString *, CAShapeLayer *> *_buttonCenterIndicators;
     NSMutableDictionary<NSString *, CAShapeLayer *> *_buttonCenterIndicatorBases;
+    // Style of the cached vibrationGenerator, so a press only reallocates the
+    // generator when the style actually changed (allocating one per press stalls
+    // the main thread during rapid input).
+    NSInteger _vibrationGeneratorStyle;
+    // Which d-pad directions the current _dpadTouch is holding. Lets the moved
+    // handler fire press feedback (haptics + highlight) only on transitions
+    // instead of on every touchesMoved event while the finger rests on a button.
+    BOOL _dpadUpActive;
+    BOOL _dpadDownActive;
+    BOOL _dpadLeftActive;
+    BOOL _dpadRightActive;
+    // Selected profile's button states, decoded once per updateControls cycle.
+    // The custom-layout path used to re-decode the whole profile in five separate
+    // passes (updateControls, setDPadCenter, setAnalogStickPositions,
+    // positionAndResizeSingleControllerLayers, setOpacityForCutsomControllerLayers).
+    NSArray<OnScreenButtonState *> *_cachedDecodedButtonStates;
 }
 
 @synthesize D_PAD_CENTER_X;
@@ -556,7 +572,27 @@ static float L3_Y;
     return position;
 }
 
+// Decode the selected profile's button states once and cache them for the rest of
+// the current layout pass. updateControls invalidates the cache at its entry, so
+// every reload sees fresh data while the helper methods it calls share one decode.
+- (NSArray<OnScreenButtonState *> *)decodedButtonStatesFromSelectedProfile {
+    if (_cachedDecodedButtonStates) {
+        return _cachedDecodedButtonStates;
+    }
+    OSCProfile *oscProfile = [profilesManager getSelectedProfile];
+    NSMutableArray<OnScreenButtonState *> *states = [NSMutableArray arrayWithCapacity:oscProfile.buttonStates.count];
+    for (NSData *buttonStateEncoded in oscProfile.buttonStates) {
+        OnScreenButtonState *buttonState = [profilesManager unarchiveButtonStateEncoded:buttonStateEncoded];
+        if (buttonState) {
+            [states addObject:buttonState];
+        }
+    }
+    _cachedDecodedButtonStates = states;
+    return _cachedDecodedButtonStates;
+}
+
 - (void) updateControls {
+    _cachedDecodedButtonStates = nil; // profile may have changed — force a fresh decode
     if(self._level == OnScreenControlsLevelCustom){
         // mark all OSC buttons that has valid coords of positions
         validPositionButtonNames = [NSSet setWithObjects:
@@ -576,11 +612,9 @@ static float L3_Y;
                                     nil];
         
         // _activeCustomOscButtonPositionDict will be updated every time when the osc profile is reloaded
-        OSCProfile *oscProfile = [profilesManager getSelectedProfile]; //returns the currently selected OSCProfile
         [_activeCustomOscButtonPositionDict removeAllObjects]; //reset the Dict.
         // NSLog(@"_activeCustomOscButtonPositionDict update: STARTOVER");
-        for (NSData *buttonStateEncoded in oscProfile.buttonStates) {
-            OnScreenButtonState* buttonState = [profilesManager unarchiveButtonStateEncoded:buttonStateEncoded];
+        for (OnScreenButtonState* buttonState in [self decodedButtonStatesFromSelectedProfile]) {
             buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
             [OnScreenControls.layerVibrationStyleDic setObject:@(buttonState.vibrationStyle) forKey:buttonState.name];
             if(!buttonState.isHidden && [validPositionButtonNames containsObject:buttonState.name] && (buttonState.buttonType == LegacyOscButton || [profilesManager getIndexOfSelectedProfile] == 0 ) ){
@@ -624,12 +658,6 @@ static float L3_Y;
             [self hideStartSelect];
             [self hideBumpers];
             [self hideTriggers];
-            [self hideSticks];
-            [self hideL3R3];
-            [self hideButtons];
-            [self hideBumpers];
-            [self hideTriggers];
-            [self hideStartSelect];
             [self hideSticks];
             [self hideL3R3];
             break;
@@ -946,10 +974,7 @@ static float L3_Y;
  * Sets D-Pad position for class const var
  */
 - (void) setDPadCenter {
-    OSCProfile *oscProfile = [profilesManager getSelectedProfile]; //returns the currently selected OSCProfile
-    
-    for (NSData *buttonStateEncoded in oscProfile.buttonStates) {
-        OnScreenButtonState* buttonState = [profilesManager unarchiveButtonStateEncoded:buttonStateEncoded];
+    for (OnScreenButtonState* buttonState in [self decodedButtonStatesFromSelectedProfile]) {
         if ([buttonState.name isEqualToString:@"dPad"]) {
             buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
             D_PAD_CENTER_X = buttonState.position.x;
@@ -963,10 +988,7 @@ static float L3_Y;
  * Sets analog stick positions for class const var
  */
 - (void) setAnalogStickPositions {
-    OSCProfile *oscProfile = [profilesManager getSelectedProfile]; // returns the currently selected OSCProfile
-    
-    for (NSData *buttonStateEncoded in oscProfile.buttonStates) {
-        OnScreenButtonState* buttonState = [profilesManager unarchiveButtonStateEncoded:buttonStateEncoded];
+    for (OnScreenButtonState* buttonState in [self decodedButtonStatesFromSelectedProfile]) {
         buttonState.position = [self denormalizeWidgetPosition:buttonState.position];
         if ([buttonState.name isEqualToString:@"leftStickBackground"]) {
             LS_CENTER_X = buttonState.position.x;
@@ -987,13 +1009,9 @@ static float L3_Y;
 # define LR2_Y_UP_OFFSET 8
 # define LR1_Y_DOWN_OFFSET 3.5
 - (void) positionAndResizeSingleControllerLayers {
-    OSCProfile *oscProfile = [profilesManager getSelectedProfile];
     bool defaultProfileSelected = [profilesManager getIndexOfSelectedProfile] == 0;
-    
-    for (NSData *buttonStateEncoded in oscProfile.buttonStates) {
-        
-        OnScreenButtonState *buttonStateDecoded = [profilesManager unarchiveButtonStateEncoded:buttonStateEncoded];
 
+    for (OnScreenButtonState *buttonStateDecoded in [self decodedButtonStatesFromSelectedProfile]) {
 
         for (CALayer *buttonLayer in self.OSCButtonLayers) {    // iterate through each button layer on screen and position and hide/unhide each according to the instructions of its associated 'buttonState'
             if ([buttonLayer.name isEqualToString:buttonStateDecoded.name]) {
@@ -1050,11 +1068,9 @@ static float L3_Y;
 
 
 - (void) setOpacityForCutsomControllerLayers {
-    OSCProfile *oscProfile = [profilesManager getSelectedProfile];
     // bool defaultProfileSelected = [profilesManager getIndexOfSelectedProfile] == 0;
-    
-    for (NSData *buttonStateEncoded in oscProfile.buttonStates) {
-        OnScreenButtonState* buttonStateDecoded = [profilesManager unarchiveButtonStateEncoded:buttonStateEncoded];
+
+    for (OnScreenButtonState* buttonStateDecoded in [self decodedButtonStatesFromSelectedProfile]) {
 
         for (CALayer *buttonLayer in self.OSCButtonLayers) {    // iterate through each button layer on screen
             // Here we deal with resizing single layer controllers only
@@ -1322,44 +1338,64 @@ static float L3_Y;
         } else if (touch == _dpadTouch) {
             [_controllerSupport clearButtonFlag:_controller
                                           flags:UP_FLAG | DOWN_FLAG | LEFT_FLAG | RIGHT_FLAG];
-            
-            // Allow the user to slide their finger to another d-pad button
-            if ([_upButton.presentationLayer hitTest:touchLocation]) {
+
+            // Allow the user to slide their finger to another d-pad button.
+            // Press feedback (haptics + highlight) and the release visual are only
+            // applied on the enter/leave TRANSITION for each direction — running
+            // them on every touchesMoved event allocated a feedback generator and
+            // buzzed at event rate (up to 120 Hz) while the finger rested on a
+            // button, stalling the main thread during play. The button flags are
+            // still recomputed every event (cheap), and any transition marks the
+            // event as updated so the cleared/set flags are actually flushed —
+            // previously sliding OFF the whole d-pad never sent the release.
+            BOOL nowUp = [_upButton.presentationLayer hitTest:touchLocation] != nil;
+            if (nowUp) {
                 [_controllerSupport setButtonFlag:_controller flags:UP_FLAG];
-                [self oscButtonTouchDownFeedback:_upButton];
+                if (!_dpadUpActive) { [self oscButtonTouchDownFeedback:_upButton]; }
                 updated = true;
-            } else {
+            } else if (_dpadUpActive) {
                 _upButton.opacity = [_originalControllerLayerOpacityDict[_upButton.name] floatValue];
                 _upButton.shadowOpacity = 0.0;
-            }
-
-            if ([_downButton.presentationLayer hitTest:touchLocation]) {
-                [_controllerSupport setButtonFlag:_controller flags:DOWN_FLAG];
-                [self oscButtonTouchDownFeedback:_downButton];
                 updated = true;
-            } else {
+            }
+            _dpadUpActive = nowUp;
+
+            BOOL nowDown = [_downButton.presentationLayer hitTest:touchLocation] != nil;
+            if (nowDown) {
+                [_controllerSupport setButtonFlag:_controller flags:DOWN_FLAG];
+                if (!_dpadDownActive) { [self oscButtonTouchDownFeedback:_downButton]; }
+                updated = true;
+            } else if (_dpadDownActive) {
                 _downButton.opacity = [_originalControllerLayerOpacityDict[_downButton.name] floatValue];
                 _downButton.shadowOpacity = 0.0;
-            }
-
-            if ([_leftButton.presentationLayer hitTest:touchLocation]) {
-                [_controllerSupport setButtonFlag:_controller flags:LEFT_FLAG];
-                [self oscButtonTouchDownFeedback:_leftButton];
                 updated = true;
-            } else {
+            }
+            _dpadDownActive = nowDown;
+
+            BOOL nowLeft = [_leftButton.presentationLayer hitTest:touchLocation] != nil;
+            if (nowLeft) {
+                [_controllerSupport setButtonFlag:_controller flags:LEFT_FLAG];
+                if (!_dpadLeftActive) { [self oscButtonTouchDownFeedback:_leftButton]; }
+                updated = true;
+            } else if (_dpadLeftActive) {
                 _leftButton.opacity = [_originalControllerLayerOpacityDict[_leftButton.name] floatValue];
                 _leftButton.shadowOpacity = 0.0;
-            }
-            
-            if ([_rightButton.presentationLayer hitTest:touchLocation]) {
-                [_controllerSupport setButtonFlag:_controller flags:RIGHT_FLAG];
-                [self oscButtonTouchDownFeedback:_rightButton];
                 updated = true;
-            } else {
+            }
+            _dpadLeftActive = nowLeft;
+
+            BOOL nowRight = [_rightButton.presentationLayer hitTest:touchLocation] != nil;
+            if (nowRight) {
+                [_controllerSupport setButtonFlag:_controller flags:RIGHT_FLAG];
+                if (!_dpadRightActive) { [self oscButtonTouchDownFeedback:_rightButton]; }
+                updated = true;
+            } else if (_dpadRightActive) {
                 _rightButton.opacity = [_originalControllerLayerOpacityDict[_rightButton.name] floatValue];
                 _rightButton.shadowOpacity = 0.0;
+                updated = true;
             }
-            
+            _dpadRightActive = nowRight;
+
             buttonTouch = true;
         } else if (touch == _aTouch) {
             buttonTouch = true;
@@ -1447,10 +1483,14 @@ static float L3_Y;
     // NSLog(@"vibration on: %d",vibraiontOn);
 
     if(haptics && vibraiontOn){
-        vibrationGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:vibrationStyle];
-        [vibrationGenerator prepare];
+        // Reuse the generator across presses — allocating one per press (plus a
+        // synchronous NSLog) is a measurable main-thread stall during rapid input.
+        if (vibrationGenerator == nil || _vibrationGeneratorStyle != vibrationStyle) {
+            vibrationGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:vibrationStyle];
+            _vibrationGeneratorStyle = vibrationStyle;
+        }
         [vibrationGenerator impactOccurred];
-        NSLog(@"vibration instance: %@",vibrationGenerator);
+        [vibrationGenerator prepare]; // keep the taptic engine warm for the next press
     }
 
     
@@ -1558,109 +1598,119 @@ static float L3_Y;
         
         CGPoint touchLocation = [touch locationInView:_view];
         
-        if ([_aButton.presentationLayer hitTest:touchLocation]) {
+        // Each capture slot is guarded with `== nil`: while a finger already owns a
+        // button, a second finger landing on the same button must NOT steal the slot
+        // (it used to overwrite the touch pointer, so the first finger's lift-off
+        // matched nothing and the second finger's lift-off released the button early).
+        // The un-captured second touch falls through to the dead-zone check below and
+        // is swallowed there instead of leaking to the mouse/native touch handlers.
+        if (_aTouch == nil && [_aButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:A_FLAG];
             _aTouch = touch;
             [self oscButtonTouchDownFeedback:_aButton];
             if (_obscuredByAlpha) { _aButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_bButton.presentationLayer hitTest:touchLocation]) {
+        } else if (_bTouch == nil && [_bButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:B_FLAG];
             _bTouch = touch;
             [self oscButtonTouchDownFeedback:_bButton];
             if (_obscuredByAlpha) { _bButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_xButton.presentationLayer hitTest:touchLocation]) {
+        } else if (_xTouch == nil && [_xButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:X_FLAG];
             _xTouch = touch;
             [self oscButtonTouchDownFeedback:_xButton];
             if (_obscuredByAlpha) { _xButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_yButton.presentationLayer hitTest:touchLocation]) {
+        } else if (_yTouch == nil && [_yButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:Y_FLAG];
             _yTouch = touch;
             [self oscButtonTouchDownFeedback:_yButton];
             if (_obscuredByAlpha) { _yButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_upButton.presentationLayer hitTest:touchLocation]) {
+        } else if (_dpadTouch == nil && [_upButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:UP_FLAG];
             _dpadTouch = touch;
             _upTouch = touch;
+            _dpadUpActive = YES; _dpadDownActive = _dpadLeftActive = _dpadRightActive = NO;
             [self oscButtonTouchDownFeedback:_upButton];
             if (_obscuredByAlpha) { _upButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_downButton.presentationLayer hitTest:touchLocation]) {
+        } else if (_dpadTouch == nil && [_downButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:DOWN_FLAG];
             _dpadTouch = touch;
             _downTouch = touch;
+            _dpadDownActive = YES; _dpadUpActive = _dpadLeftActive = _dpadRightActive = NO;
             [self oscButtonTouchDownFeedback:_downButton];
             if (_obscuredByAlpha) { _downButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_leftButton.presentationLayer hitTest:touchLocation]) {
+        } else if (_dpadTouch == nil && [_leftButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:LEFT_FLAG];
             _dpadTouch = touch;
             _leftTouch = touch;
+            _dpadLeftActive = YES; _dpadUpActive = _dpadDownActive = _dpadRightActive = NO;
             [self oscButtonTouchDownFeedback:_leftButton];
             if (_obscuredByAlpha) { _leftButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_rightButton.presentationLayer hitTest:touchLocation]) {
+        } else if (_dpadTouch == nil && [_rightButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:RIGHT_FLAG];
             _dpadTouch = touch;
             _rightTouch = touch;
+            _dpadRightActive = YES; _dpadUpActive = _dpadDownActive = _dpadLeftActive = NO;
             [self oscButtonTouchDownFeedback:_rightButton];
             if (_obscuredByAlpha) { _rightButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_startButton.presentationLayer hitTest:touchLocation]) {
+        } else if (_startTouch == nil && [_startButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:PLAY_FLAG];
             _startTouch = touch;
             [self oscButtonTouchDownFeedback:_startButton];
             if (_obscuredByAlpha) { _startButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_selectButton.presentationLayer hitTest:touchLocation]) {
+        } else if (_selectTouch == nil && [_selectButton.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:BACK_FLAG];
             _selectTouch = touch;
             [self oscButtonTouchDownFeedback:_selectButton];
             if (_obscuredByAlpha) { _selectButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_l1Button.presentationLayer hitTest:touchLocation]) {
+        } else if (_l1Touch == nil && [_l1Button.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:LB_FLAG];
             _l1Touch = touch;
             [self oscButtonTouchDownFeedback:_l1Button];
             if (_obscuredByAlpha) { _l1Button.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_r1Button.presentationLayer hitTest:touchLocation]) {
+        } else if (_r1Touch == nil && [_r1Button.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport setButtonFlag:_controller flags:RB_FLAG];
             _r1Touch = touch;
             [self oscButtonTouchDownFeedback:_r1Button];
             if (_obscuredByAlpha) { _r1Button.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_l2Button.presentationLayer hitTest:touchLocation]) {
+        } else if (_l2Touch == nil && [_l2Button.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport updateLeftTrigger:_controller left:0xFF];
             _l2Touch = touch;
             [self oscButtonTouchDownFeedback:_l2Button];
             if (_obscuredByAlpha) { _l2Button.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_r2Button.presentationLayer hitTest:touchLocation]) {
+        } else if (_r2Touch == nil && [_r2Button.presentationLayer hitTest:touchLocation]) {
             [_controllerSupport updateRightTrigger:_controller right:0xFF];
             _r2Touch = touch;
             [self oscButtonTouchDownFeedback:_r2Button];
             if (_obscuredByAlpha) { _r2Button.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_l3Button.presentationLayer hitTest:touchLocation]) {
+        } else if (_l3Touch == nil && [_l3Button.presentationLayer hitTest:touchLocation]) {
             if (l3Set) {
                 [_controllerSupport clearButtonFlag:_controller flags:LS_CLK_FLAG];
                 _l3Button.borderWidth = 0.0f;
@@ -1672,7 +1722,7 @@ static float L3_Y;
             _l3Touch = touch;
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_r3Button.presentationLayer hitTest:touchLocation]) {
+        } else if (_r3Touch == nil && [_r3Button.presentationLayer hitTest:touchLocation]) {
             if (r3Set) {
                 [_controllerSupport clearButtonFlag:_controller flags:RS_CLK_FLAG];
                 _r3Button.borderWidth = 0.0f;
@@ -1684,7 +1734,7 @@ static float L3_Y;
             _r3Touch = touch;
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if ([_leftStick.presentationLayer hitTest:touchLocation]) {
+        } else if (_lsTouch == nil && [_leftStick.presentationLayer hitTest:touchLocation]) {
             _leftStick.opacity = 1.0; // make stick opaque while being moved
             if (l3TouchStart != nil) {
                 double l3TouchTime = [l3TouchStart timeIntervalSinceNow] * -1000.0;
@@ -1698,7 +1748,7 @@ static float L3_Y;
             _lsTouch = touch;
             stickTouch = true;
             touchEventCapturedByOsc = true;
-        } else if ([_rightStick.presentationLayer hitTest:touchLocation]) {
+        } else if (_rsTouch == nil && [_rightStick.presentationLayer hitTest:touchLocation]) {
             _rightStick.opacity = 1.0; // make stick opaque while being moved
             if (r3TouchStart != nil) {
                 double r3TouchTime = [r3TouchStart timeIntervalSinceNow] * -1000.0;
@@ -1713,7 +1763,11 @@ static float L3_Y;
             stickTouch = true;
             touchEventCapturedByOsc = true;
         }
-        if (!updated && !stickTouch && [self isInDeadZone:touch]) {
+        // Per-touch gate (was `!updated && !stickTouch`, which accumulate across the
+        // whole touch set — with several fingers landing in one event, an earlier
+        // finger hitting a button skipped the dead-zone check for every later finger,
+        // letting those touches leak through to the mouse/native handlers).
+        if (!touchEventCapturedByOsc && [self isInDeadZone:touch]) {
             [_deadTouches addObject:touch];
             updated = true;
             touchEventCapturedByOsc = true;
@@ -1778,6 +1832,7 @@ static float L3_Y;
             [_controllerSupport clearButtonFlag:_controller
                                           flags:UP_FLAG | DOWN_FLAG | LEFT_FLAG | RIGHT_FLAG];
             _dpadTouch = nil;
+            _dpadUpActive = _dpadDownActive = _dpadLeftActive = _dpadRightActive = NO;
             _upButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_upButton.name] floatValue];
             _upButton.shadowOpacity = 0.0;
             _leftButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_leftButton.name] floatValue];
@@ -2240,7 +2295,7 @@ static float L3_Y;
     CGFloat targetAlpha;
     targetAlpha = alpha;
     if(alpha < 0.23) targetAlpha = 0.23;
-    if(alpha == 0.0 || alpha == 1.0) targetAlpha = 5.0f/6.0f; // invalid alpha value
+    if(alpha == 0.0) targetAlpha = 5.0f/6.0f; // 0 = unset legacy value; 1.0 is a legitimate fully-opaque choice
     
     // NSLog(@"alphas: %f",targetAlpha);
 
@@ -2274,7 +2329,6 @@ static float L3_Y;
     if (layer == self._rightStickBackground) {
         self._rightStick.opacity = targetAlpha;
         self._rightStickBackground.opacity = targetAlpha + 1.0f/6.0f;
-        NSLog(@"right stick init alpha: %f", targetAlpha);
     }
 
     if (layer == self._leftStickBackground){
