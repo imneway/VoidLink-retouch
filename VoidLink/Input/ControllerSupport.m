@@ -76,6 +76,10 @@ static const uint32_t PHYSICAL_COMBO_TAP_HOLD_MS = 50;
     bool _oscEnabled;
     char _controllerNumbers;
     bool _multiController;
+    // Invalidates pending delayed gamepad-reattach blocks when the session they
+    // were scheduled for ends (cleanup) or is replaced (updateControllerSupport),
+    // so they can't fire packets into a torn-down or brand-new connection.
+    NSUInteger _reattachEpoch;
     bool _swapABButtons;
     bool _swapXYButtons;
     int _gyroMode;
@@ -2113,7 +2117,8 @@ static inline int16_t clamp_int16(CGFloat v) {
 
 - (void)updateControllerSupport:(StreamConfiguration*)streamConfig delegate:(id<ControllerSupportDelegate>)delegate {
     NSLog(@"update config call");
-    
+
+    _reattachEpoch++;
     _gyroMode = streamConfig.gyroMode;
 
     [self updateCommonConfig:streamConfig];
@@ -2370,9 +2375,79 @@ static inline int16_t clamp_int16(CGFloat v) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         self->_gyroMode = self->_streamConfig.gyroMode;
-        
+
         [self applyGyroModeSetting];
     });
+}
+
+// Client-side self-heal for a Sunshine host race after an unclean client exit
+// (crash / force-kill). The zombie session's virtual gamepads are destroyed by
+// a *deferred* task on the host, while their slot ids are released synchronously.
+// The new session's controller arrival can therefore allocate the same id right
+// before the deferred destroy runs, which silently kills the freshly created
+// virtual pad — but the host still marks the slot allocated, so every later
+// arrival is rejected and the legacy fallback allocation never triggers either.
+// Result: all gamepad/OSC input for the whole session goes into a black hole
+// while keyboard/mouse (no virtual device) keep working.
+//
+// Recovery is protocol-level: sending a controller event whose activeGamepadMask
+// clears this slot's bit makes the host free the (dead) pad and reset the slot,
+// and a re-sent arrival then allocates a brand-new device. Packets for one
+// controller travel on a single reliable ENet channel, so the
+// free -> arrival -> full-mask sequence cannot be reordered.
+-(void) reattachGamepadsAfterDirtySession
+{
+    // Two cycles: shortly after connect (covers the host tearing the zombie
+    // down at session takeover) and later (covers the zombie only dying by
+    // ENet peer timeout, whose deferred cleanup can strike a second time).
+    __weak typeof(self) weakSelf = self;
+    NSUInteger epoch = _reattachEpoch;
+    for (NSNumber* delay in @[@3.0, @13.0]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf || strongSelf->_reattachEpoch != epoch) {
+                return;  // session ended or was replaced before we fired
+            }
+            [strongSelf performGamepadReattachCycle];
+        });
+    }
+}
+
+-(void) performGamepadReattachCycle
+{
+    [_controllerStreamLock lock];
+
+    uint16_t fullMask = [self getActiveGamepadMask];
+    NSMutableArray<VoidController*>* targets = [NSMutableArray array];
+    if (_oscEnabled && _oscController != nil) {
+        [targets addObject:_oscController];
+    }
+    [targets addObjectsFromArray:_voidControllers.allValues];
+
+    NSMutableSet<NSNumber*>* handledPlayerIndexes = [NSMutableSet set];
+    for (VoidController* voidController in targets) {
+        short playerIndex = _multiController ? voidController.playerIndex : 0;
+        if ([handledPlayerIndexes containsObject:@(playerIndex)]) {
+            continue;  // merged OSC + physical share a slot; reattach it once
+        }
+        [handledPlayerIndexes addObject:@(playerIndex)];
+
+        @synchronized(voidController) {
+            // Detach: host frees this slot even if its device is already dead.
+            LiSendMultiControllerEvent(playerIndex, fullMask & ~(1 << playerIndex),
+                                       0, 0, 0, 0, 0, 0, 0);
+            // Re-attach: force a fresh arrival so the host allocates a new pad.
+            [self cleanupControllerBattery:voidController];
+            voidController.batteryTimer = nil;
+            voidController.reportedArrival = NO;
+            BOOL reported = [self reportControllerArrival:voidController];
+            NSLog(@"[InputDiag] gamepad reattach player=%d arrival=%@ mask=0x%X",
+                  playerIndex, reported ? @"ok" : @"deferred", fullMask);
+        }
+    }
+
+    [_controllerStreamLock unlock];
 }
 
 -(void)stopTimerForController:(VoidController* )voidController{
@@ -2448,6 +2523,7 @@ static inline int16_t clamp_int16(CGFloat v) {
 
 -(void) cleanup
 {
+    _reattachEpoch++;
     [[NSNotificationCenter defaultCenter] removeObserver:_controllerConnectObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_controllerDisconnectObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_mouseConnectObserver];

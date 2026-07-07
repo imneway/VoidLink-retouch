@@ -112,6 +112,10 @@ typedef NS_ENUM(NSInteger, StreamCountdownState) {
     double _reconnectElapsedSeconds;
     NSInteger _reconnectProbeTick;
     BOOL _hasConnectionStarted;
+    // Set when connectionTerminated/stageFailed reported an abnormal end. Blocks
+    // clearing the dirty-session flag at teardown: after an abnormal end the host
+    // may hold a zombie gamepad slot, so the next session must still reattach.
+    BOOL _connectionEndedAbnormally;
     /*
      * View architecture of this viewController:
      * self.view (named `streamFrameTopLayerView` in StreamView.m, where slide & tap gestures, and onScreenControls & OnScreenWidgetView buttons are registered)
@@ -2258,6 +2262,18 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
         [UIApplication sharedApplication].idleTimerDisabled = NO;
         [_streamMan stopStream];
+
+        // Deliberate teardown of a healthy connection: the graceful
+        // LiStopConnection lets the host tear its session down cleanly, so the
+        // next connection needs no gamepad reattach. If the connection never
+        // established or ended abnormally (error alert -> return to main), the
+        // host may hold zombie state — keep the flag set so the next session
+        // still reattaches.
+        if (_hasConnectionStarted && !_connectionEndedAbnormally) {
+            [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"VoidStreamSessionDirty"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+        }
+
         if (_inactivityTimer != nil) {
             [_inactivityTimer invalidate];
             _inactivityTimer = nil;
@@ -2746,8 +2762,30 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         // 串流连接建立后，应用当前屏幕方向的方向锁定
         [self osc_applyLockForCurrentOrientation];
         
+        // Dirty-session detection: the flag is raised while a stream connection
+        // is live and only cleared on deliberate teardown. Seeing it already set
+        // here means the previous connection ended without a graceful stop
+        // (crash, force-kill, or a self-heal reconnect) — the host may then hold
+        // a zombie gamepad slot that eats all OSC/controller input, so schedule
+        // a protocol-level reattach. Must run BEFORE connectionEstablished sends
+        // the first controller arrivals, so a kill in between still reads dirty.
+        // See -reattachGamepadsAfterDirtySession.
+        BOOL previousSessionDirty;
+        {
+            NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+            previousSessionDirty = [defaults boolForKey:@"VoidStreamSessionDirty"];
+            [defaults setBool:YES forKey:@"VoidStreamSessionDirty"];
+            [defaults synchronize];
+        }
+        self->_connectionEndedAbnormally = NO;
+
         [self->_controllerSupport connectionEstablished];
-        
+
+        if (previousSessionDirty) {
+            NSLog(@"[InputDiag] previous session ended dirty — scheduling gamepad reattach");
+            [self->_controllerSupport reattachGamepadsAfterDirtySession];
+        }
+
         if (self->_settings.statsOverlayEnabled) {
             self->_statsUpdateTimer = [NSTimer scheduledTimerWithTimeInterval:1.0f
                                                                        target:self
@@ -2766,6 +2804,10 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
     unsigned int portFlags = LiGetPortFlagsFromTerminationErrorCode(errorCode);
     unsigned int portTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);
+
+    if (errorCode != ML_ERROR_GRACEFUL_TERMINATION) {
+        _connectionEndedAbnormally = YES;
+    }
 
     // This callback fires on a moonlight-common thread, not main. Capture the
     // StreamManager we're tearing down in a local strong ref: we stop it below on
@@ -2883,6 +2925,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
 - (void) stageFailed:(const char*)stageName withError:(int)errorCode portTestFlags:(int)portTestFlags {
     Log(LOG_I, @"Stage %s failed: %d", stageName, errorCode);
+
+    _connectionEndedAbnormally = YES;
 
     unsigned int portTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portTestFlags);
 

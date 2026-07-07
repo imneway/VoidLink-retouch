@@ -58,6 +58,7 @@ extern NSString* const VoidGyroSettingsDidChangeNotification;
 
 -(id) initWithConfig:(StreamConfiguration*)streamConfig delegate:(id<ControllerSupportDelegate>)delegate;
 -(void) connectionEstablished;
+-(void) reattachGamepadsAfterDirtySession;
 
 -(void) initAutoOnScreenControlMode:(OnScreenControls*)osc;
 -(void) cleanup;
