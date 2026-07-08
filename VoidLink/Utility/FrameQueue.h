@@ -27,8 +27,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (CFTimeInterval)estimatedFramerate;
 - (int)currentSoftCap;
 - (void)waitForEnqueue;
-- (void)start;
-- (void)stop;
+// The queue is a process-wide singleton but stream sessions can overlap during
+// self-heal reconnects: start/stop are owner-scoped so a dying session's
+// cleanup cannot stop the queue the new session just started.
+- (void)startForConsumer:(id)owner;
+- (void)stopForConsumer:(id)owner;
 
 @end
 

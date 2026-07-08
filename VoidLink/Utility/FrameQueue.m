@@ -24,6 +24,7 @@
     int _currentSoftCap;
     dispatch_queue_t _sq;
     dispatch_semaphore_t _frameSemaphore;
+    __weak id _consumerOwner;
 }
 
 + (instancetype)sharedInstance {
@@ -363,17 +364,36 @@
     return cap;
 }
 
-- (void)stop {
-    // new frames will no longer be coming in, make sure consumer side is not left waiting
-    self.paused = YES;
-    Log(LOG_I, @"FrameQueue stopped");
-    dispatch_semaphore_signal(_frameSemaphore);
+- (void)startForConsumer:(id)owner {
+    // Owner and paused must flip in the same critical section, or an old
+    // session's stop interleaving with a new session's start could leave the
+    // queue paused for the new consumer. (paused's atomic setter is
+    // non-blocking, so calling it under the unfair lock is fine.)
+    os_unfair_lock_lock(&_lock);
+    _consumerOwner = owner;
+    self.paused = NO;
+    os_unfair_lock_unlock(&_lock);
+    Log(LOG_I, @"FrameQueue started");
 }
 
-- (void)start {
-    // (re)start for a new renderer
-    self.paused = NO;
-    Log(LOG_I, @"FrameQueue started");
+- (void)stopForConsumer:(id)owner {
+    // During a self-heal reconnect the old session's DrCleanup can run after
+    // the new session already started the queue — only the active consumer
+    // may stop it, or the new session's video freezes permanently.
+    os_unfair_lock_lock(&_lock);
+    BOOL isOwner = (owner != nil && _consumerOwner == owner);
+    if (isOwner) {
+        _consumerOwner = nil;
+        self.paused = YES;
+    }
+    os_unfair_lock_unlock(&_lock);
+    if (!isOwner) {
+        Log(LOG_W, @"FrameQueue stop ignored: caller is not the active consumer");
+        return;
+    }
+    // new frames will no longer be coming in, make sure consumer side is not left waiting
+    Log(LOG_I, @"FrameQueue stopped");
+    dispatch_semaphore_signal(_frameSemaphore);
 }
 
 // For use with NSLog("%@", franeQueue);

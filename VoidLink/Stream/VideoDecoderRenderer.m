@@ -101,14 +101,18 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     // can see the loading progress label as the stream is starting.
     _displayLayer.hidden = YES;
 
-    if (_formatDesc != nil) {
-        CFRelease(_formatDesc);
-        _formatDesc = nil;
-    }
+    // Same lock as the _vtq snapshot reader and the decode path: these can be
+    // released here (main thread, ScreenChanged) while the decoder is using them.
+    @synchronized (self) {
+        if (_formatDesc != nil) {
+            CFRelease(_formatDesc);
+            _formatDesc = nil;
+        }
 
-    if (_formatDescImageBuffer != nil) {
-        CFRelease(_formatDescImageBuffer);
-        _formatDescImageBuffer = nil;
+        if (_formatDescImageBuffer != nil) {
+            CFRelease(_formatDescImageBuffer);
+            _formatDescImageBuffer = nil;
+        }
     }
 
     @synchronized(self) {
@@ -145,7 +149,7 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     _framePacingMode = [[dataMan getSettings].framePacingMode integerValue];
 
     _frameQueue = [FrameQueue sharedInstance];
-    [_frameQueue start];
+    [_frameQueue startForConsumer:self];
     [_frameQueue setHighWaterMark:(int)[[dataMan getSettings].frameQueueSize integerValue]];
 
     [self reinitializeDisplayLayer];
@@ -439,7 +443,7 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
 }
 - (void)cleanup
 {
-    [_frameQueue stop];
+    [_frameQueue stopForConsumer:self];
 
     if (_renderingBackend == RENDER_AVSB) {
         [_displayLink invalidate];
@@ -745,11 +749,11 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
         //
         // NB: This logic depends on the fact that we submit all picture data in one buffer!
 
-        // Free the old format description
-        if (_formatDesc != NULL) {
-            CFRelease(_formatDesc);
-            _formatDesc = NULL;
-        }
+        // Build the new format description into a local, then swap it into
+        // _formatDesc under @synchronized: readers (the _vtq consumer and this
+        // decode path) take retained snapshots under the same lock, so the old
+        // description can never be freed out from under an in-flight frame.
+        CMVideoFormatDescriptionRef newFormatDesc = NULL;
 
         if (_videoFormat & VIDEO_FORMAT_MASK_H264) {
             // Construct parameter set arrays for the format description
@@ -768,13 +772,13 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
                                                                          parameterSetPointers,
                                                                          parameterSetSizes,
                                                                          NAL_LENGTH_PREFIX_SIZE,
-                                                                         &_formatDesc);
+                                                                         &newFormatDesc);
             if (status != noErr) {
                 Log(LOG_E, @"Failed to create H264 format description: %d", (int)status);
-                _formatDesc = NULL;
+                newFormatDesc = NULL;
             }
 
-            LogOnce(LOG_I, @"H264 format description: %@", _formatDesc);
+            LogOnce(LOG_I, @"H264 format description: %@", newFormatDesc);
 
             // Free parameter set buffers after submission
             [_parameterSetBuffers removeAllObjects];
@@ -808,14 +812,14 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
                                                                          parameterSetSizes,
                                                                          NAL_LENGTH_PREFIX_SIZE,
                                                                          (__bridge CFDictionaryRef)videoFormatParams,
-                                                                         &_formatDesc);
+                                                                         &newFormatDesc);
 
             if (status != noErr) {
                 Log(LOG_E, @"Failed to create HEVC format description: %d", (int)status);
-                _formatDesc = NULL;
+                newFormatDesc = NULL;
             }
 
-            LogOnce(LOG_I, @"HEVC format description: %@", _formatDesc);
+            LogOnce(LOG_I, @"HEVC format description: %@", newFormatDesc);
 
             // Free parameter set buffers after submission
             [_parameterSetBuffers removeAllObjects];
@@ -824,15 +828,29 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
             NSData* fullFrameData = [NSData dataWithBytesNoCopy:data length:length freeWhenDone:NO];
 
             Log(LOG_I, @"Constructing new AV1 format description");
-            _formatDesc = [self createAV1FormatDescriptionForIDRFrame:fullFrameData];
+            newFormatDesc = [self createAV1FormatDescriptionForIDRFrame:fullFrameData];
         }
         else {
             // Unsupported codec!
             abort();
         }
+
+        @synchronized (self) {
+            if (_formatDesc != NULL) {
+                CFRelease(_formatDesc);
+            }
+            _formatDesc = newFormatDesc;
+        }
     }
 
-    if (_formatDesc == NULL) {
+    // Retained snapshot for this frame; the ivar can be swapped by a newer IDR
+    // or released by reinitializeDisplayLayer while we're still using it.
+    CMVideoFormatDescriptionRef formatDesc;
+    @synchronized (self) {
+        formatDesc = _formatDesc ? (CMVideoFormatDescriptionRef)CFRetain(_formatDesc) : NULL;
+    }
+
+    if (formatDesc == NULL) {
         // Can't decode if we haven't gotten our parameter sets yet
         free(data);
         return DR_NEED_IDR;
@@ -845,6 +863,7 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
     status = CMBlockBufferCreateWithMemoryBlock(NULL, data, length, kCFAllocatorDefault, NULL, 0, length, 0, &dataBlockBuffer);
     if (status != noErr) {
         Log(LOG_E, @"CMBlockBufferCreateWithMemoryBlock failed: %d", (int)status);
+        CFRelease(formatDesc);
         free(data);
         return DR_NEED_IDR;
     }
@@ -854,6 +873,7 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
     status = CMBlockBufferCreateEmpty(NULL, 0, 0, &frameBlockBuffer);
     if (status != noErr) {
         Log(LOG_E, @"CMBlockBufferCreateEmpty failed: %d", (int)status);
+        CFRelease(formatDesc);
         CFRelease(dataBlockBuffer);
         return DR_NEED_IDR;
     }
@@ -884,6 +904,9 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
         status = CMBlockBufferAppendBufferReference(frameBlockBuffer, dataBlockBuffer, 0, length, 0);
         if (status != noErr) {
             Log(LOG_E, @"CMBlockBufferAppendBufferReference failed: %d", (int)status);
+            CFRelease(formatDesc);
+            CFRelease(dataBlockBuffer);
+            CFRelease(frameBlockBuffer);
             return DR_NEED_IDR;
         }
     }
@@ -905,9 +928,11 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
 
     status = CMSampleBufferCreateReady(kCFAllocatorDefault,
                                        frameBlockBuffer,
-                                       _formatDesc, 1, 1,
+                                       formatDesc, 1, 1,
                                        &sampleTiming, 0, NULL,
                                        &sampleBuffer);
+    // The sample buffer holds its own reference to the format description
+    CFRelease(formatDesc);
     if (status != noErr) {
         Log(LOG_E, @"CMSampleBufferCreate failed: %d", (int)status);
         CFRelease(dataBlockBuffer);
@@ -1025,7 +1050,17 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
                         frame = [[Frame alloc] initWithSampleBuffer:sampleBufferOut frameNumber:frameNumber frameType:frameType];
                     } else {
                         frame = [[Frame alloc] initWithPixelBufffer:pixelBuffer frameNumber:frameNumber frameType:frameType pts:presentationTimestamp];
-                        [frame setFormatDesc:self->_formatDesc];
+                        // Retained snapshot under the lock that guards IDR
+                        // rebuilds and ScreenChanged releases; the raw ivar
+                        // could be freed between here and setFormatDesc.
+                        CMVideoFormatDescriptionRef fd = NULL;
+                        @synchronized (self) {
+                            fd = self->_formatDesc ? (CMVideoFormatDescriptionRef)CFRetain(self->_formatDesc) : NULL;
+                        }
+                        [frame setFormatDesc:fd];
+                        if (fd) {
+                            CFRelease(fd);
+                        }
                     }
                     int framesDropped = [self->_frameQueue enqueue:frame withSlackSize:3];
 

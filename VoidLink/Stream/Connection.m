@@ -29,6 +29,10 @@
     char _appVersionString[32];
     char _gfeVersionString[32];
     char _rtspSessionUrl[128];
+    // Held per-instance; published to the static callback globals in -main
+    // under initLock (see comment there).
+    VideoDecoderRenderer* _myRenderer;
+    id<ConnectionCallbacks> _myCallbacks;
 }
 
 static NSLock* initLock;
@@ -457,8 +461,8 @@ void ClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t
     }
     _serverInfo.serverCodecModeSupport = config.serverCodecModeSupport;
 
-    renderer = myRenderer;
-    _callbacks = callbacks;
+    _myRenderer = myRenderer;
+    _myCallbacks = callbacks;
 
     LiInitializeStreamConfiguration(&_streamConfig);
     _streamConfig.colorRange = 1; // Full range
@@ -536,6 +540,14 @@ void ClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t
 -(void) main
 {
     [initLock lock];
+    // The C callbacks have no context pointer, so they consume these statics.
+    // Assign them here under initLock — not in init — so an old connection
+    // still tearing down in LiStopConnection (also under initLock) has
+    // DrCleanup/ClSetHdrMode act on ITS renderer. Assigning in init raced the
+    // async teardown during self-heal reconnects and could hand the old
+    // session's cleanup the new session's renderer.
+    renderer = _myRenderer;
+    _callbacks = _myCallbacks;
     LiStartConnection(&_serverInfo,
                       &_streamConfig,
                       &_clCallbacks,
