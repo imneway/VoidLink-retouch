@@ -153,6 +153,10 @@
 				Frame *oldest = [self _popFrame];
                 [oldest setDurationFromNext:[self _peekFrame]];
                 [self _noteDroppedFrame:oldest];
+                // Consume the dropped frame's enqueue signal so the semaphore
+                // count stays aligned with queue depth (dequeue does the same
+                // for frames handed to the consumer). Non-blocking.
+                dispatch_semaphore_wait(_frameSemaphore, DISPATCH_TIME_NOW);
                 dropCount = 1;
             }
             [self _pushFrame:frame];
@@ -248,29 +252,64 @@
 			_count);
     }
     os_unfair_lock_unlock(&_lock);
+    if (frame) {
+        // Keep the semaphore count aligned with the queue depth: consume the
+        // signal of the frame we just took, or the count grows by one per
+        // enqueue for as long as the queue stays non-empty and the eventual
+        // stale-signal drain becomes O(hours of frames). Non-blocking, and
+        // harmless if a timed waiter already consumed this signal.
+        dispatch_semaphore_wait(_frameSemaphore, DISPATCH_TIME_NOW);
+    }
     return frame;
 }
 
 - (Frame *)dequeueWithTimeout:(CFTimeInterval)timeout {
     CFTimeInterval start = CACurrentMediaTime();
     CFTimeInterval deadline = start + timeout;
-    int round = 0;
 
     if (self.paused) {
         return nil;
     }
 
     // Always attempt to dequeue at least once
-    do {
-        if (round > 0) {
-            usleep(100); // 0.1ms
+    Frame *frame = [self dequeue];
+    if (frame) {
+        return frame;
+    }
+
+    // Every past enqueue left a signal behind; drain them so the timed wait
+    // below only wakes for a frame enqueued after this point.
+    while (dispatch_semaphore_wait(_frameSemaphore, DISPATCH_TIME_NOW) == 0) { }
+
+    // A frame may have arrived between the dequeue above and the drain
+    // (its signal was just consumed), so check once more before blocking.
+    frame = [self dequeue];
+    if (frame) {
+        return frame;
+    }
+
+    // The drain may also have eaten stop()'s wake-up signal; re-check paused
+    // so we return immediately instead of sleeping out the timeout.
+    if (self.paused) {
+        return nil;
+    }
+
+    for (;;) {
+        CFTimeInterval remaining = deadline - CACurrentMediaTime();
+        if (remaining <= 0) {
+            break;
         }
-        Frame *frame = [self dequeue];
+        dispatch_semaphore_wait(_frameSemaphore,
+                                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(remaining * NSEC_PER_SEC)));
+        if (self.paused) {
+            return nil;
+        }
+        frame = [self dequeue];
         if (frame) {
             return frame;
         }
-        round++;
-    } while (CACurrentMediaTime() < deadline);
+        // Spurious/stale wake-up: loop with whatever time is left.
+    }
 
     FQLog(LOG_I, @"dequeueWithTimeout timed out after %.3f ms", (CACurrentMediaTime() - start) * 1000.0);
     return nil;

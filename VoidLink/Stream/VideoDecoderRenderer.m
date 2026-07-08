@@ -947,16 +947,16 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
                         decodeStartTime:(CFTimeInterval)decodeStartTime {
     // Synchronize access to decompression session to prevent race conditions during background/foreground transitions
     @synchronized(self) {
-        // Check if we need to create/recreate the decompression session
-        BOOL needsNewSession = (frameType == FRAME_TYPE_IDR || _decompressionSession == nil);
-
-        // Also check if the session might have been invalidated by iOS during background
-        if (!needsNewSession && _decompressionSession != nil) {
-            Boolean isValid = VTDecompressionSessionCanAcceptFormatDescription(_decompressionSession, _formatDesc);
-            if (!isValid) {
-                Log(LOG_W, @"Decompression session is invalid, needs recreation");
-                needsNewSession = YES;
-            }
+        // Recreate the session only when required: none exists yet, or the
+        // current one can't accept the active format description (parameter
+        // sets changed on an IDR, or the OS invalidated it in the background).
+        // Unconditionally rebuilding on every IDR added a large hitch exactly
+        // when recovering from packet loss.
+        BOOL needsNewSession = (_decompressionSession == nil);
+        if (!needsNewSession &&
+            !VTDecompressionSessionCanAcceptFormatDescription(_decompressionSession, _formatDesc)) {
+            Log(LOG_W, @"Decompression session can't accept current format, recreating");
+            needsNewSession = YES;
         }
 
         if (needsNewSession) {
