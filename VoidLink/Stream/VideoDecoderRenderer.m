@@ -24,6 +24,7 @@
 #include <libavformat/avio.h>
 #include <libavutil/mem.h>
 #include <mach/mach_time.h>
+#include <stdatomic.h>
 
 // Define for extra logging related to frame pacing
 //#define DISPLAYLINK_VERBOSE
@@ -55,6 +56,10 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     RenderingBackend _renderingBackend;
 
     FramePacingMode _framePacingMode;
+
+    // UIApplication.applicationState is main-thread-only; this mirror is
+    // written on the main thread via notifications and read from _vtq.
+    atomic_bool _appInBackground;
 }
 
 - (void)reinitializeDisplayLayer
@@ -150,7 +155,26 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
                                                  name:@"ScreenChanged"
                                                object:nil];
 
+    // initWithView runs on the main thread, so reading applicationState here is legal
+    atomic_store(&_appInBackground, [UIApplication sharedApplication].applicationState == UIApplicationStateBackground);
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(appDidEnterBackground)
+                                                 name:UIApplicationDidEnterBackgroundNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(appWillEnterForeground)
+                                                 name:UIApplicationWillEnterForegroundNotification
+                                               object:nil];
+
     return self;
+}
+
+- (void)appDidEnterBackground {
+    atomic_store(&_appInBackground, true);
+}
+
+- (void)appWillEnterForeground {
+    atomic_store(&_appInBackground, false);
 }
 
 # pragma mark DisplayLink vsync callback
@@ -1005,7 +1029,7 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
                     }
                     int framesDropped = [self->_frameQueue enqueue:frame withSlackSize:3];
 
-                    if ([[UIApplication sharedApplication] applicationState] != UIApplicationStateBackground) {
+                    if (!atomic_load(&self->_appInBackground)) {
                         static PlotMetrics frameQueueMetrics = {};
                         [[ImGuiPlots sharedInstance] observeFloatReturnMetrics:PLOT_QUEUED_FRAMES value:[self->_frameQueue count] plotMetrics:&frameQueueMetrics];
                         [self safeCopyMetricsTo:&self->_frameQueueMetrics from:&frameQueueMetrics];

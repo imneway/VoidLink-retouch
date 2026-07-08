@@ -128,7 +128,7 @@
     newSize.width *= scaleFactor;
     newSize.height *= scaleFactor;
 
-    if (newSize.width <= 0 || newSize.width <= 0) {
+    if (newSize.width <= 0 || newSize.height <= 0) {
         return;
     }
 

@@ -403,8 +403,8 @@ CFStringRef __currentColorSpace;
                 break;
             case COLORSPACE_REC_2020: {
                 CFDictionaryRef ext = [frame getFormatDescExtensions];
-                CFStringRef frame_trc = CFDictionaryGetValue(ext, kCVImageBufferTransferFunctionKey);
-                if (CFEqual(frame_trc, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ)) {
+                CFStringRef frame_trc = ext ? CFDictionaryGetValue(ext, kCVImageBufferTransferFunctionKey) : NULL;
+                if (frame_trc && CFEqual(frame_trc, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ)) {
                     isHDR = YES;
                     newColorSpace = CGColorSpaceCreateWithName(_nonFullHdrColorSpace);
                     newPixelFormat = _nonFullHdrPixelFormat;
