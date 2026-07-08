@@ -308,12 +308,12 @@ void ArCleanup(void)
 void ArDecodeAndPlaySample(char* sampleData, int sampleLength)
 {
     int decodeLen;
-    
+
     // Don't queue if there's already more than 30 ms of audio data waiting
-    // in Moonlight's audio queue.
-    if (LiGetPendingAudioDuration() > 30) {
-        return;
-    }
+    // in Moonlight's audio queue — but still run the decoder below: Opus is
+    // stateful, and skipping packets desyncs the decoder from the encoder,
+    // which is audible as artifacts once playback resumes.
+    bool dropForLatency = LiGetPendingAudioDuration() > 30;
 
     decodeLen = opus_multistream_decode_float(opusDecoder,
                                               (unsigned char*)sampleData,
@@ -321,7 +321,7 @@ void ArDecodeAndPlaySample(char* sampleData, int sampleLength)
                                               (float*)audioBuffer,
                                               audioConfig.samplesPerFrame,
                                               0);
-    if (decodeLen > 0) {
+    if (decodeLen > 0 && !dropForLatency) {
         // Provide backpressure on the queue to ensure too many frames don't build up
         // in SDL's audio queue.
         while (SDL_GetQueuedAudioSize(audioDevice) / audioFrameSize > 10) {

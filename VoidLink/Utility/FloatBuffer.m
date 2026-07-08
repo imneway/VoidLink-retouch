@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import <os/lock.h>
 #import "FloatBuffer.h"
 
 @implementation FloatBuffer {
@@ -9,13 +10,13 @@
     float _minValue;              // current minimum across all valid entries
     float _maxValue;              // current maximum across all valid entries
     double _sum;                  // running sum of all valid entries (for average)
-    dispatch_queue_t _sq;         // serial queue for thread safety
+    // Guards all state. An unfair lock instead of a serial queue: addValue is
+    // called several times per frame from the decode/render hot paths, where a
+    // dispatch_sync queue hop per sample is measurable overhead.
+    os_unfair_lock _lock;
 }
 
 @synthesize capacity = _capacity;
-@synthesize count = _count;
-@synthesize minValue = _minValue;
-@synthesize maxValue = _maxValue;
 @synthesize averageValue = _averageValue; // custom getter below
 
 - (instancetype)init {
@@ -38,7 +39,7 @@
         _maxValue = 0.0f;
         _sum = 0.0f;
 
-        _sq = dispatch_queue_create("com.floatbuffer.serial", DISPATCH_QUEUE_SERIAL);
+        _lock = OS_UNFAIR_LOCK_INIT;
     }
     return self;
 }
@@ -55,9 +56,9 @@
 }
 
 - (void)addValue:(float)value {
-    dispatch_sync(_sq, ^{
-      [self _unsafeAddValue:value];
-    });
+    os_unfair_lock_lock(&_lock);
+    [self _unsafeAddValue:value];
+    os_unfair_lock_unlock(&_lock);
 }
 
 - (void)_unsafeAddValue:(float)value {
@@ -116,44 +117,60 @@
     }
 }
 
+- (int)count {
+    os_unfair_lock_lock(&_lock);
+    int result = _count;
+    os_unfair_lock_unlock(&_lock);
+    return result;
+}
+
+- (float)minValue {
+    os_unfair_lock_lock(&_lock);
+    float result = _minValue;
+    os_unfair_lock_unlock(&_lock);
+    return result;
+}
+
+- (float)maxValue {
+    os_unfair_lock_lock(&_lock);
+    float result = _maxValue;
+    os_unfair_lock_unlock(&_lock);
+    return result;
+}
+
 - (float)averageValue {
-    __block float result;
-    dispatch_sync(_sq, ^{
-      result = (self->_count > 0) ? (float)(self->_sum / (double)self->_count) : 0.0f;
-    });
+    os_unfair_lock_lock(&_lock);
+    float result = (_count > 0) ? (float)(_sum / (double)_count) : 0.0f;
+    os_unfair_lock_unlock(&_lock);
     return result;
 }
 
 - (float)total {
-    __block float result;
-    dispatch_sync(_sq, ^{
-      result = (self->_count > 0) ? (float)(self->_sum) : 0.0f;
-    });
+    os_unfair_lock_lock(&_lock);
+    float result = (_count > 0) ? (float)_sum : 0.0f;
+    os_unfair_lock_unlock(&_lock);
     return result;
 }
 
 - (float)newestValue {
-    __block float result;
-    dispatch_sync(_sq, ^{
-      result = (self->_count > 0) ? _buffer[_head] : 0.0f;
-    });
+    os_unfair_lock_lock(&_lock);
+    float result = (_count > 0) ? _buffer[_head] : 0.0f;
+    os_unfair_lock_unlock(&_lock);
     return result;
 }
 
 - (CFTimeInterval)oldestTimestamp {
-    __block CFTimeInterval result;
-    dispatch_sync(_sq, ^{
-      NSUInteger tail = (_head + _capacity - _count) & (_capacity - 1);
-      result = (self->_count > 0) ? _timestamps[tail] : 0.0f;
-    });
+    os_unfair_lock_lock(&_lock);
+    NSUInteger tail = (_head + _capacity - _count) & (_capacity - 1);
+    CFTimeInterval result = (_count > 0) ? _timestamps[tail] : 0.0f;
+    os_unfair_lock_unlock(&_lock);
     return result;
 }
 
 - (int)copyValuesIntoBuffer:(float *)outBuffer min:(nullable float *)outMin max:(nullable float *)outMax {
-    __block int result;
-    dispatch_sync(_sq, ^{
-      result = [self _unsafeCopyValuesIntoBuffer:outBuffer min:outMin max:outMax];
-    });
+    os_unfair_lock_lock(&_lock);
+    int result = [self _unsafeCopyValuesIntoBuffer:outBuffer min:outMin max:outMax];
+    os_unfair_lock_unlock(&_lock);
     return result;
 }
 
@@ -191,9 +208,9 @@
 }
 
 - (void)copyMetrics:(PlotMetrics *)plotMetrics {
-    dispatch_sync(_sq, ^{
-        [self _unsafeCopyMetrics:plotMetrics];
-    });
+    os_unfair_lock_lock(&_lock);
+    [self _unsafeCopyMetrics:plotMetrics];
+    os_unfair_lock_unlock(&_lock);
 }
 
 - (void)_unsafeCopyMetrics:(PlotMetrics *)plotMetrics {
@@ -216,34 +233,36 @@
 }
 
 - (void)clear {
-    dispatch_sync(_sq, ^{
-        memset(_buffer, 0, sizeof(float) * _capacity);
-        memset(_timestamps, 0, sizeof(CFTimeInterval) * _capacity);
-        _head = 0;
-        _count = 0;
-        _minValue = 0.0f;
-        _maxValue = 0.0f;
-        _sum = 0.0;
-    });
+    os_unfair_lock_lock(&_lock);
+    memset(_buffer, 0, sizeof(float) * _capacity);
+    memset(_timestamps, 0, sizeof(CFTimeInterval) * _capacity);
+    _head = 0;
+    _count = 0;
+    _minValue = 0.0f;
+    _maxValue = 0.0f;
+    _sum = 0.0;
+    os_unfair_lock_unlock(&_lock);
 }
 
 - (void)enumerateValuesWithBlock:(void (^)(float value, BOOL *stop))block {
     if (!block) return;
-    dispatch_sync(_sq, ^{
-        if (_count == 0) return;
-        int tail = (_head + _capacity - _count) & (_capacity - 1);
-        BOOL stop = NO;
-        for (int i = 0; i < _count && !stop; i++) {
-            int idx = (tail + i) & (_capacity - 1);
-            block(_buffer[idx], &stop);
-        }
-    });
+    // The caller's block runs under the lock (same as the serial queue did) —
+    // it must not call back into this FloatBuffer.
+    os_unfair_lock_lock(&_lock);
+    int tail = (_head + _capacity - _count) & (_capacity - 1);
+    BOOL stop = NO;
+    for (int i = 0; i < _count && !stop; i++) {
+        int idx = (tail + i) & (_capacity - 1);
+        block(_buffer[idx], &stop);
+    }
+    os_unfair_lock_unlock(&_lock);
 }
 
 // Debug output for use with %@
 - (NSString *)description {
     __block NSString *desc;
-    dispatch_sync(_sq, ^{
+    os_unfair_lock_lock(&_lock);
+    {
         int tail = (_head + _capacity - _count) & (_capacity - 1);
 
         NSMutableString *values = [NSMutableString stringWithString:@"["];
@@ -266,7 +285,8 @@
                 avg,
                 _sum,
                 values];
-    });
+    }
+    os_unfair_lock_unlock(&_lock);
     return desc;
 }
 

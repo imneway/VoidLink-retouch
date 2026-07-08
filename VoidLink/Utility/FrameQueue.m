@@ -176,7 +176,9 @@
 	// regardless of drop status, every enqueue is a frame
     // for estimatedFramerate purposes
     _framesIn++;
-    [_frameDropMetrics addValue:(float)dropCount];
+    // NB: callers record dropCount into _frameDropMetrics AFTER releasing
+    // _lock — FloatBuffer has its own lock and must not be entered from
+    // inside ours on the per-frame path.
 
     // Stats displays the soft cap
     _currentSoftCap = frameDropTarget;
@@ -188,16 +190,18 @@
     os_unfair_lock_lock(&_lock);
     int dropCount = [self _unsafeEnqueue:frame withDropTarget:_highWaterMark];
     os_unfair_lock_unlock(&_lock);
+    [_frameDropMetrics addValue:(float)dropCount];
     return dropCount;
 }
 
 // enqueue that is a bit more flexixble, using the same 500ms queue size history method as moonlight-qt.
 - (int)enqueue:(Frame *)frame withSlackSize:(int)slack {
     os_unfair_lock_lock(&_lock);
-    CFTimeInterval now = CACurrentMediaTime();
+    // (the commented adaptive block below also needs `now = CACurrentMediaTime()`
+    // if it is ever restored)
 
-    // new data point for queue health
-    [_queueSizeHistory addValue:(float)_count];
+    // new data point for queue health (recorded outside the lock below)
+    int queueSizeSnapshot = _count;
 
     // The "target" initially starts as the size of the buffer chosen by the user. 1-5 default 2. We drop a frame
     // when the queue size exceeds this amount.
@@ -235,6 +239,9 @@
     int dropCount = [self _unsafeEnqueue:frame withDropTarget:frameDropTarget];
 
     os_unfair_lock_unlock(&_lock);
+
+    [_queueSizeHistory addValue:(float)queueSizeSnapshot];
+    [_frameDropMetrics addValue:(float)dropCount];
     return dropCount;
 }
 
