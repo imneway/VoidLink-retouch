@@ -13,6 +13,7 @@
 #import "StreamFrameViewController.h"
 #import "MainFrameViewController.h"
 #import "VideoDecoderRenderer.h"
+#import "FrameQueue.h"
 #import "StreamManager.h"
 #import "SceneDelegate.h"
 #import "ControllerSupport.h"
@@ -3149,7 +3150,9 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 - (void)didReceiveMemoryWarning
 {
     [super didReceiveMemoryWarning];
-    // Dispose of any resources that can be recreated.
+    // Decoded 4K frames retained in already-consumed FrameQueue slots are the
+    // biggest recreatable allocation we hold (up to ~15 IOSurface buffers).
+    [[FrameQueue sharedInstance] purgeStaleSlots];
 }
 
 - (void)gamepadPresenceChanged {

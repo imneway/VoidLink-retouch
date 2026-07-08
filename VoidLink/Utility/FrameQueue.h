@@ -20,6 +20,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (instancetype)new NS_UNAVAILABLE;
 - (BOOL)isEmpty;
 - (void)clear;
+// Release frames retained in already-consumed ring slots (memory pressure)
+- (void)purgeStaleSlots;
 - (int)enqueue:(Frame *)frame;
 - (int)enqueue:(Frame *)frame withSlackSize:(int)slack;
 - (nullable Frame *)dequeue;

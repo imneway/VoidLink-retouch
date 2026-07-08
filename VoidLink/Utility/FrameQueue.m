@@ -140,6 +140,15 @@
     int dropCount = 0;
     // Always accept IDR frames, allow exceeding HWM
     if (frame.frameType == FRAME_TYPE_IDR || _count < frameDropTarget) {
+        // ...but never exceed the ring capacity: pushing into a full ring
+        // overwrites the head slot without popping it, corrupting _count
+        // (reachable when IDR bursts arrive while the consumer is paused).
+        if (_count >= _capacity) {
+            Frame *oldest = [self _popFrame];
+            [self _noteDroppedFrame:oldest];
+            dispatch_semaphore_wait(_frameSemaphore, DISPATCH_TIME_NOW);
+            dropCount++;
+        }
         [self _pushFrame:frame];
         _droppedLast = NO;
     } else {
@@ -327,10 +336,35 @@
     return [self count] == 0;
 }
 
+// Caller must hold _lock. Also releases every retained frame in the ring —
+// resetting only the indices leaves up to _capacity decoded frames (large
+// IOSurface-backed pixel buffers) alive in the slots.
+- (void)_unsafeResetSlots {
+    for (int i = 0; i < _capacity; i++) {
+        [_buffer replaceObjectAtIndex:i withObject:[NSNull null]];
+    }
+    _head = _tail = _count = 0;
+}
+
 - (void)clear {
     os_unfair_lock_lock(&_lock);
-    _head = _tail = _count = 0;
+    [self _unsafeResetSlots];
     _frameDropMetrics = [[FloatBuffer alloc] initWithCapacity:512];
+    os_unfair_lock_unlock(&_lock);
+}
+
+// Release frames retained in slots outside the live [head, head+count) window
+// (already-consumed or dropped frames waiting to be overwritten). Safe to call
+// any time; used on memory warnings.
+- (void)purgeStaleSlots {
+    os_unfair_lock_lock(&_lock);
+    for (int i = 0; i < _capacity; i++) {
+        int dist = (i - _head + _capacity) % _capacity;
+        BOOL live = dist < _count;
+        if (!live && _buffer[i] != [NSNull null]) {
+            [_buffer replaceObjectAtIndex:i withObject:[NSNull null]];
+        }
+    }
     os_unfair_lock_unlock(&_lock);
 }
 
@@ -385,6 +419,10 @@
     if (isOwner) {
         _consumerOwner = nil;
         self.paused = YES;
+        // Free the dead session's decoded frames (large pixel buffers) now
+        // instead of leaving them in the slots until the next session
+        // happens to overwrite them.
+        [self _unsafeResetSlots];
     }
     os_unfair_lock_unlock(&_lock);
     if (!isOwner) {
