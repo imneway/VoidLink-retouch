@@ -111,6 +111,10 @@ typedef NS_ENUM(NSInteger, StreamCountdownState) {
     NSTimer *_reconnectTimer;
     double _reconnectElapsedSeconds;
     NSInteger _reconnectProbeTick;
+    // Set once the user leaves the stream page (returnToMainFrame / teardown).
+    // Async probe completions check this so they never start a StreamManager or
+    // a self-heal loop on a popped view controller (zombie session).
+    BOOL _hasLeftStreamPage;
     BOOL _hasConnectionStarted;
     // Set when connectionTerminated/stageFailed reported an abnormal end. Blocks
     // clearing the dirty-session flag at teardown: after an abnormal end the host
@@ -350,7 +354,8 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
         [toolBoxViewController.specialEntries removeObject:@"widgetLayoutTool"];
         [toolBoxViewController.specialEntries removeObject:@"widgetSwitchTool"];
     }
-    if(_settings.enablePIP){
+    // PiP is only functional on the AVSB backend (see videoContentShown)
+    if(_settings.enablePIP && [_settings.renderingBackend intValue] == RENDER_AVSB){
         if(![toolBoxViewController.specialEntries containsObject:@"enterPip"]) [toolBoxViewController.specialEntries addObject:@"enterPip"];
     }
     else [toolBoxViewController.specialEntries removeObject:@"enterPip"];
@@ -2090,6 +2095,9 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
                                                         fallbackError:401 fallbackRequest:[hMan newHttpServerInfoRequest]]];
         BOOL online = [serverInfoResp isStatusOk];
         dispatch_async(dispatch_get_main_queue(), ^{
+            if (self->_hasLeftStreamPage) {
+                return;
+            }
             if (!online) {
                 [self beginSelfHealReconnectLoopWithOverlay:YES];
             } else {
@@ -2100,6 +2108,9 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 }
 
 - (void)startStreamManager {
+    // Central guard: async completions (initial probe, reconnect probes,
+    // connection callbacks) must never start a session on a popped VC.
+    if (_hasLeftStreamPage) return;
     if (_streamMan != nil) return;
     _hasConnectionStarted = NO;
     _streamMan = [[StreamManager alloc] initWithConfig:self.streamConfig
@@ -2110,6 +2121,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 }
 
 - (void)beginSelfHealReconnectLoopWithOverlay:(BOOL)showOverlay {
+    // Same guard as startStreamManager: never revive on a popped VC.
+    if (_hasLeftStreamPage) return;
     if (_reconnectTimer != nil) return;
     if (showOverlay) {
         [self showAutoEnterToastLikeMainWithText:[LocalizationHelper localizedStringForKey:@"Host offline. Retrying..."]];
@@ -2130,6 +2143,13 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
             BOOL online = [resp isStatusOk];
             if (online) {
                 dispatch_async(dispatch_get_main_queue(), ^{
+                    // The probe outlives the loop: if the user already left the
+                    // stream page (returnToMainFrame stopped the loop and nil'd
+                    // the timer), starting a StreamManager here would create a
+                    // zombie session on a popped view controller.
+                    if (selfRef->_hasLeftStreamPage || selfRef->_reconnectTimer == nil) {
+                        return;
+                    }
                     [selfRef stopSelfHealReconnectLoop];
                     [selfRef updateAutoEnterToastLabel:[LocalizationHelper localizedStringForKey:@"Connecting..."]];
                     [selfRef startStreamManager];
@@ -2298,6 +2318,15 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
             [_streamCountdownUpdateTimer invalidate];
             _streamCountdownUpdateTimer = nil;
         }
+        // _statsUpdateTimer retains self (target-based repeating timer): if any
+        // exit path ever pops this VC without going through returnToMainFrame,
+        // a live stats timer would leak the whole controller graph.
+        if (_statsUpdateTimer != nil) {
+            [_statsUpdateTimer invalidate];
+            _statsUpdateTimer = nil;
+        }
+        _hasLeftStreamPage = YES;
+        [self stopSelfHealReconnectLoop];
         if (self.metalViewController) {
             [self.metalViewController.view removeFromSuperview];
             [self.metalViewController removeFromParentViewController];
@@ -2439,6 +2468,11 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     _timeBatteryUpdateTimer = nil;
     [_streamCountdownUpdateTimer invalidate];
     _streamCountdownUpdateTimer = nil;
+
+    // Leaving the stream page must also cancel a running self-heal loop, or an
+    // in-flight probe could revive the stream on a popped view controller.
+    _hasLeftStreamPage = YES;
+    [self stopSelfHealReconnectLoop];
 
     [self prepareAutoEnterStateForReturnToMainFrameAllowingBackgroundResume:allowBackgroundResume];
     [self.navigationController popToRootViewControllerAnimated:NO];
@@ -2607,19 +2641,18 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     [self resetFinishedStreamCountdownToIdleIfNeeded];
 
     NSLog(@"did enter background, %d, %@, %d", _settings.enablePIP, self.pipController, self.pipController.isPictureInPictureActive);
-    if (_settings.enablePIP && self.pipController && self.pipController.isPictureInPictureActive) {
-        //Log(LOG_I, @"PIP is active, not terminating stream");
-    } else {
-        if ([_settings.renderingBackend intValue] == RENDER_METAL && self.metalViewController) {
-            Log(LOG_I, @"Pausing Metal renderer on background");
-            [self.metalViewController pauseRendering];
-        }
-        
-        if (self.imguiView && self.imguiView.mtkView) {
-            self.imguiView.mtkView.paused = YES;
-            self.imguiView.mtkView.enableSetNeedsDisplay = NO;
-            Log(LOG_I, @"Pausing ImGui renderer on background");
-        }
+    // Metal/MTKView command submission in the background gets the app killed by
+    // the OS. PiP only needs the AVSampleBufferDisplayLayer fed, which is not
+    // Metal work, so GPU renderers are paused whether or not PiP is active.
+    if ([_settings.renderingBackend intValue] == RENDER_METAL && self.metalViewController) {
+        Log(LOG_I, @"Pausing Metal renderer on background");
+        [self.metalViewController pauseRendering];
+    }
+
+    if (self.imguiView && self.imguiView.mtkView) {
+        self.imguiView.mtkView.paused = YES;
+        self.imguiView.mtkView.enableSetNeedsDisplay = NO;
+        Log(LOG_I, @"Pausing ImGui renderer on background");
     }
 
     if (_inactivityTimer != nil) {
@@ -3097,7 +3130,11 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         [self.view setBackgroundColor:[UIColor blackColor]];
 
         if (@available(iOS 15.0, *)) {
-            if (self->_settings.enablePIP) {
+            // PiP is driven by the AVSampleBufferDisplayLayer content source. With
+            // the Metal backend that layer exists but is never fed frames, so PiP
+            // would show a blank window while keeping the app "active" in the
+            // background — only offer PiP on the AVSB backend.
+            if (self->_settings.enablePIP && [self->_settings.renderingBackend intValue] == RENDER_AVSB) {
                 if (self->_streamMan && self->_streamMan.videoRenderer) {
                     Log(LOG_I, @"Setting up PiP with renderer: %p", self->_streamMan.videoRenderer);
                     [self setupPiPControllerWithRenderer:self->_streamMan.videoRenderer];
