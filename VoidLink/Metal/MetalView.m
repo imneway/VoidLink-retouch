@@ -41,15 +41,58 @@
 }
 
 - (void)shutdown {
-    if (_renderThread) {
-        Log(LOG_I, @"[MetalView] sending renderThread a cancel message");
-        [_renderThread cancel];
-        Log(LOG_I, @"[MetalView] waiting on renderThread to finish");
-        while (!_renderThread.isFinished) {
-            usleep(100);
-        }
+    [self shutdownWithTimeout:3.0];
+}
+
+- (BOOL)shutdownWithTimeout:(CFTimeInterval)timeout {
+    // _renderThread is touched from the main thread (shutdown, window
+    // reattach) and from a background join after a timed-out shutdown —
+    // mutate it only under @synchronized, and compare before clearing so a
+    // stale join can't drop a newly attached thread.
+    NSThread *thread;
+    @synchronized (self) {
+        thread = _renderThread;
+    }
+    if (!thread) {
+        return YES;
+    }
+    Log(LOG_I, @"[MetalView] sending renderThread a cancel message");
+    [thread cancel];
+    Log(LOG_I, @"[MetalView] waiting on renderThread to finish");
+    // Bounded wait: this runs on the main thread while the render thread may
+    // be blocked in a dispatch_sync onto the main queue (colorspace/EDR layer
+    // updates) — spinning forever here is a mutual deadlock. Give up after
+    // the deadline; once the main run loop resumes, the render thread's
+    // dispatch_sync completes and the thread exits.
+    CFTimeInterval deadline = CACurrentMediaTime() + timeout;
+    while (!thread.isFinished && CACurrentMediaTime() < deadline) {
+        usleep(1000);
+    }
+    if (thread.isFinished) {
         Log(LOG_I, @"[MetalView] renderThread has finished");
-        _renderThread = nil;
+        @synchronized (self) {
+            if (_renderThread == thread) {
+                _renderThread = nil;
+            }
+        }
+        return YES;
+    }
+    Log(LOG_W, @"[MetalView] renderThread still running after timeout; join it via joinRenderThread");
+    return NO;
+}
+
+- (void)joinRenderThread {
+    NSThread *thread;
+    @synchronized (self) {
+        thread = _renderThread;
+    }
+    while (thread && !thread.isFinished) {
+        usleep(10000);
+    }
+    @synchronized (self) {
+        if (_renderThread == thread) {
+            _renderThread = nil;
+        }
     }
 }
 
@@ -69,7 +112,7 @@
     }
 
     // Render on a new thread
-    _renderThread = [[NSThread alloc] initWithBlock:^{
+    NSThread *renderThread = [[NSThread alloc] initWithBlock:^{
         while (![NSThread currentThread].isCancelled) {
             @autoreleasepool {
                 [self.delegate waitToRenderTo:self.metalLayer];
@@ -78,10 +121,13 @@
         }
         Log(LOG_I, @"[MetalView] renderThread is exiting");
     }];
-    _renderThread.name = @"MetalVideoRenderer";
-    _renderThread.qualityOfService = NSQualityOfServiceUserInteractive;
-    [_renderThread start];
-    Log(LOG_I, @"[MetalView] started renderThread %@", _renderThread);
+    renderThread.name = @"MetalVideoRenderer";
+    renderThread.qualityOfService = NSQualityOfServiceUserInteractive;
+    @synchronized (self) {
+        _renderThread = renderThread;
+    }
+    [renderThread start];
+    Log(LOG_I, @"[MetalView] started renderThread %@", renderThread);
 
     // Perform any actions that need to know the size and scale of the drawable. When UIKit calls
     // didMoveToWindow after the view initialization, this is the first opportunity to notify

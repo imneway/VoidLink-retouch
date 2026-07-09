@@ -29,6 +29,11 @@
 
 - (void)initCommon;
 - (void)shutdown;
+// Bounded join of the render thread; returns YES if it exited. On NO the
+// thread reference is kept so joinRenderThread can finish the job later.
+- (BOOL)shutdownWithTimeout:(CFTimeInterval)timeout;
+// Blocks until the render thread exits. Call off the main thread only.
+- (void)joinRenderThread;
 #if AUTOMATICALLY_RESIZE
 - (void)resizeDrawable:(CGFloat)scaleFactor;
 #endif

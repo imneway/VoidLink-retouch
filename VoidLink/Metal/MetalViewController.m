@@ -175,15 +175,39 @@
         _displayLink = nil;
     }
 
+    // Only request the stop before the join — full renderer teardown clears
+    // pipeline state the render loop may still be reading.
     if (_renderer) {
-        [_renderer shutdown];
-        _renderer = nil;
+        [_renderer requestStop];
     }
 
+    BOOL threadExited = YES;
     if (_metalView) {
+        threadExited = [_metalView shutdownWithTimeout:3.0];
+    }
+
+    if (threadExited) {
+        [_renderer shutdown];
         _metalView.delegate = nil;
-        [_metalView shutdown];
+        _renderer = nil;
         _metalView = nil;
+    } else {
+        // The render thread is still blocked (typically in a dispatch_sync
+        // onto the main queue). Releasing the renderer or unhooking the
+        // delegate now would let it resume into deallocated objects — hand
+        // ownership to a background block that joins the thread first.
+        // (view.delegate is strong and keeps this controller alive too.)
+        MetalVideoRenderer *renderer = _renderer;
+        MetalView *view = _metalView;
+        _renderer = nil;
+        _metalView = nil;
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            [view joinRenderThread];
+            [renderer shutdown];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                view.delegate = nil;
+            });
+        });
     }
 }
 

@@ -30,6 +30,10 @@
 - (void)renderFrame:(nonnull Frame *)frame toLayer:(nonnull CAMetalLayer *)layer;
 - (void)waitToRenderTo:(nonnull CAMetalLayer *)layer API_AVAILABLE(ios(13.0));
 - (void)drawableResize:(CGSize)drawableSize;
+// Makes the render loop bail out; safe from any thread, any time.
+- (void)requestStop;
+// Full teardown including GPU resources the render loop touches — only call
+// after the render thread has been joined.
 - (void)shutdown;
 
 + (NSString *_Nullable)currentColorSpace;
