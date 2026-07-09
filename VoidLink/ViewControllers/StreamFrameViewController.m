@@ -2927,8 +2927,13 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
             }
         }
         
-        // For offline/network class errors, self-heal instead of blocking
-        if (portFlags != 0 || errorCode == ETIMEDOUT || errorCode == ECONNREFUSED) {
+        // For offline/network class errors, self-heal instead of blocking.
+        // ML_ERROR_CONTROL_DISCONNECT_TIMEOUT / ML_ERROR_CONTROL_UNEXPECTED_DISCONNECT
+        // are the control stream dropping (host crash or network blip) — the same
+        // class of failure, reported as a bare -1 before common-c 48c4572c.
+        if (portFlags != 0 || errorCode == ETIMEDOUT || errorCode == ECONNREFUSED ||
+            errorCode == ML_ERROR_CONTROL_DISCONNECT_TIMEOUT ||
+            errorCode == ML_ERROR_CONTROL_UNEXPECTED_DISCONNECT) {
             // Drop the dead StreamManager so startStreamManager (guarded by
             // `if (_streamMan != nil) return`) can actually build a fresh one when
             // the host comes back. Without this, self-heal probes detect "online"
