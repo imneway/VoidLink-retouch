@@ -60,6 +60,13 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     // UIApplication.applicationState is main-thread-only; this mirror is
     // written on the main thread via notifications and read from _vtq.
     atomic_bool _appInBackground;
+
+    // Pacing state, per renderer instance (as ivars these reset naturally per
+    // session; as statics they leaked stale values into the next session).
+    CFTimeInterval _lastTargetLocal;
+    int _lateCallbacks;
+    CFTimeInterval _avgOverhead;
+    CFTimeInterval _lastHostFramePts; // only touched on _vtq
 }
 
 - (void)reinitializeDisplayLayer
@@ -143,6 +150,7 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     _streamAspectRatio = aspectRatio;
     _maxRefreshRate = [[UIScreen mainScreen] maximumFramesPerSecond];
     _parameterSetBuffers = [[NSMutableArray alloc] init];
+    _avgOverhead = 0.004f; // averaged each displaylink callback
 
     DataManager* dataMan = [[DataManager alloc] init];
 
@@ -300,20 +308,17 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
 - (void)renderModeAVSB:(CADisplayLink *)link {
     CFTimeInterval start = link.timestamp;
     CFTimeInterval deadline = link.targetTimestamp;
-    static CFTimeInterval lastTargetLocal = 0.0f;
     CFTimeInterval dl0 = CACurrentMediaTime();
 
-    static int lateCallbacks = 0;
     if (dl0 > deadline) {
         // we already missed it, count how often this happens
-        lateCallbacks++;
+        _lateCallbacks++;
         return;
     }
 
     [self checkDisplayLayer];
 
-    static CFTimeInterval avgOverhead = 0.004f; // averaged each callback
-    CFTimeInterval waitFor = deadline - dl0 - avgOverhead;
+    CFTimeInterval waitFor = deadline - dl0 - _avgOverhead;
     if (waitFor < 0.001f) {
         waitFor = 0.0f;
     }
@@ -333,12 +338,12 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
 
 #ifdef DISPLAYLINK_VERBOSE
         Log(LOG_I, @"[%.3f] rendering frame %d, waitFor %.3f ms, overhead %.3f ms, lateCallbacks %d, queue size %d",
-            deadline, frame.frameNumber, waitFor * 1000.0, avgOverhead * 1000.0, lateCallbacks, [_frameQueue count]);
+            deadline, frame.frameNumber, waitFor * 1000.0, _avgOverhead * 1000.0, _lateCallbacks, [_frameQueue count]);
 #endif
 
         // Update metrics
-        if (lastTargetLocal != 0) {
-            CFTimeInterval frametime = targetLocal - lastTargetLocal;
+        if (_lastTargetLocal != 0) {
+            CFTimeInterval frametime = targetLocal - _lastTargetLocal;
             if (frametime > deadline - start + 0.0005f) {
                 // we missed a callback
                 // Log(LOG_W, @"*** slow frametime %.3f ms", frametime * 1000.0);
@@ -347,12 +352,12 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
                 [[ImGuiPlots sharedInstance] observeFloat:PLOT_FRAMETIME value:frametime * 1000.0];
             }
         }
-        lastTargetLocal = targetLocal;
+        _lastTargetLocal = targetLocal;
 
         // weighted moving average of how much time displayLink needs after dequeuing a frame.
         // This is used to avoid overshooting a vsync by waiting too long.
         const double alpha = 0.1f;
-        avgOverhead = ((CACurrentMediaTime() - dl1) * alpha) + (avgOverhead * (1.0 - alpha));
+        _avgOverhead = ((CACurrentMediaTime() - dl1) * alpha) + (_avgOverhead * (1.0 - alpha));
     }
 }
 
@@ -1073,11 +1078,10 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
 
                         // It's important we capture host metrics on the incoming thread, as this frame object
                         // may have been dropped by the above enqueue
-                        static CFTimeInterval lastHostFrame = 0.0f;
-                        if (lastHostFrame != 0) {
-                            [[ImGuiPlots sharedInstance] observeFloat:PLOT_HOST_FRAMETIME value:(frame.pts - lastHostFrame) * 1000.0];
+                        if (self->_lastHostFramePts != 0) {
+                            [[ImGuiPlots sharedInstance] observeFloat:PLOT_HOST_FRAMETIME value:(frame.pts - self->_lastHostFramePts) * 1000.0];
                         }
-                        lastHostFrame = frame.pts;
+                        self->_lastHostFramePts = frame.pts;
 
                         // Decode time is not graphed because it is marked as hidden, but we can use the same mechanism for the value used by stats
                         static PlotMetrics decodeMetrics = {};

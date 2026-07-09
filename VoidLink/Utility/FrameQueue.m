@@ -25,6 +25,12 @@
     dispatch_queue_t _sq;
     dispatch_semaphore_t _frameSemaphore;
     __weak id _consumerOwner;
+
+    // Framerate-estimate state; reset per session in startForConsumer (as
+    // statics these leaked stale values across the singleton's sessions).
+    CFTimeInterval _fpsLastTime;
+    int _fpsLastFrames;
+    CFTimeInterval _fpsEstimate;
 }
 
 + (instancetype)sharedInstance {
@@ -75,7 +81,8 @@
             dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
         _frameSemaphore = dispatch_semaphore_create(0);
 
-        // ping estimatedFramerate to set initial last value
+        // ping estimatedFramerate to set initial last value (the per-session
+        // reset happens in startForConsumer)
         [self estimatedFramerate];
     }
 	return self;
@@ -127,9 +134,12 @@
         _ptsCorrection = CMTimeAdd(_ptsCorrection, frame.duration90);
 		FQLog(LOG_W, @"dropped frame %d with duration %.3f ms", frame.frameNumber, frame.duration * 1000.0);
     } else {
-		// count unknowns as 1 avg frametime
+		// count unknowns as 1 avg frametime. Gate on fps > 0, not just the
+        // frame count: right after a session reset the estimate is 0 while
+        // the cumulative _framesIn may already be large, and 90000/0 would
+        // poison _ptsCorrection.
         CFTimeInterval fps = (_framesIn > 1000) ? [self _unsafeEstimatedFramerate] : 0.0f;
-        CMTime oneFrame = (_framesIn > 1000) ? CMTimeMake((int)(90000.0f / fps), 90000) : kCMTimeZero;
+        CMTime oneFrame = (fps > 0) ? CMTimeMake((int)(90000.0f / fps), 90000) : kCMTimeZero;
         _ptsCorrection = CMTimeAdd(_ptsCorrection, oneFrame);
         FQLog(LOG_W, @"dropped frame %d with unknown duration, using %.3f ms (%.1f fps) instead",
             frame.frameNumber, CMTimeGetSeconds(oneFrame) * 1000.0, fps);
@@ -376,19 +386,15 @@
 }
 
 - (CFTimeInterval)_unsafeEstimatedFramerate {
-    static CFTimeInterval lastTime = 0;
-    static int lastFrames = 0;
-    static CFTimeInterval estimate = 0;
-
     CFTimeInterval now = CACurrentMediaTime();
-    if (now - lastTime > 1.0) {
-        estimate = (_framesIn - lastFrames) / (now - lastTime);
+    if (now - _fpsLastTime > 1.0) {
+        _fpsEstimate = (_framesIn - _fpsLastFrames) / (now - _fpsLastTime);
 //		FQLog(LOG_I, @"fps calc using framesIn %d - lastFrames %d / now %f - lastTime %f = %.1f fps",
-//		              _framesIn, lastFrames, now, lastTime, estimate);
-        lastTime   = now;
-        lastFrames = _framesIn;
+//		              _framesIn, _fpsLastFrames, now, _fpsLastTime, _fpsEstimate);
+        _fpsLastTime   = now;
+        _fpsLastFrames = _framesIn;
     }
-    return estimate;
+    return _fpsEstimate;
 }
 
 - (CFTimeInterval)estimatedFramerate {
@@ -413,6 +419,12 @@
     os_unfair_lock_lock(&_lock);
     _consumerOwner = owner;
     self.paused = NO;
+    // Fresh session: reset the framerate-estimate state so the previous
+    // session's counters don't skew the first estimates.
+    _fpsLastTime = CACurrentMediaTime();
+    _fpsLastFrames = _framesIn;
+    _fpsEstimate = 0;
+    _droppedLast = NO;
     os_unfair_lock_unlock(&_lock);
     Log(LOG_I, @"FrameQueue started");
 }
