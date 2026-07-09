@@ -20,6 +20,10 @@
     MetricsHandler _metricsHandler;
     CADisplayLink *_displayLink;
     BOOL _frameSlotAcquired;
+    // True only when waitToRenderTo actually decremented the in-flight
+    // semaphore this pass — _frameSlotAcquired can be YES without a held
+    // slot (pre-iOS 13, or the isStopping drain path).
+    BOOL _slotHeld;
 }
 
 - (nonnull instancetype)initWithFrame:(CGRect)bounds framerate:(float)framerate settings:(TemporarySettings* )settings metricsHandler:(MetricsHandler)metricsHandler {
@@ -109,18 +113,20 @@
 }
 
 - (void)waitToRenderTo:(nonnull CAMetalLayer *)layer {
-    // Skip waiting when renderer is paused. Leave the slot flag set so
+    // Skip waiting when renderer is paused. Leave the render flag set so
     // renderTo: still reaches its isStopping branch and drains the queue.
     if (_renderer.isStopping) {
         _frameSlotAcquired = YES;
+        _slotHeld = NO;
         return;
     }
 
     // Renderer obtains an in-flight frame slot, waiting if necessary.
     // Defaults to YES so pre-iOS 13 keeps the old always-render behavior.
     _frameSlotAcquired = YES;
+    _slotHeld = NO;
     if (@available(iOS 13.0, *)) {
-        _frameSlotAcquired = [_renderer waitToRenderTo:layer];
+        _frameSlotAcquired = _slotHeld = [_renderer waitToRenderTo:layer];
     }
 
     if (_frameSlotAcquired) {
@@ -137,19 +143,30 @@
         // semaphore in the completion handler and break frame pacing.
         return;
     }
+    BOOL slotHeld = _slotHeld;
+    _slotHeld = NO;
+
     CFTimeInterval timeout = (1.0f / _framerate) - _renderer.averageGPUTime;
     Frame *frame = [_frameQueue dequeueWithTimeout:timeout];
 
     if (!_renderer.isStopping) {
-        // Only render if not paused
+        // A held slot is returned exactly once: by the command buffer's
+        // completion handler when renderFrame commits, or right here when
+        // it doesn't (no frame yet, drawable/texture failure). Anything
+        // else drains the semaphore and permanently starves rendering.
+        BOOL committed = NO;
         if (frame) {
-            //if (@available(iOS 13.0, *)) {
-                [_renderer renderFrame:frame toLayer:layer];
-            //}
+            committed = [_renderer renderFrame:frame toLayer:layer];
+        }
+        if (slotHeld && !committed) {
+            [_renderer releaseInFlightFrameSlot];
         }
     } else {
         // When paused, we still dequeue frames to prevent accumulation
         // but don't render them. Also sleep a bit to reduce CPU usage
+        if (slotHeld) {
+            [_renderer releaseInFlightFrameSlot];
+        }
         usleep(100000);
     }
 }

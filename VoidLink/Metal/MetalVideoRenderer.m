@@ -563,29 +563,29 @@ CFStringRef __currentColorSpace;
     return YES;
 }
 
-- (void)renderFrame:(Frame *)frame toLayer:(CAMetalLayer *)layer {
+- (BOOL)renderFrame:(Frame *)frame toLayer:(CAMetalLayer *)layer {
     @autoreleasepool {
         if (self.isStopping) {
             Log(LOG_I, @"[MetalVideoRenderer] isStopping");
-            return;
+            return NO;
         }
 
         // Handle changes to the frame's colorspace from last time we rendered
         BOOL layerDidChange = NO;
         if (![self updateColorSpaceForFrame:frame toLayer:layer layerDidChange:&layerDidChange]) {
-            return;
+            return NO;
         }
 
         // Handle changes to the video size or drawable size
         if (![self updateVideoRegionSizeForFrame:frame toLayer:layer]) {
-            return;
+            return NO;
         }
 
         FQLog(LOG_I, @"[%d / %.3f ms] Metal frame rendering", frame.frameNumber, frame.pts);
 
         if (!frame.pixelBuffer) {
             Log(LOG_W, @"Frame pixelBuffer is NULL, skipping render");
-            return;
+            return NO;
         }
 
         size_t planes = CVPixelBufferGetPlaneCount(frame.pixelBuffer);
@@ -615,7 +615,7 @@ CFStringRef __currentColorSpace;
         id<CAMetalDrawable> drawable = [layer nextDrawable];
         if (!drawable) {
             Log(LOG_E, @"Failed to get nextDrawable");
-            return;
+            return NO;
         }
 
         // Get the framebuffer pixel format for pipeline creation
@@ -676,7 +676,7 @@ CFStringRef __currentColorSpace;
             _videoPipelineState[planes] = [_device newRenderPipelineStateWithDescriptor:pipelineDesc error:&error];
             if (!_videoPipelineState[planes]) {
                 Log(LOG_E, @"Failed to create video pipeline state: %@", error);
-                return;
+                return NO;
             }
 
             // Store the pixel format this pipeline state was created for
@@ -695,7 +695,7 @@ CFStringRef __currentColorSpace;
             CFTypeRef ioSurface = CVPixelBufferGetIOSurface(frame.pixelBuffer);
             if (!ioSurface) {
                 Log(LOG_E, @"CVPixelBuffer does not have IOSurface backing - cannot create Metal texture");
-                return;
+                return NO;
             }
 
             CVMetalTextureRef cvTexture = NULL;
@@ -715,7 +715,7 @@ CFStringRef __currentColorSpace;
                     CVPixelBufferGetWidth(frame.pixelBuffer),
                     CVPixelBufferGetHeight(frame.pixelBuffer),
                     ioSurface);
-                return;
+                return NO;
             }
             [frameTextures addObject:CFBridgingRelease(cvTexture)];
         } else {
@@ -741,7 +741,7 @@ CFStringRef __currentColorSpace;
 
                     default:
                         Log(LOG_E, @"Unknown pixel format: %@", CVPixelBufferGetPixelFormatType(frame.pixelBuffer));
-                        return;
+                        return NO;
                 }
 
                 CVMetalTextureRef cvTexture = NULL;
@@ -756,7 +756,7 @@ CFStringRef __currentColorSpace;
                                                                          &cvTexture);
                 if (err != kCVReturnSuccess) {
                     Log(LOG_E, @"CVMetalTextureCacheCreateTextureFromImage() failed: %d", err);
-                    return;
+                    return NO;
                 }
                 [frameTextures addObject:CFBridgingRelease(cvTexture)];
             }
@@ -830,7 +830,13 @@ CFStringRef __currentColorSpace;
         // frame, defeating the MaxFramesInFlight triple buffering. Pacing is
         // enforced by _inFlightSemaphore (waitToRenderTo), nextDrawable's own
         // backpressure, and presentDrawable:afterMinimumDuration:.
+
+        return YES;
     }
+}
+
+- (void)releaseInFlightFrameSlot {
+    dispatch_semaphore_signal(_inFlightSemaphore);
 }
 
 - (BOOL)waitToRenderTo:(nonnull CAMetalLayer *)layer {
