@@ -517,7 +517,7 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
 
 - (void)configZoomGestureAndAddStreamView{
     if (_settings.touchMode.intValue == AbsoluteTouch) {
-        _scrollView = [[UIScrollView alloc] initWithFrame:self.view.frame];
+        if(!_scrollView) _scrollView = [[UIScrollView alloc] initWithFrame:self.view.frame];
 #if !TARGET_OS_TV
         [_scrollView.panGestureRecognizer setMinimumNumberOfTouches:2];
         [_scrollView.panGestureRecognizer setMaximumNumberOfTouches:2]; // reduce competing with keyboardToggleRecognizer in StreamView.
@@ -526,15 +526,19 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
         [_scrollView setShowsVerticalScrollIndicator:NO];
         [_scrollView setDelegate:self];
         [_scrollView setMaximumZoomScale:10.0f];
-        
-        // Add StreamView inside a UIScrollView for absolute mode
-        [_scrollView addSubview:_streamView];
-        // Insert at index 0 to ensure it doesn't cover OSC controls (CALayers)
-        [self.view insertSubview:_scrollView atIndex:0];
+        if(!_mainFrameViewcontroller.settingsExpandedInStreamView){
+            // Add StreamView inside a UIScrollView for absolute mode
+            [_scrollView addSubview:_streamView];
+            // Insert at index 0 to ensure it doesn't cover OSC controls (CALayers)
+            [self.view insertSubview:_scrollView atIndex:0];
+        }
     }
     else{
         // Add streamView directly to self.view in other touch modes
         // Insert at index 0 to ensure it doesn't cover OSC controls (CALayers)
+        if([_streamView.superview isKindOfClass:[UIScrollView class]]){
+            [_streamView removeFromSuperview];
+        }
         [self.view insertSubview:_streamView atIndex:0];
     }
 }
@@ -2031,6 +2035,11 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
                                                  name:@"OscLayoutCloseNotification"
                                                object:nil];
 
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(handleStreamAspectRatioChanged:)
+                                                 name:@"StreamAspectRatioChanged"
+                                               object:nil];
+
 #if 0
     // FIXME: This doesn't work reliably on iPad for some reason. Showing and hiding the keyboard
     // several times in a row will not correctly restore the state of the UIScrollView.
@@ -2076,6 +2085,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         [self.view insertSubview:self.metalViewController.view atIndex:0];
         [self.metalViewController didMoveToParentViewController:self];
     }
+
+    _mainFrameViewcontroller.sessionLaunchedWithAbsoluteTouch = _settings.touchMode.intValue == AbsoluteTouch;
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -2262,6 +2273,15 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
 - (void)enterPip{
     [self.pipController startPictureInPicture];
+}
+
+- (void)handleStreamAspectRatioChanged:(NSNotification *)notification {
+    NSNumber *aspectRatioNum = notification.userInfo[@"aspectRatio"];
+    if (aspectRatioNum && _streamView) {
+        CGFloat aspectRatio = [aspectRatioNum doubleValue];
+        Log(LOG_I, @"Updating StreamView aspect ratio to %.4f", aspectRatio);
+        _streamView.streamAspectRatio = aspectRatio;
+    }
 }
 
 - (void)oscLayoutClosed{

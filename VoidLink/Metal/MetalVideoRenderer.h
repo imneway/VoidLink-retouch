@@ -28,7 +28,11 @@
 
 
 - (void)renderFrame:(nonnull Frame *)frame toLayer:(nonnull CAMetalLayer *)layer;
-- (void)waitToRenderTo:(nonnull CAMetalLayer *)layer API_AVAILABLE(ios(13.0));
+// Returns NO when no in-flight frame slot was acquired (stopping, or the
+// semaphore wait timed out — e.g. GPU stalled in background). Callers must
+// skip renderFrame: for this pass, otherwise the completion handler's
+// signal permanently inflates the semaphore and breaks pacing.
+- (BOOL)waitToRenderTo:(nonnull CAMetalLayer *)layer API_AVAILABLE(ios(13.0));
 - (void)drawableResize:(CGSize)drawableSize;
 // Makes the render loop bail out; safe from any thread, any time.
 - (void)requestStop;

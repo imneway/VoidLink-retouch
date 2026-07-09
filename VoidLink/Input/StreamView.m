@@ -85,6 +85,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     
     KeyboardInputField* keyInputField;
     BOOL isInputingText;
+    BOOL isPencilHovering;
     NSMutableSet* keysDown;
     float streamAspectRatio;
 
@@ -921,6 +922,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
         case UIGestureRecognizerStateBegan:
         case UIGestureRecognizerStateChanged:
             type = LI_TOUCH_EVENT_HOVER;
+            isPencilHovering = YES;
             break;
 
         case UIGestureRecognizerStateEnded:
@@ -929,6 +931,15 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 
         default:
             return;
+    }
+
+    if (gesture.state == UIGestureRecognizerStateEnded) {
+        // Hold the pencil-hover flag through one more frame so a trailing
+        // pointerInteraction/touchesMoved update can't yank the host cursor
+        // back and make it flicker (upstream adeb77cf).
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.016 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            self->isPencilHovering = NO;
+        });
     }
 
     CGPoint location = [self adjustCoordinatesForVideoArea:[gesture locationInView:self]];
@@ -1164,7 +1175,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
                 // don't require this, but we do it anyway for them too.
                 // Cursor movement without a button held down is handled
                 // in pointerInteraction:regionForRequest:defaultRegion.
-                [self updateCursorLocation:[touch locationInView:self] isMouse:YES];
+                if (!isPencilHovering) [self updateCursorLocation:[touch locationInView:self] isMouse:YES];
                 return;
             }
         }
@@ -1435,7 +1446,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     
     // Move the cursor on the host if no buttons are pressed.
     // Motion with buttons pressed in handled in touchesMoved:
-    if (lastMouseButtonMask == 0) {
+    if (lastMouseButtonMask == 0 && !isPencilHovering) {
         [self updateCursorLocation:request.location isMouse:YES];
     }
     

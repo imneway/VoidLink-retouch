@@ -1204,6 +1204,9 @@ static NSMutableSet* hostList;
     // [settingsViewController widget:settingsViewController.bitrateSlider setEnabled:!self.settingsExpandedInStreamView];
     [settingsViewController setHidden:_settingsExpandedInStreamView forStack:settingsViewController.optimizeGamesStack];
     [settingsViewController setHidden:_settingsExpandedInStreamView forStack:settingsViewController.audioOnPcStack];
+    // Mid-stream re-parenting of StreamView in/out of the zoom UIScrollView breaks
+    // touch input when the session started in AbsoluteTouch, so lock the selector then.
+    [settingsViewController.touchModeSelector setEnabled:!_settingsExpandedInStreamView || !_sessionLaunchedWithAbsoluteTouch];
     [settingsViewController.codecSelector setEnabled:!_settingsExpandedInStreamView];
     [settingsViewController.yuv444Switch setEnabled:!_settingsExpandedInStreamView];
     [settingsViewController.hdrSwitch setEnabled:!_settingsExpandedInStreamView && [settingsViewController hdrSupported]];

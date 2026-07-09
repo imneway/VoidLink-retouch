@@ -833,13 +833,20 @@ CFStringRef __currentColorSpace;
     }
 }
 
-- (void)waitToRenderTo:(nonnull CAMetalLayer *)layer {
+- (BOOL)waitToRenderTo:(nonnull CAMetalLayer *)layer {
     // Wait to ensure only `MaxFramesInFlight` number of frames are getting processed
     // by any stage in the Metal pipeline (CPU, GPU, Metal, Drivers, etc.).
-    if (!self.isStopping) {
-        dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1f * NSEC_PER_SEC));  // 100ms
-        dispatch_semaphore_wait(_inFlightSemaphore, timeout);
+    if (self.isStopping) {
+        return NO;
     }
+
+    dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1f * NSEC_PER_SEC));  // 100ms
+    if (dispatch_semaphore_wait(_inFlightSemaphore, timeout) != 0) {
+        Log(LOG_W, @"Timed out waiting for in-flight frame slot");
+        return NO;
+    }
+
+    return YES;
 }
 
 - (void)requestStop {

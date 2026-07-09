@@ -313,6 +313,9 @@ import UIKit
         case initialStatus = 16
     }
     private var previousButtonMask = Direction.initialStatus.rawValue
+    // Forces the first mask evaluation after touchesBegan to fire even when the
+    // computed mask equals the stale previousButtonMask (upstream 297f5ad7).
+    private var directionPadTouchBegan = false
     
     // OnScreenControls instance
     private var onScreenControls: OnScreenControls
@@ -1781,7 +1784,8 @@ import UIKit
         }
         if nearZeroPoint {pressedButtonMask = 0}
         
-        if pressedButtonMask != previousButtonMask {
+        if pressedButtonMask != previousButtonMask || directionPadTouchBegan {
+            directionPadTouchBegan = false
             if(pressedButtonMask & Direction.up.rawValue == Direction.up.rawValue) {
             showLrudDirectionIndicator(with: upIndicator)
             switch touchPadString {
@@ -2665,6 +2669,7 @@ import UIKit
             return
         }
         self.touchBegan = true
+        self.directionPadTouchBegan = true
         self.firstTouchMoved = false
         if self.isAltStickPad {
             self.altStickTouchMovedBeyondTapSlop = false

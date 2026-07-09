@@ -19,6 +19,7 @@
     MetalVideoRenderer *_renderer;
     MetricsHandler _metricsHandler;
     CADisplayLink *_displayLink;
+    BOOL _frameSlotAcquired;
 }
 
 - (nonnull instancetype)initWithFrame:(CGRect)bounds framerate:(float)framerate settings:(TemporarySettings* )settings metricsHandler:(MetricsHandler)metricsHandler {
@@ -108,22 +109,34 @@
 }
 
 - (void)waitToRenderTo:(nonnull CAMetalLayer *)layer {
-    // Skip waiting when renderer is paused
+    // Skip waiting when renderer is paused. Leave the slot flag set so
+    // renderTo: still reaches its isStopping branch and drains the queue.
     if (_renderer.isStopping) {
+        _frameSlotAcquired = YES;
         return;
     }
 
-    // Renderer obtains a nextDrawable, waiting if necessary
+    // Renderer obtains an in-flight frame slot, waiting if necessary.
+    // Defaults to YES so pre-iOS 13 keeps the old always-render behavior.
+    _frameSlotAcquired = YES;
     if (@available(iOS 13.0, *)) {
-        [_renderer waitToRenderTo:layer];
+        _frameSlotAcquired = [_renderer waitToRenderTo:layer];
     }
 
-    // If we don't have a frame yet, wait on that too
-    [_frameQueue waitForEnqueue];
+    if (_frameSlotAcquired) {
+        // If we don't have a frame yet, wait on that too
+        [_frameQueue waitForEnqueue];
+    }
 }
 
 /// Draw frame (used by manual loop)
 - (void)renderTo:(nonnull CAMetalLayer *)layer {
+    if (!_frameSlotAcquired) {
+        // No in-flight slot this pass (semaphore wait timed out, e.g. GPU
+        // stalled in background). Rendering anyway would over-signal the
+        // semaphore in the completion handler and break frame pacing.
+        return;
+    }
     CFTimeInterval timeout = (1.0f / _framerate) - _renderer.averageGPUTime;
     Frame *frame = [_frameQueue dequeueWithTimeout:timeout];
 

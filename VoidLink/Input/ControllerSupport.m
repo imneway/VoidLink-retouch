@@ -1123,7 +1123,7 @@ static inline int16_t clamp_int16(CGFloat v) {
             
             //NSLog(@"gamepadMask: %@", [self binaryRepresentationOfInteger:buttonFlags]); // we got the pressed OSC buttons here.
             
-            // Player 1 is always present for OSC
+            // Player 0 is always present for OSC
             LiSendMultiControllerEvent(_multiController ? controller.playerIndex : 0, [self getActiveGamepadMask],
                                        buttonFlags, leftTrigger, rightTrigger,
                                        leftStickX, leftStickY, rightStickX, rightStickY);
@@ -1897,9 +1897,19 @@ static inline int16_t clamp_int16(CGFloat v) {
         }
     }
 
-    // If this is player 0, it shares state with the OSC
-    voidController.mergedWithController = _oscController;
-    _oscController.mergedWithController = voidController;
+    // Only player 0 shares state with the OSC. Merging every controller here
+    // let the last-connected gamepad hijack _oscController.mergedWithController
+    // and cross-contaminate multi-gamepad input (upstream 3e1423ff).
+    if (voidController.playerIndex == 0) {
+        voidController.mergedWithController = _oscController;
+        _oscController.mergedWithController = voidController;
+    }
+    else {
+        voidController.mergedWithController = nil;
+        if (_oscController.mergedWithController == voidController) {
+            _oscController.mergedWithController = nil;
+        }
+    }
     
     if (@available(iOS 13.0, tvOS 13.0, *)) {
         if (controller.extendedGamepad != nil &&
