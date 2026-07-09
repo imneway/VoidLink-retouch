@@ -95,6 +95,7 @@ typedef NS_ENUM(NSInteger, SettingsMenuMode) {
                  multiController:(BOOL)multiController
                     swapABButtons:(BOOL)swapABButtons
                     swapXYButtons:(BOOL)swapXYButtons
+                   sendDummyEvent:(BOOL)sendDummyEvent
                        audioOnPC:(BOOL)audioOnPC
                   preferredCodec:(uint32_t)preferredCodec
                        enableYUV444:(BOOL)enableYUV444

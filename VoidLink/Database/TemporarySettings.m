@@ -110,6 +110,7 @@ static BOOL BoolForUserDefaultKeyWithLegacyFallback(NSString *key, NSString *leg
     self.swapABButtons = [[settings valueForKey:@"swapABButtons"] boolValue];
     self.swapXYButtons = [[settings valueForKey:@"swapXYButtons"] boolValue];
     self.swapABXYButtons = self.swapABButtons || self.swapXYButtons;
+    self.sendDummyEvent = [[settings valueForKey:@"sendDummyEvent"] boolValue];
     self.onscreenControls = settings.onscreenControls;
     self.gyroMode = settings.gyroMode;
     self.emulatedControllerType = settings.emulatedControllerType;

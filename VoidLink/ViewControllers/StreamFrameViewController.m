@@ -63,11 +63,43 @@ typedef NS_ENUM(NSInteger, StreamCountdownState) {
     StreamCountdownStateFinished,
 };
 
+static NSString* VLTerminationHintForErrorCode(int errorCode) {
+    switch (errorCode) {
+        case ML_ERROR_CONTROL_DISCONNECT_TIMEOUT:
+            return @"Timeout type: control disconnect timeout.\nThe control stream started disconnecting, but the final disconnect event never arrived before the timeout expired.";
+        case ML_ERROR_CONTROL_UNEXPECTED_DISCONNECT:
+            return @"Timeout type: enet peer timeout disconnect / unexpected control stream disconnect.\nThe established control stream was dropped by ENet or the host/network unexpectedly.";
+        case -1:
+            return @"Possible causes:\n- control disconnect timeout\n- enet peer timeout disconnect\n- unexpected control stream disconnect\n- video receive socket failure\n- audio receive socket failure\n- input send socket failure\n- control message send/ack failure\n- loss stats/control buffer malloc failure\n- video buffer malloc failure\n- audio packet malloc failure\n- unknown socket failure";
+        case ETIMEDOUT:
+            return @"Timeout type: socket or control channel timeout.";
+        case ECONNRESET:
+            return @"Possible cause: the host or network reset the connection.";
+        case EPIPE:
+            return @"Possible cause: write failed because the peer closed the connection.";
+        case ECONNABORTED:
+            return @"Possible cause: the local network stack aborted the connection.";
+        case ENETDOWN:
+            return @"Possible cause: the local network interface went down.";
+        case ENETUNREACH:
+            return @"Possible cause: the network became unreachable.";
+        case EHOSTUNREACH:
+            return @"Possible cause: the host became unreachable.";
+        case ENOBUFS:
+            return @"Possible cause: the network stack ran out of buffer space.";
+        case ENOMEM:
+            return @"Possible cause: memory allocation failed.";
+        default:
+            return nil;
+    }
+}
+
 
 @implementation StreamFrameViewController {
     ControllerSupport *_controllerSupport;
     StreamManager *_streamMan;
     TemporarySettings *_settings;
+    CADisplayLink *_dummyEventLink;
     NSTimer *_inactivityTimer;
     NSTimer *_statsUpdateTimer;
     NSTimer *_timeBatteryUpdateTimer;
@@ -638,6 +670,8 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
     if (self.imguiView && self.imguiView.mtkView.superview) {
         [self.view bringSubviewToFront:self.imguiView.mtkView];
     }
+
+    [self startDummyEventLinkIfEnabled];
 
     NSLog(@"frameview gestures: %d", (uint32_t)[self.view.gestureRecognizers count]);
     NSLog(@"streamview gestures: %d", (uint32_t)[_streamView.gestureRecognizers count]);
@@ -2091,6 +2125,7 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
+    [self teardownDummyEventLink];
     if (self->_streamView) {
         [self->_streamView endRightEdgeGestureSuppression];
     }
@@ -2696,7 +2731,42 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
 - (void)expandSettingsView{
     self.mainFrameViewcontroller.settingsExpandedInStreamView = true; //notify mainFrameViewContorller that this is a setting expansion in stream view, some settings shall be disabled.
+    [_dummyEventLink setPaused:YES]; // keep-alive off while the settings menu is up
     [self.mainFrameViewcontroller expandSettingsView];
+}
+
+// Anti-stutter keep-alive (upstream 689221f1/03cf4631): fire a no-op input
+// event once per frame so Wi-Fi power save can't idle the uplink between
+// real inputs, which shows up as periodic stutter on non-AWDL networks.
+- (void)startDummyEventLinkIfEnabled {
+    if (_settings.sendDummyEvent) {
+        if (!_dummyEventLink) {
+            _dummyEventLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(dummyEventTick:)];
+            if (_settings.framerate.intValue > 0) {
+                _dummyEventLink.preferredFramesPerSecond = _settings.framerate.intValue;
+            }
+            [_dummyEventLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+        }
+        _dummyEventLink.paused = NO;
+    }
+    else {
+        [_dummyEventLink setPaused:YES];
+    }
+}
+
+- (void)dummyEventTick:(CADisplayLink *)link {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
+        // Key 0xFF doesn't exist, so the host discards the event; it only
+        // has to keep the input socket busy.
+        LiSendKeyboardEvent(0xFF, KEY_ACTION_UP, 0);
+    });
+}
+
+- (void)teardownDummyEventLink {
+    // The runloop retains the link's target (self); invalidate is what
+    // actually breaks the cycle — paused alone would leak this VC.
+    [_dummyEventLink invalidate];
+    _dummyEventLink = nil;
 }
 
 - (void)edgeSwiped{
@@ -2942,6 +3012,10 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
                     
                     title = [LocalizationHelper localizedStringForKey: @"Connection Terminated"];
                     message = [LocalizationHelper localizedStringForKey: @"The connection was terminated, Error code: %@", errorString];
+                    NSString* errorHint = VLTerminationHintForErrorCode(errorCode);
+                    if (errorHint != nil) {
+                        message = [message stringByAppendingFormat:@"\n\n%@", errorHint];
+                    }
                     break;
                 }
             }

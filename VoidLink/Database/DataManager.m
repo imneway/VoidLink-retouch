@@ -82,6 +82,7 @@ static NSString * const kSwapButtonSplitMigratedKey = @"swapButtonSplitMigrated"
                  multiController:(BOOL)multiController
                     swapABButtons:(BOOL)swapABButtons
                     swapXYButtons:(BOOL)swapXYButtons
+                   sendDummyEvent:(BOOL)sendDummyEvent
                        audioOnPC:(BOOL)audioOnPC
                   preferredCodec:(uint32_t)preferredCodec
                        enableYUV444:(BOOL)enableYUV444
@@ -131,6 +132,7 @@ static NSString * const kSwapButtonSplitMigratedKey = @"swapButtonSplitMigrated"
         [settingsToSave setValue:@(swapABButtons) forKey:@"swapABButtons"];
         [settingsToSave setValue:@(swapXYButtons) forKey:@"swapXYButtons"];
         settingsToSave.swapABXYButtons = swapABButtons || swapXYButtons;
+        [settingsToSave setValue:@(sendDummyEvent) forKey:@"sendDummyEvent"];
         settingsToSave.playAudioOnPC = audioOnPC;
         settingsToSave.preferredCodec = preferredCodec;
         settingsToSave.enableYUV444 = enableYUV444;

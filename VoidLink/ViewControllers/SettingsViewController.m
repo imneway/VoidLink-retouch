@@ -971,7 +971,20 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self addSetting:self.touchMoveEventIntervalStack ofId:@"touchMoveEventIntervalStack" withInfoTag:NO withDynamicLabel:YES to:experimentalSection];
     
     [self addSetting:self.renderingBackendStack ofId:@"renderingBackendStack" withInfoTag:YES withDynamicLabel:NO to:experimentalSection];
-    
+
+    // Anti-stutter keep-alive: send a no-op input event every frame so Wi-Fi
+    // power save can't idle the uplink between real inputs (upstream 689221f1).
+    UILabel *dummyEventLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    dummyEventLabel.text = [LocalizationHelper localizedStringForKey:@"Anti-Stutter Keep-Alive"];
+    dummyEventLabel.font = [UIFont systemFontOfSize:14];
+    self.sendDummyEventSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    UIStackView *dummyEventRow = [self swapButtonRowWithLabel:dummyEventLabel switch:self.sendDummyEventSwitch];
+    UIStackView *sendDummyEventStack = [[UIStackView alloc] initWithArrangedSubviews:@[dummyEventRow]];
+    sendDummyEventStack.axis = UILayoutConstraintAxisVertical;
+    sendDummyEventStack.alignment = UIStackViewAlignmentFill;
+    sendDummyEventStack.distribution = UIStackViewDistributionFill;
+    [self addSetting:sendDummyEventStack ofId:@"sendDummyEventStack" withInfoTag:NO withDynamicLabel:NO to:experimentalSection];
+
     [experimentalSection addToParentStack:_parentStack];
     [experimentalSection setExpanded:YES];
 }
@@ -1774,6 +1787,7 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self.multiControllerSwitch setOn:currentSettings.multiController];
     [self.swapAbSwitch setOn:currentSettings.swapABButtons];
     [self.swapXySwitch setOn:currentSettings.swapXYButtons];
+    [self.sendDummyEventSwitch setOn:currentSettings.sendDummyEvent];
     
     [self.gyroModeSelector setSelectedSegmentIndex:currentSettings.gyroMode.intValue];
     [self.gyroSensitivitySlider setValue: (uint16_t)(currentSettings.gyroSensitivity.floatValue * 100) animated:YES]; // Load old setting.
@@ -2825,6 +2839,7 @@ BOOL isCustomResolution(int resolutionSelected) {
     BOOL multiController = self.multiControllerSwitch.isOn;
     BOOL swapABButtons = self.swapAbSwitch.isOn;
     BOOL swapXYButtons = self.swapXySwitch.isOn;
+    BOOL sendDummyEvent = self.sendDummyEventSwitch.isOn;
     NSInteger gyroMode = self.gyroModeSelector.selectedSegmentIndex;
     NSInteger emulatedControllerType = [self segmentIndexToControllerType:self.emulatedControllerTypeSelector.selectedSegmentIndex]; //self.emulatedControllerTypeSelector.selectedSegmentIndex;
     BOOL audioOnPC = self.audioOnPcSwitch.isOn;
@@ -2882,6 +2897,7 @@ BOOL isCustomResolution(int resolutionSelected) {
                      multiController:multiController
                         swapABButtons:swapABButtons
                         swapXYButtons:swapXYButtons
+                       sendDummyEvent:sendDummyEvent
                            audioOnPC:audioOnPC
                       preferredCodec:preferredCodec
                         enableYUV444:enableYUV444

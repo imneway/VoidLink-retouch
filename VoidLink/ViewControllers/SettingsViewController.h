@@ -74,6 +74,7 @@
 //@property (strong, nonatomic) IBOutlet UISegmentedControl *asyncNativeTouchPrioritySelector;
 @property (strong, nonatomic) IBOutlet UISwitch *swapAbSwitch;
 @property (strong, nonatomic) UISwitch *swapXySwitch;
+@property (strong, nonatomic) UISwitch *sendDummyEventSwitch;
 @property (strong, nonatomic) IBOutlet UISegmentedControl *codecSelector;
 @property (strong, nonatomic) IBOutlet UISwitch *hdrSwitch;
 @property (strong, nonatomic) IBOutlet UISwitch *yuv444Switch;

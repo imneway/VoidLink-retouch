@@ -68,6 +68,7 @@
 @property (nonatomic) BOOL swapABXYButtons;
 @property (nonatomic) BOOL swapABButtons;
 @property (nonatomic) BOOL swapXYButtons;
+@property (nonatomic) BOOL sendDummyEvent;
 @property (nonatomic) BOOL playAudioOnPC;
 @property (nonatomic) BOOL optimizeGames;
 @property (nonatomic) BOOL enableHdr;
