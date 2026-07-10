@@ -657,17 +657,31 @@ static inline int16_t clamp_int16(CGFloat v) {
                         [voidController.gyroTimer invalidate];
                         voidController.gyroTimer = nil;
                         
-                        // Reset the last motion sample
-                        CMRotationRate emptyDeviceGyroSample = {};
-                        voidController.lastDeviceGyroSample = emptyDeviceGyroSample;
-                        [voidController.motionManager startDeviceMotionUpdates];
-                        
-                        NSLog(@"setup device built-in gyro gyroTimer");
+                        NSLog(@"setup device built-in gyro updates (callback-driven)");
                         voidController.hasGyroscope = YES;
-                        voidController.gyroTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
-                            // Orphan self-destruct (see accel timer above).
-                            if (timer != voidController.gyroTimer) { [timer invalidate]; return; }
-                            BOOL emit = [self motionEmissionAllowed] && self->_mapGyroTo != MapGyroToOff;
+                        // Callback-driven delivery: Core Motion invokes the handler once
+                        // per sensor sample, so the polling NSTimer plus its duplicate-
+                        // sample memcmp (and the aliasing jitter of polling a ~100Hz
+                        // sensor at an unrelated rate) go away. Repeated start calls
+                        // simply replace the handler; stopTimerForController calls
+                        // stopDeviceMotionUpdates, so no orphan can outlive teardown.
+                        // Weak refs break the manager→handler→owner retain cycle.
+                        // Rate 0 is the host's "stop reporting" request. The old
+                        // never-firing NSTimer (interval 1/0 = inf) honored it by
+                        // accident; with callbacks we must stop explicitly.
+                        if (voidController.reportRateHz == 0) {
+                            [voidController.motionManager stopDeviceMotionUpdates];
+                            break;
+                        }
+                        voidController.motionManager.deviceMotionUpdateInterval = 1.0 / voidController.reportRateHz;
+                        __weak VoidController* weakGyroController = voidController;
+                        __weak ControllerSupport* weakSelf = self;
+                        [voidController.motionManager startDeviceMotionUpdatesToQueue:[NSOperationQueue mainQueue]
+                                                                          withHandler:^(CMDeviceMotion* deviceMotion, NSError* motionError) {
+                            VoidController* voidController = weakGyroController;
+                            ControllerSupport* strongSelf = weakSelf;
+                            if (!voidController || !strongSelf || !deviceMotion) return;
+                            BOOL emit = [strongSelf motionEmissionAllowed] && strongSelf->_mapGyroTo != MapGyroToOff;
                             // When suppressed, drop any leftover RightStick gyro
                             // contribution to 0 once. Otherwise the last non-zero
                             // value would keep blending into the physical stick.
@@ -677,17 +691,11 @@ static inline int16_t clamp_int16(CGFloat v) {
                                         voidController.gyroStickX = 0;
                                         voidController.gyroStickY = 0;
                                     }
-                                    [self updateFinished:voidController];
+                                    [strongSelf updateFinished:voidController];
                                 }
                                 return;
                             }
-                            // Don't send duplicate samples
-                            CMRotationRate lastDeviceGyroSample = voidController.lastDeviceGyroSample;
-                            CMRotationRate deviceGyroSample = voidController.motionManager.deviceMotion.rotationRate;
-                            if (memcmp(&deviceGyroSample, &lastDeviceGyroSample, sizeof(deviceGyroSample)) == 0) {
-                                    return;
-                            }
-                            voidController.lastDeviceGyroSample = deviceGyroSample;
+                            CMRotationRate deviceGyroSample = deviceMotion.rotationRate;
 
                             // Extract pitch/yaw/roll in deg/s (game frame).
                             //
@@ -720,10 +728,21 @@ static inline int16_t clamp_int16(CGFloat v) {
 
                             // The DS4 motion path used .z for yaw (kept for backward
                             // compat with whatever host-side remap it relied on).
+                            // Passthrough stays ungated — the host does its own filtering.
                             BOOL landscape = gyroUIOrientation == UIInterfaceOrientationLandscapeRight;
-                            float ds4_pitch_dps = deviceGyroSample.y * (landscape ? 57.2957795f : -57.2957795f) * self->_gyroSensitivity;
-                            float ds4_yaw_dps   = deviceGyroSample.z * 57.2957795f * self->_gyroSensitivity;
-                            float ds4_roll_dps  = deviceGyroSample.x * (landscape ? 57.2957795f : -57.2957795f) * self->_gyroSensitivity;
+                            float ds4_pitch_dps = deviceGyroSample.y * (landscape ? 57.2957795f : -57.2957795f) * strongSelf->_gyroSensitivity;
+                            float ds4_yaw_dps   = deviceGyroSample.z * 57.2957795f * strongSelf->_gyroSensitivity;
+                            float ds4_roll_dps  = deviceGyroSample.x * (landscape ? 57.2957795f : -57.2957795f) * strongSelf->_gyroSensitivity;
+
+                            // Sensor noise gate for the stick/mouse paths. Fusion-corrected
+                            // rotationRate still jitters at rest; the old max-magnitude blend
+                            // swallowed that behind any stick input, but additive blending
+                            // forwards it, and with a host-side stick deadzone of 0 it reads
+                            // as a slowly wandering crosshair. 0.01 rad/s ≈ 0.6°/s sits well
+                            // below deliberate micro-aim speeds.
+                            const double kGyroNoiseGateRads = 0.01;
+                            double gatedGyroX = fabs(deviceGyroSample.x) < kGyroNoiseGateRads ? 0 : deviceGyroSample.x;
+                            double gatedGyroY = fabs(deviceGyroSample.y) < kGyroNoiseGateRads ? 0 : deviceGyroSample.y;
 
                             // Stick / Mouse modes: express game yaw/pitch in device axes
                             // per UI orientation. Landscape reads yaw from device x and
@@ -731,30 +750,30 @@ static inline int16_t clamp_int16(CGFloat v) {
                             // vertical axis lands on the other device axis). Base signs
                             // are chosen so both flip toggles OFF give the correct feel
                             // (the old base had yaw inverted, masked by horizontal flip ON).
-                            const float gyroK = 57.2957795f * self->_gyroSensitivity;
+                            const float gyroK = 57.2957795f * strongSelf->_gyroSensitivity;
                             float yaw_dps, pitch_dps;
                             switch (gyroUIOrientation) {
                                 case UIInterfaceOrientationLandscapeLeft:
-                                    yaw_dps   =  deviceGyroSample.x * gyroK;
-                                    pitch_dps = -deviceGyroSample.y * gyroK;
+                                    yaw_dps   =  gatedGyroX * gyroK;
+                                    pitch_dps = -gatedGyroY * gyroK;
                                     break;
                                 case UIInterfaceOrientationPortrait:
-                                    yaw_dps   = -deviceGyroSample.y * gyroK;
-                                    pitch_dps = -deviceGyroSample.x * gyroK;
+                                    yaw_dps   = -gatedGyroY * gyroK;
+                                    pitch_dps = -gatedGyroX * gyroK;
                                     break;
                                 case UIInterfaceOrientationPortraitUpsideDown:
-                                    yaw_dps   =  deviceGyroSample.y * gyroK;
-                                    pitch_dps =  deviceGyroSample.x * gyroK;
+                                    yaw_dps   =  gatedGyroY * gyroK;
+                                    pitch_dps =  gatedGyroX * gyroK;
                                     break;
                                 case UIInterfaceOrientationLandscapeRight:
                                 default:
-                                    yaw_dps   = -deviceGyroSample.x * gyroK;
-                                    pitch_dps =  deviceGyroSample.y * gyroK;
+                                    yaw_dps   = -gatedGyroX * gyroK;
+                                    pitch_dps =  gatedGyroY * gyroK;
                                     break;
                             }
-                            float roll_dps  = deviceGyroSample.z * 57.2957795f * self->_gyroSensitivity;
+                            float roll_dps  = deviceGyroSample.z * 57.2957795f * strongSelf->_gyroSensitivity;
 
-                            switch (self->_mapGyroTo) {
+                            switch (strongSelf->_mapGyroTo) {
                                 case MapGyroToMotion:
                                     // Preserve the legacy DS4 axis mapping — the
                                     // host emulator expects the original convention.
@@ -766,20 +785,20 @@ static inline int16_t clamp_int16(CGFloat v) {
                                     // Stick Y default-inverts: tilt up → positive pitch → +Y stick.
                                     // The user-facing flips re-apply on top of that base convention,
                                     // so "Vertical Flip" off ⇒ ySign = -1, on ⇒ ySign = +1.
-                                    const float xSign = self->_gyroInvertYaw ? -1.0f : 1.0f;
-                                    const float ySign = self->_gyroInvertPitch ? 1.0f : -1.0f;
+                                    const float xSign = strongSelf->_gyroInvertYaw ? -1.0f : 1.0f;
+                                    const float ySign = strongSelf->_gyroInvertPitch ? 1.0f : -1.0f;
                                     int16_t stickX = clamp_int16(yaw_dps * xSign * GYRO_TO_STICK_SCALE);
                                     int16_t stickY = clamp_int16(pitch_dps * ySign * GYRO_TO_STICK_SCALE);
                                     @synchronized(voidController) {
                                         voidController.gyroStickX = stickX;
                                         voidController.gyroStickY = stickY;
                                     }
-                                    [self updateFinished:voidController];
+                                    [strongSelf updateFinished:voidController];
                                     break;
                                 }
                                 case MapGyroToMouse: {
-                                    const float xSign = self->_gyroInvertYaw ? -1.0f : 1.0f;
-                                    const float ySign = self->_gyroInvertPitch ? 1.0f : -1.0f;
+                                    const float xSign = strongSelf->_gyroInvertYaw ? -1.0f : 1.0f;
+                                    const float ySign = strongSelf->_gyroInvertPitch ? 1.0f : -1.0f;
                                     int16_t mouseX = clamp_int16(yaw_dps * xSign * GYRO_TO_MOUSE_SCALE);
                                     int16_t mouseY = clamp_int16(pitch_dps * ySign * GYRO_TO_MOUSE_SCALE);
                                     if (mouseX != 0 || mouseY != 0) LiSendMouseMoveEvent(mouseX, mouseY);
@@ -1151,12 +1170,15 @@ static inline int16_t clamp_int16(CGFloat v) {
             }
 
             // Blend gyro-synthesized right stick contribution (when mapGyroTo
-            // == RightStick the gyro tick writes here directly). max-magnitude
-            // means a stationary iPad never blocks physical stick input, and
-            // a stationary thumb never blocks gyro input — whichever pushes
-            // harder wins each axis.
-            rightStickX = MAX_MAGNITUDE(rightStickX, controller.gyroStickX);
-            rightStickY = MAX_MAGNITUDE(rightStickY, controller.gyroStickY);
+            // == RightStick the gyro handler writes here directly). Additive,
+            // Steam/Switch-style: the thumb/pad sets the coarse direction and
+            // the wrist adds fine corrections on top — including pulling back
+            // while the stick is pegged. The old max-magnitude blend swallowed
+            // whichever source was smaller, so gyro micro-aim died whenever
+            // the stick was deflected (and vice versa). Resting sensor noise
+            // is kept out by the noise gate at the gyro source.
+            rightStickX = clamp_int16((CGFloat)rightStickX + (CGFloat)controller.gyroStickX);
+            rightStickY = clamp_int16((CGFloat)rightStickY + (CGFloat)controller.gyroStickY);
             
             //NSLog(@"gamepadMask: %@", [self binaryRepresentationOfInteger:buttonFlags]); // we got the pressed OSC buttons here.
             
@@ -2510,6 +2532,10 @@ static inline int16_t clamp_int16(CGFloat v) {
         voidController.accelTimer = nil;
         [voidController.gyroTimer invalidate];
         voidController.gyroTimer = nil;
+        // Device gyro is callback-driven now: removing the Core Motion handler
+        // is the actual stop (also breaks the manager→handler retain path).
+        // No-op for gamepad controllers whose motionManager is nil.
+        [voidController.motionManager stopDeviceMotionUpdates];
     }
     // Clear any leftover gyro-synthesized stick contribution so subsequent
     // physical-stick / button updateFinished calls don't keep blending in

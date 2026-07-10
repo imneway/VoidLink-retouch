@@ -2193,9 +2193,15 @@ import UIKit
         guard aimTrackpadDeadzoneCompensation > 0 else { return }
         let mag = hypot(targetX, targetY)
         guard mag > 0 else { return }
-        let floorMagnitude = stickMaxOffset * aimTrackpadDeadzoneCompensation
-        guard mag < floorMagnitude else { return }
-        let scale = floorMagnitude / mag
+        // Steam-style anti-deadzone: linearly rescale magnitude [0, max] onto
+        // [minOffset, max]. With minOffset set to the game's stick deadzone the
+        // in-game response becomes linear from zero. The old hard floor
+        // (max(mag, floor)) flattened every micro-aim magnitude below the
+        // floor to the same output, which is exactly the "tiny move
+        // dead/jumpy" symptom in AIM_PAD_DESIGN_PROPOSAL.md.
+        let minOffset = stickMaxOffset * aimTrackpadDeadzoneCompensation
+        let target = minOffset + (stickMaxOffset - minOffset) * min(mag / stickMaxOffset, 1.0)
+        let scale = target / mag
         targetX *= scale
         targetY *= scale
     }
