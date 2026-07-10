@@ -2597,6 +2597,11 @@ static inline int16_t clamp_int16(CGFloat v) {
 -(void) cleanup
 {
     _reattachEpoch++;
+    // Snapshot the mask before _controllerNumbers is cleared below. The
+    // zero-sweep at the end must carry the mask the host currently believes
+    // in — with a cleared mask the events read as "these pads don't exist"
+    // and the host ignores them instead of zeroing the latched sticks.
+    uint16_t finalGamepadMask = [self getActiveGamepadMask];
     [[NSNotificationCenter defaultCenter] removeObserver:_controllerConnectObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_controllerDisconnectObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_mouseConnectObserver];
@@ -2633,12 +2638,23 @@ static inline int16_t clamp_int16(CGFloat v) {
     // connection is already gone — common-c drops events when uninitialized.
     _oscController.gyroStickX = 0;
     _oscController.gyroStickY = 0;
-    uint16_t finalGamepadMask = [self getActiveGamepadMask];
     for (VoidController* controller in [_voidControllers allValues]) {
         LiSendMultiControllerEvent(_multiController ? controller.playerIndex : 0, finalGamepadMask,
                                    0, 0, 0, 0, 0, 0, 0);
+        // Also flatten any latched DS4 motion state (host-side gyro-to-stick
+        // keeps integrating the last rotation rate it saw). Dropped by the
+        // host if the pad reported no motion support.
+        LiSendControllerMotionEvent((uint8_t)(_multiController ? controller.playerIndex : 0),
+                                    LI_MOTION_TYPE_GYRO, 0, 0, 0);
     }
     LiSendMultiControllerEvent(0, finalGamepadMask, 0, 0, 0, 0, 0, 0, 0);
+    LiSendControllerMotionEvent(0, LI_MOTION_TYPE_GYRO, 0, 0, 0);
+
+    // The calls above only ENQUEUE packets; common-c's input send thread
+    // transmits them, and LiStopConnection (stopStream runs right after
+    // cleanup returns) destroys the queue with whatever is still in it.
+    // Give the sender a beat to drain before teardown proceeds.
+    usleep(50 * 1000);
 
     [_voidControllers removeAllObjects];
     
