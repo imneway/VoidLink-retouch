@@ -115,8 +115,17 @@ CFStringRef __currentColorSpace;
     id<ConnectionCallbacks> _callbacks;
     id<MTLCommandQueue> _commandQueue;
     id<MTLLibrary> _shaderLibrary;
-    id<MTLRenderPipelineState> _videoPipelineState[MAX_VIDEO_PLANES];
-    MTLPixelFormat _videoPipelinePixelFormat[MAX_VIDEO_PLANES];
+    // Indexed directly by plane count (1..MAX_VIDEO_PLANES), so the arrays
+    // need MAX_VIDEO_PLANES + 1 slots — planes == 3 (triplanar) would write
+    // one past a [MAX_VIDEO_PLANES] array.
+    id<MTLRenderPipelineState> _videoPipelineState[MAX_VIDEO_PLANES + 1];
+    MTLPixelFormat _videoPipelinePixelFormat[MAX_VIDEO_PLANES + 1];
+    // Input bit depth is baked into the fragment shader but was not part of
+    // the cache key: an 8↔10-bit input switch that doesn't change the layer
+    // pixel format would silently reuse the wrong shader. Also lets the
+    // prewarmed pipeline be safely re-validated against the real first frame.
+    BOOL _videoPipelineIs10Bit[MAX_VIDEO_PLANES + 1];
+    id<MTLLibrary> _defaultLibrary;
     MTLRenderPassDescriptor *_renderPassDescriptor;
     CVMetalTextureCacheRef _textureCache;
 
@@ -175,6 +184,20 @@ CFStringRef __currentColorSpace;
         if (@available(iOS 14.0, *)) _nonFullHdrColorSpace = kCGColorSpaceITUR_2100_PQ;
         else _nonFullHdrColorSpace =  kCGColorSpaceITUR_2020;
         _nonFullHdrPixelFormat = MTLPixelFormatRGBA16Float;
+
+        // Prewarm the expected pipeline while the connection handshake runs
+        // (seconds of idle time) so the first frame doesn't stall on shader
+        // library load + PSO compilation. Prediction: biplanar YUV into the
+        // initial layer format; 10-bit input goes with HDR. If the stream
+        // turns out different, the first frame just builds the right one
+        // lazily — exactly the pre-prewarm behavior.
+        BOOL expected10Bit = _hdrEnabled;
+        dispatch_async(_sq, ^{
+            [self ensureVideoPipelineForPlanes:2
+                             framebufferFormat:drawablePixelFormat
+                                  is10BitInput:expected10Bit
+                                isPackedFormat:NO];
+        });
     }
     return self;
 }
@@ -193,7 +216,7 @@ CFStringRef __currentColorSpace;
     }
     
     // Clean up pipeline states
-    for (int i = 0; i < MAX_VIDEO_PLANES; i++) {
+    for (int i = 0; i <= MAX_VIDEO_PLANES; i++) {
         if (_videoPipelineState[i]) {
             _videoPipelineState[i] = nil;
         }
@@ -563,6 +586,71 @@ CFStringRef __currentColorSpace;
     return YES;
 }
 
+// Build (or reuse) the render pipeline for a plane-count / framebuffer-format /
+// input-bit-depth combination. Shared by the first-frame path and the init-time
+// prewarm; @synchronized because the prewarm runs off the render thread.
+- (BOOL)ensureVideoPipelineForPlanes:(size_t)planes
+                   framebufferFormat:(MTLPixelFormat)framebufferPixelFormat
+                        is10BitInput:(BOOL)is10BitInput
+                      isPackedFormat:(BOOL)isPackedFormat {
+    if (planes < 1 || planes > MAX_VIDEO_PLANES) {
+        return NO;
+    }
+    @synchronized (self) {
+        if (_videoPipelineState[planes] &&
+            _videoPipelinePixelFormat[planes] == framebufferPixelFormat &&
+            _videoPipelineIs10Bit[planes] == is10BitInput) {
+            return YES;
+        }
+        if (_videoPipelineState[planes]) {
+            Log(LOG_I, @"Recreating pipeline state for %zu planes due to format change: fb %lu -> %lu, 10bit %d -> %d",
+                planes, (unsigned long)_videoPipelinePixelFormat[planes], (unsigned long)framebufferPixelFormat,
+                _videoPipelineIs10Bit[planes], is10BitInput);
+        }
+
+        if (!_defaultLibrary) {
+            _defaultLibrary = [_device newDefaultLibrary];
+        }
+        id<MTLLibrary> defaultLibrary = _defaultLibrary;
+
+        NSString *fragmentShaderName;
+        if (isPackedFormat) {
+            // BGRA/ARGB packed formats don't need color space conversion
+            fragmentShaderName = @"ps_draw_bgra";
+        } else if (planes == 2) {
+            fragmentShaderName = is10BitInput ? @"ps_draw_biplanar_10bit" : @"ps_draw_biplanar_8bit";
+        } else {
+            fragmentShaderName = is10BitInput ? @"ps_draw_triplanar_10bit" : @"ps_draw_triplanar_8bit";
+        }
+
+        Log(LOG_I, @"Creating Metal pipeline state: planes %zu, 10bit %d, shader %@, framebuffer format %lu",
+            planes, is10BitInput, fragmentShaderName, (unsigned long)framebufferPixelFormat);
+
+        MTLRenderPipelineDescriptor *pipelineDesc = [MTLRenderPipelineDescriptor new];
+        pipelineDesc.colorAttachments[0].pixelFormat = framebufferPixelFormat;
+        pipelineDesc.vertexBuffers[0].mutability = MTLMutabilityImmutable;
+        pipelineDesc.vertexFunction = [defaultLibrary newFunctionWithName:@"vs_draw"];
+        if (framebufferPixelFormat == MTLPixelFormatRGBA16Float) {
+            // 4:2:0 or 4:4:4 YUV -> BT.2020 RGB -> linear float
+            pipelineDesc.fragmentFunction = [defaultLibrary newFunctionWithName:@"yuvToLinear"];
+        } else {
+            // 4:2:0 or 4:4:4 YUV -> BT.2020 RGB
+            pipelineDesc.fragmentFunction = [defaultLibrary newFunctionWithName:fragmentShaderName];
+        }
+
+        NSError *error = nil;
+        _videoPipelineState[planes] = [_device newRenderPipelineStateWithDescriptor:pipelineDesc error:&error];
+        if (!_videoPipelineState[planes]) {
+            Log(LOG_E, @"Failed to create video pipeline state: %@", error);
+            return NO;
+        }
+
+        _videoPipelinePixelFormat[planes] = framebufferPixelFormat;
+        _videoPipelineIs10Bit[planes] = is10BitInput;
+        return YES;
+    }
+}
+
 - (BOOL)renderFrame:(Frame *)frame toLayer:(CAMetalLayer *)layer {
     @autoreleasepool {
         if (self.isStopping) {
@@ -603,11 +691,13 @@ CFStringRef __currentColorSpace;
         if (layerDidChange && frame.frameNumber > 1) {
             Log(LOG_I, @"Metal frame changed layer's colorspace and/or pixel format");
             // Invalidate all pipeline states since pixel format affects all of them
-            for (int i = 0; i < MAX_VIDEO_PLANES; i++) {
-                if (_videoPipelineState[i]) {
-                    _videoPipelineState[i] = nil;
+            @synchronized (self) {
+                for (int i = 0; i <= MAX_VIDEO_PLANES; i++) {
+                    if (_videoPipelineState[i]) {
+                        _videoPipelineState[i] = nil;
+                    }
+                    _videoPipelinePixelFormat[i] = MTLPixelFormatInvalid;
                 }
-                _videoPipelinePixelFormat[i] = MTLPixelFormatInvalid;
             }
         }
 
@@ -621,66 +711,20 @@ CFStringRef __currentColorSpace;
         // Get the framebuffer pixel format for pipeline creation
         MTLPixelFormat framebufferPixelFormat = drawable.texture.pixelFormat;
 
-        // Check if we need to recreate pipeline state due to pixel format change
-        if (!_videoPipelineState[planes] || _videoPipelinePixelFormat[planes] != framebufferPixelFormat) {
-            if (_videoPipelineState[planes]) {
-                Log(LOG_I, @"Recreating pipeline state for %zu planes due to pixel format change: %lu -> %lu",
-                    planes, (unsigned long)_videoPipelinePixelFormat[planes], (unsigned long)framebufferPixelFormat);
-            }
-            MTLRenderPipelineDescriptor *pipelineDesc = [MTLRenderPipelineDescriptor new];
-            id<MTLLibrary> defaultLibrary = [_device newDefaultLibrary];
+        // Determine if this is 10-bit based on the input CVPixelBuffer format, not the output framebuffer format
+        BOOL is10BitInput = (pixelFormatType == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange ||
+                             pixelFormatType == kCVPixelFormatType_444YpCbCr10BiPlanarFullRange ||
+                             pixelFormatType == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ||
+                             pixelFormatType == kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange);
 
-            // RGB shaders
-            id<MTLFunction> vertexVsDraw = [defaultLibrary newFunctionWithName:@"vs_draw"];
-
-            // linear shaders
-            id<MTLFunction> yuvToLinear = [defaultLibrary newFunctionWithName:@"yuvToLinear"];
-
-            // Determine if this is 10-bit based on the input CVPixelBuffer format, not the output framebuffer format
-            // pixelFormatType is already declared above
-            BOOL is10BitInput = (pixelFormatType == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange ||
-                                 pixelFormatType == kCVPixelFormatType_444YpCbCr10BiPlanarFullRange ||
-                                 pixelFormatType == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ||
-                                 pixelFormatType == kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange);
-
-            NSString *fragmentShaderName;
-            if (isPackedFormat) {
-                // BGRA/ARGB packed formats don't need color space conversion
-                fragmentShaderName = @"ps_draw_bgra";
-            } else if (planes == 2) {
-                fragmentShaderName = is10BitInput ? @"ps_draw_biplanar_10bit" : @"ps_draw_biplanar_8bit";
-            } else {
-                fragmentShaderName = is10BitInput ? @"ps_draw_triplanar_10bit" : @"ps_draw_triplanar_8bit";
-            }
-
-            Log(LOG_I, @"DEBUG: CVPixelBuffer format: 0x%X, planes: %zu, is10BitInput: %d, shader: %@, framebuffer format: %lu",
-                pixelFormatType, planes, is10BitInput, fragmentShaderName, (unsigned long)framebufferPixelFormat);
-
-            pipelineDesc.colorAttachments[0].pixelFormat = framebufferPixelFormat;
-            pipelineDesc.vertexBuffers[0].mutability = MTLMutabilityImmutable;
-            
-            Log(LOG_I, @"Creating Metal pipeline state for %zu planes with pixel format %lu",
-                planes, (unsigned long)framebufferPixelFormat);
-
-            if (framebufferPixelFormat == MTLPixelFormatRGBA16Float) {
-                // 4:2:0 or 4:4:4 YUV -> BT.2020 RGB -> linear float
-                pipelineDesc.vertexFunction = vertexVsDraw;
-                pipelineDesc.fragmentFunction = yuvToLinear;
-            } else {
-                // 4:2:0 or 4:4:4 YUV -> BT.2020 RGB
-                pipelineDesc.vertexFunction = vertexVsDraw;
-                pipelineDesc.fragmentFunction = [defaultLibrary newFunctionWithName:fragmentShaderName];
-            }
-
-            NSError *error = nil;
-            _videoPipelineState[planes] = [_device newRenderPipelineStateWithDescriptor:pipelineDesc error:&error];
-            if (!_videoPipelineState[planes]) {
-                Log(LOG_E, @"Failed to create video pipeline state: %@", error);
-                return NO;
-            }
-
-            // Store the pixel format this pipeline state was created for
-            _videoPipelinePixelFormat[planes] = framebufferPixelFormat;
+        // Usually a no-op: the pipeline for this combination was prewarmed
+        // during init, so the first frame doesn't stall on shader-library
+        // load + PSO compilation.
+        if (![self ensureVideoPipelineForPlanes:planes
+                              framebufferFormat:framebufferPixelFormat
+                                   is10BitInput:is10BitInput
+                                 isPackedFormat:isPackedFormat]) {
+            return NO;
         }
 
         // Per-frame textures are held locally and handed to the command
