@@ -176,6 +176,13 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     UIButton *_oscToggleButton;
     UIButton *_rotationLockToggleButton;
     UIButton *_gyroToggleButton;
+    // Opaque black sheet behind the Metal video view. The Metal view is
+    // shifted (snap-to-top / keyboard lift), and whatever it uncovers is
+    // self.view's theme background — this keeps those regions letterbox-black
+    // like the AVSampleBuffer path, where a full-screen video surface always
+    // covered the back. Hidden until streaming is configured so the themed
+    // loading screen keeps its look.
+    UIView *_metalBackdropView;
 #else
     UITapGestureRecognizer *_menuTapGestureRecognizer;
     UITapGestureRecognizer *_menuDoubleTapGestureRecognizer;
@@ -666,6 +673,12 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
     if (self->_streamView && self->_streamView.superview) {
         [self.view sendSubviewToBack:self->_streamView];
     }
+    // Black backdrop goes bottom-most; streaming is configured now, so it can
+    // take over from the themed loading background.
+    if (_metalBackdropView && _metalBackdropView.superview) {
+        [self.view sendSubviewToBack:_metalBackdropView];
+        _metalBackdropView.hidden = NO;
+    }
     // ImGui view should be on top for debug graphs
     if (self.imguiView && self.imguiView.mtkView.superview) {
         [self.view bringSubviewToFront:self.imguiView.mtkView];
@@ -690,28 +703,20 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
         f.origin.y = 0;
         _streamView.frame = f;
         _streamView.originalFrame = f;
-        // Restore Metal view
+        // Restore Metal view (currentSnapOffset is 0 when snap is off)
         [_streamView liftMetalVideoViewIfNeeded:0];
-        // Hide button if not enabled
-        if (_snapRatioButton) _snapRatioButton.hidden = YES;
-        if (_oscToggleButton) _oscToggleButton.hidden = YES;
-        if (_rotationLockToggleButton) _rotationLockToggleButton.hidden = YES;
-        if (_gyroToggleButton) _gyroToggleButton.hidden = YES;
+        // Re-evaluate button visibility/layout (ratio button hides, the
+        // OSC/ROT/GYRO toggles stay — they are not snap-specific)
+        [self updateSnapRatioButton];
         return;
     }
 
-    CGFloat viewWidth = self.view.bounds.size.width;
-    CGFloat viewHeight = self.view.bounds.size.height;
-    // target aspect: 0 -> 16:9, 1 -> Full Screen (use actual stream aspect)
-    CGFloat targetAspect = (_settings.snapScreenRatioMode.integerValue == 0) ? (16.0f/9.0f) : ((CGFloat)_streamConfig.width / (CGFloat)_streamConfig.height);
-    if (targetAspect <= 0.0f) targetAspect = 16.0f/9.0f;
-    CGFloat videoHeight = viewWidth / targetAspect; // iPad: 按宽等比
-    CGFloat topBlackBar = (viewHeight - videoHeight) / 2.0f;
-    if (topBlackBar < 0) topBlackBar = 0;
-    // Portrait: use half of the offset (not full top-align)
-    if (viewHeight > viewWidth) {
-        topBlackBar = topBlackBar * 0.5f;
-    }
+    // Single source of truth for the offset — the same formula
+    // liftMetalVideoViewIfNeeded uses as its base, so StreamView and the
+    // Metal video view always shift by the exact same amount. (Passing the
+    // offset into liftMetalVideoViewIfNeeded would double-apply it: its
+    // parameter is the EXTRA lift on top of the snap base, e.g. keyboard.)
+    CGFloat topBlackBar = [_streamView currentSnapOffset];
 
     // Move the entire StreamView up
     CGRect f = self.view.bounds;
@@ -719,8 +724,8 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
     _streamView.frame = f;
     _streamView.originalFrame = f; // so keyboard lift restores correctly
 
-    // Move Metal video view by the same amount (if applicable)
-    [_streamView liftMetalVideoViewIfNeeded:topBlackBar];
+    // Metal view picks up the snap base internally; extra lift is 0 here
+    [_streamView liftMetalVideoViewIfNeeded:0];
 
     // Show/update ratio button
     [self updateSnapRatioButton];
@@ -852,17 +857,22 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     BOOL gyroForceOn = VoidGyroToggleEnabled();
     [_gyroToggleButton setTitle:(gyroForceOn ? @"GYRO ON" : @"GYRO OFF") forState:UIControlStateNormal];
 
-    // Hide all bottom-right stream toggles if snap screen is not enabled.
-    _snapRatioButton.hidden = !_settings.snapScreenToTop;
-    _oscToggleButton.hidden = !_settings.snapScreenToTop;
-    _rotationLockToggleButton.hidden = !_settings.snapScreenToTop;
-    _gyroToggleButton.hidden = !_settings.snapScreenToTop;
+    // The ratio button is snap-specific (it picks the snap target aspect),
+    // so it hides when snap is off. The OSC/ROT/GYRO toggles are general
+    // stream controls and stay visible — they used to be tied to the snap
+    // switch, which silently removed them when the user disabled snap.
+    // The whole cluster remains iPad-only, matching the snap feature.
+    BOOL isPad = [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad;
+    _snapRatioButton.hidden = !isPad || !_settings.snapScreenToTop;
+    _oscToggleButton.hidden = !isPad;
+    _rotationLockToggleButton.hidden = !isPad;
+    _gyroToggleButton.hidden = !isPad;
 
-    if (_snapRatioButton.hidden) return;
+    if (!isPad) return;
 
     // Layout all buttons at bottom-right. Each gets a fixed width sized
     // to its widest possible title so toggling text never shifts neighbours.
-    // Order, right -> left: snap ratio, gyro, rotation lock, osc.
+    // Order, right -> left: snap ratio (when visible), gyro, rotation lock, osc.
     CGFloat snapW = VoidFixedToggleWidth(_snapRatioButton, @[@"16:9", @"FULL"]);
     CGFloat oscW  = VoidFixedToggleWidth(_oscToggleButton,  @[@"OSC ON", @"OSC OFF"]);
     CGFloat rotationW = VoidFixedToggleWidth(_rotationLockToggleButton, @[@"ROT LOCK", @"ROT FREE"]);
@@ -872,10 +882,14 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     CGFloat baseY = self.view.bounds.size.height - 12;
     CGFloat gap = 8;
 
-    CGFloat snapX = self.view.bounds.size.width - 24 - snapW;
-    _snapRatioButton.frame = CGRectMake(snapX, baseY - btnH, snapW, btnH);
+    CGFloat rightEdge = self.view.bounds.size.width - 24;
+    if (!_snapRatioButton.hidden) {
+        CGFloat snapX = rightEdge - snapW;
+        _snapRatioButton.frame = CGRectMake(snapX, baseY - btnH, snapW, btnH);
+        rightEdge = snapX - gap;
+    }
 
-    CGFloat gyroX = snapX - gap - gyroW;
+    CGFloat gyroX = rightEdge - gyroW;
     _gyroToggleButton.frame = CGRectMake(gyroX, baseY - btnH, gyroW, btnH);
 
     CGFloat rotationX = gyroX - gap - rotationW;
@@ -2115,8 +2129,16 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
                                                                metricsHandler:self.imguiView.metricsHandler];
         self.metalViewController.view.userInteractionEnabled = NO;
         [self addChildViewController:self.metalViewController];
-        // Insert Metal view at the bottom of the view hierarchy
-        [self.view insertSubview:self.metalViewController.view atIndex:0];
+        if (!_metalBackdropView) {
+            _metalBackdropView = [[UIView alloc] initWithFrame:self.view.bounds];
+            _metalBackdropView.backgroundColor = [UIColor blackColor];
+            _metalBackdropView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            _metalBackdropView.userInteractionEnabled = NO;
+            _metalBackdropView.hidden = YES; // unhidden once streaming is configured
+            [self.view insertSubview:_metalBackdropView atIndex:0];
+        }
+        // Insert Metal view at the bottom of the view hierarchy (above the backdrop)
+        [self.view insertSubview:self.metalViewController.view aboveSubview:_metalBackdropView];
         [self.metalViewController didMoveToParentViewController:self];
     }
 
@@ -2388,6 +2410,10 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
             [self.metalViewController removeFromParentViewController];
             self.metalViewController = nil;
             NSLog(@"Metal renderer stopped and cleaned up.");
+        }
+        if (_metalBackdropView) {
+            [_metalBackdropView removeFromSuperview];
+            _metalBackdropView = nil;
         }
         [[NSNotificationCenter defaultCenter] removeObserver:self];
     }

@@ -127,6 +127,11 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     NSMutableSet* suppressedGestureTouchAddrs;
 }
 
+// Canonical snap-to-top offset. This is the single source of truth shared by
+// applySnapToTopIfNeeded (StreamView shift) and liftMetalVideoViewIfNeeded
+// (Metal view shift) — the two MUST move by the same amount or the video and
+// the touch/OSC layer drift apart. Mirrors the ratio-mode selection (16:9 vs
+// actual stream aspect) and the portrait halving.
 - (CGFloat)currentSnapOffset {
     DataManager* dm = [[DataManager alloc] init];
     TemporarySettings* s = [dm getSettings];
@@ -135,14 +140,19 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
         return 0.0f;
     }
     if (s.snapScreenToTop) {
-        // 只对“外部黑边”（设备 vs 实际串流宽高比）对齐，避免触点映射偏移
+        // 只对“外部黑边”（设备 vs 目标宽高比）对齐，避免触点映射偏移
         CGFloat viewWidth = self.bounds.size.width;
         CGFloat viewHeight = self.bounds.size.height;
-        CGFloat frameAspect = self->streamAspectRatio; // 实际视频帧宽高比
-        if (frameAspect <= 0.0f) frameAspect = 16.0f/9.0f;
-        CGFloat frameHeight = viewWidth / frameAspect; // iPad：按宽等比
+        // 0: 16:9, 1: Full Screen (actual stream aspect)
+        CGFloat targetAspect = (s.snapScreenRatioMode.integerValue == 0) ? (16.0f/9.0f) : self->streamAspectRatio;
+        if (targetAspect <= 0.0f) targetAspect = 16.0f/9.0f;
+        CGFloat frameHeight = viewWidth / targetAspect; // iPad：按宽等比
         CGFloat topBlackBar = (viewHeight - frameHeight) / 2.0f;
         if (topBlackBar < 0) topBlackBar = 0;
+        // Portrait: use half of the offset (not full top-align)
+        if (viewHeight > viewWidth) {
+            topBlackBar *= 0.5f;
+        }
         return topBlackBar;
     }
     return 0.0f;
