@@ -2925,7 +2925,16 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         if (self->_streamView && self->_streamView.superview) {
             [self.view sendSubviewToBack:self->_streamView];
         }
-        
+        // Video is about to appear: reveal the black backdrop (bottom-most).
+        // The reConfig pass that normally does this ran during viewDidLoad,
+        // BEFORE the Metal view/backdrop existed — without this, the strip
+        // uncovered by the snap shift shows the themed background until the
+        // next reConfig.
+        if (self->_metalBackdropView && self->_metalBackdropView.superview) {
+            [self.view sendSubviewToBack:self->_metalBackdropView];
+            self->_metalBackdropView.hidden = NO;
+        }
+
         [self->_streamView showOnScreenControls];
 
         // Re-apply snap-to-top now that the view hierarchy is final-sized and
