@@ -704,17 +704,54 @@ static inline int16_t clamp_int16(CGFloat v) {
                             //   banking like an airplane (roll) = rotation around the
                             //     axis perpendicular to the screen → .z → roll
                             //
+                            // The rotation mapping relates DEVICE axes to the on-screen
+                            // game world, so the only input that matters is how far the
+                            // UI/video is rotated on the device (interfaceOrientation).
+                            // Gravity and hand posture are irrelevant to rotationRate.
+                            // Query the window scene: windows.firstObject can belong to
+                            // an external display and report a stale orientation.
+                            UIInterfaceOrientation gyroUIOrientation = UIInterfaceOrientationLandscapeRight;
+                            for (UIScene* scene in UIApplication.sharedApplication.connectedScenes) {
+                                if ([scene isKindOfClass:[UIWindowScene class]]) {
+                                    gyroUIOrientation = ((UIWindowScene*)scene).interfaceOrientation;
+                                    break;
+                                }
+                            }
+
                             // The DS4 motion path used .z for yaw (kept for backward
                             // compat with whatever host-side remap it relied on).
-                            // For stick/mouse synthesis we must match the user's
-                            // physical intuition, so we use .x for yaw here.
-                            BOOL landscape = UIApplication.sharedApplication.windows.firstObject.windowScene.interfaceOrientation == 4;
+                            BOOL landscape = gyroUIOrientation == UIInterfaceOrientationLandscapeRight;
                             float ds4_pitch_dps = deviceGyroSample.y * (landscape ? 57.2957795f : -57.2957795f) * self->_gyroSensitivity;
                             float ds4_yaw_dps   = deviceGyroSample.z * 57.2957795f * self->_gyroSensitivity;
                             float ds4_roll_dps  = deviceGyroSample.x * (landscape ? 57.2957795f : -57.2957795f) * self->_gyroSensitivity;
-                            // Stick / Mouse modes use intuition-correct yaw extraction:
-                            float pitch_dps = ds4_pitch_dps;  // up/down tilt unchanged
-                            float yaw_dps   = deviceGyroSample.x * (landscape ? 57.2957795f : -57.2957795f) * self->_gyroSensitivity;
+
+                            // Stick / Mouse modes: express game yaw/pitch in device axes
+                            // per UI orientation. Landscape reads yaw from device x and
+                            // pitch from device y; portrait swaps the axes (the video's
+                            // vertical axis lands on the other device axis). Base signs
+                            // are chosen so both flip toggles OFF give the correct feel
+                            // (the old base had yaw inverted, masked by horizontal flip ON).
+                            const float gyroK = 57.2957795f * self->_gyroSensitivity;
+                            float yaw_dps, pitch_dps;
+                            switch (gyroUIOrientation) {
+                                case UIInterfaceOrientationLandscapeLeft:
+                                    yaw_dps   =  deviceGyroSample.x * gyroK;
+                                    pitch_dps = -deviceGyroSample.y * gyroK;
+                                    break;
+                                case UIInterfaceOrientationPortrait:
+                                    yaw_dps   = -deviceGyroSample.y * gyroK;
+                                    pitch_dps = -deviceGyroSample.x * gyroK;
+                                    break;
+                                case UIInterfaceOrientationPortraitUpsideDown:
+                                    yaw_dps   =  deviceGyroSample.y * gyroK;
+                                    pitch_dps =  deviceGyroSample.x * gyroK;
+                                    break;
+                                case UIInterfaceOrientationLandscapeRight:
+                                default:
+                                    yaw_dps   = -deviceGyroSample.x * gyroK;
+                                    pitch_dps =  deviceGyroSample.y * gyroK;
+                                    break;
+                            }
                             float roll_dps  = deviceGyroSample.z * 57.2957795f * self->_gyroSensitivity;
 
                             switch (self->_mapGyroTo) {
@@ -2561,6 +2598,22 @@ static inline int16_t clamp_int16(CGFloat v) {
         [self cleanupControllerMotion:controller];
         [self cleanupControllerBattery:controller];
     }
+
+    // The host's virtual pad latches the last stick values it received; with
+    // the host-side deadzone at 0, any residual (gyro tail, mid-drag rspad)
+    // becomes endless character drift after the session. Zero everything now:
+    // timers are already stopped so nothing can re-send, and the input stream
+    // is still up (stopStream runs after cleanup returns). Harmless if the
+    // connection is already gone — common-c drops events when uninitialized.
+    _oscController.gyroStickX = 0;
+    _oscController.gyroStickY = 0;
+    uint16_t finalGamepadMask = [self getActiveGamepadMask];
+    for (VoidController* controller in [_voidControllers allValues]) {
+        LiSendMultiControllerEvent(_multiController ? controller.playerIndex : 0, finalGamepadMask,
+                                   0, 0, 0, 0, 0, 0, 0);
+    }
+    LiSendMultiControllerEvent(0, finalGamepadMask, 0, 0, 0, 0, 0, 0, 0);
+
     [_voidControllers removeAllObjects];
     
     #if !TARGET_OS_TV
