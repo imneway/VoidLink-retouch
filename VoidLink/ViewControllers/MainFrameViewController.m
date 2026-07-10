@@ -85,6 +85,10 @@
     UIView *_autoEnterToast;
     UILabel *_autoEnterLabel;
     UIButton *_autoEnterCancelButton;
+    // Opaque full-screen cover (on the nav controller's view, so it hides the
+    // nav bar too) shown while an auto-enter is pending/running, so the user
+    // goes launch screen → loading → stream without the hosts UI flashing by.
+    UIView *_autoEnterCoverView;
     TemporaryHost *_autoEnterTargetHost;
     NSString *_autoEnterTargetHostName;
     BOOL _autoEnterActive;
@@ -1254,6 +1258,44 @@ static NSMutableSet* hostList;
 
 // MARK: - Auto Enter Desktop
 
+- (void)showAutoEnterCover {
+    if (_autoEnterCoverView != nil) return;
+
+    UIView *host = self.navigationController.view ?: self.view;
+    UIView *cover = [[UIView alloc] initWithFrame:host.bounds];
+    cover.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    cover.backgroundColor = [ThemeManager appBackgroundColor];
+
+    UIActivityIndicatorView *spinner;
+    if (@available(iOS 13.0, *)) {
+        spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
+    } else {
+        spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhiteLarge];
+    }
+    spinner.color = [ThemeManager textColor];
+    spinner.center = CGPointMake(CGRectGetMidX(cover.bounds), CGRectGetMidY(cover.bounds));
+    spinner.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin
+                             | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+    [spinner startAnimating];
+    [cover addSubview:spinner];
+
+    [host addSubview:cover];
+    _autoEnterCoverView = cover;
+
+    // The status toast (with its Cancel button) must stay reachable above
+    // the cover; it normally lives on self.view, which the cover obscures.
+    if (_autoEnterToast != nil && _autoEnterToast.superview != cover) {
+        [self hideAutoEnterToast];
+        [self showAutoEnterToast];
+        [self updateAutoEnterLabel];
+    }
+}
+
+- (void)hideAutoEnterCover {
+    [_autoEnterCoverView removeFromSuperview];
+    _autoEnterCoverView = nil;
+}
+
 - (void)showAutoEnterToast {
     if (_autoEnterToast != nil) return;
 
@@ -1280,10 +1322,13 @@ static NSMutableSet* hostList;
 
     [_autoEnterToast addSubview:_autoEnterLabel];
     [_autoEnterToast addSubview:_autoEnterCancelButton];
-    [self.view addSubview:_autoEnterToast];
+    // When the full-screen cover is up, the toast must live inside it — the
+    // cover sits on the navigation controller's view, above self.view.
+    UIView *toastHost = _autoEnterCoverView ?: self.view;
+    [toastHost addSubview:_autoEnterToast];
 
     UILayoutGuide *guide;
-    if (@available(iOS 11.0, *)) { guide = self.view.safeAreaLayoutGuide; }
+    if (@available(iOS 11.0, *)) { guide = toastHost.safeAreaLayoutGuide; }
 
     [NSLayoutConstraint activateConstraints:@[
         [_autoEnterToast.leadingAnchor constraintEqualToAnchor:guide.leadingAnchor constant:24],
@@ -1317,6 +1362,7 @@ static NSMutableSet* hostList;
     [_autoEnterTimer invalidate];
     _autoEnterTimer = nil;
     [self hideAutoEnterToast];
+    [self hideAutoEnterCover];
     _autoEnterTargetHost = nil;
     _autoEnterTargetHostName = nil;
     _autoEnterProbeInFlight = NO;
@@ -1334,6 +1380,7 @@ static NSMutableSet* hostList;
     [_autoEnterTimer invalidate];
     _autoEnterTimer = nil;
     [self hideAutoEnterToast];
+    [self hideAutoEnterCover];
     _autoEnterTargetHost = nil;
     _autoEnterTargetHostName = nil;
     _autoEnterProbeInFlight = NO;
@@ -1411,7 +1458,16 @@ static NSMutableSet* hostList;
         [self finishAutoEnterBeforeLaunch];
         [self closeSettingViewAnimated:NO];
         [self prepareToStreamApp:app];
-        [self performSegueWithIdentifier:@"createStreamFrame" sender:nil];
+        // Auto-enter pushes WITHOUT the slide animation (mirrors what
+        // prepareForSegue does for the manual "createStreamFrame" segue).
+        // The cover comes down after the push in the same runloop turn, so
+        // no frame of the hosts UI is ever rendered in between.
+        StreamFrameViewController *streamVC = [self.storyboard instantiateViewControllerWithIdentifier:@"streamFrameViewController"];
+        self->streamFrameViewController = streamVC;
+        streamVC.mainFrameViewcontroller = self;
+        streamVC.streamConfig = self->_streamConfig;
+        [self.navigationController pushViewController:streamVC animated:NO];
+        [self hideAutoEnterCover];
     };
 
     if ([_loadingFrame isShown]) {
@@ -1503,8 +1559,8 @@ static NSMutableSet* hostList;
 
 - (void)beginAutoEnterForHostName:(NSString *)hostName {
     NSString *trimmedHostName = [hostName stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (trimmedHostName.length == 0) return;
-    if (self.revealViewController.isStreaming) return;
+    if (trimmedHostName.length == 0) { [self hideAutoEnterCover]; return; }
+    if (self.revealViewController.isStreaming) { [self hideAutoEnterCover]; return; }
 
     if (_autoEnterActive) {
         if (_autoEnterTargetHostName != nil && [_autoEnterTargetHostName caseInsensitiveCompare:trimmedHostName] == NSOrderedSame) {
@@ -1518,6 +1574,7 @@ static NSMutableSet* hostList;
     BOOL triggered = [[NSUserDefaults standardUserDefaults] boolForKey:@"AutoEnterTriggered"];
     BOOL suppressed = [[NSUserDefaults standardUserDefaults] boolForKey:@"AutoEnterSuppressOnce"];
     if (!triggered && suppressed) {
+        [self hideAutoEnterCover];
         return;
     }
     // If explicitly triggered, clear suppression and continue
@@ -1535,6 +1592,7 @@ static NSMutableSet* hostList;
     _autoEnterLaunchInProgress = NO;
     _autoEnterLastProbeTimestamp = 0;
 
+    [self showAutoEnterCover];
     [self showAutoEnterToast];
     [self updateAutoEnterLabel];
     [self advanceAutoEnter];
@@ -2266,6 +2324,11 @@ static NSMutableSet* hostList;
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"AutoEnterTriggered"];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
+    else {
+        // Nothing to auto-enter after all — drop the preemptive cover so the
+        // hosts UI isn't left hidden behind it.
+        [self hideAutoEnterCover];
+    }
 }
 
 
@@ -2280,8 +2343,17 @@ static NSMutableSet* hostList;
 {
     [super viewWillAppear:NO];
 
+    // A pending auto-enter (Shortcut/URL cold launch, or background stream
+    // resume) will kick off shortly after this view settles. Cover the hosts
+    // UI before the first frame renders so the user goes launch screen →
+    // loading → stream with no flash of this page. consumePendingAutoEnter
+    // removes the cover if it decides nothing should launch.
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"AutoEnterTriggered"]) {
+        [self showAutoEnterCover];
+    }
+
     /* this makes background color works*/
-    
+
     if(!_settingsViewExpanded){
         for (UIView *subview in self.view.subviews) {
             [subview removeFromSuperview]; // 暂时移除所有子视图
@@ -2327,6 +2399,9 @@ static NSMutableSet* hostList;
     _autoEnterTimer = nil;
     _autoEnterActive = NO;
     [self hideAutoEnterToast];
+    // The cover lives on the nav controller's view and would otherwise
+    // outlive this page and obscure whatever we navigated to.
+    [self hideAutoEnterCover];
 }
 
 - (void) retrieveSavedHosts {

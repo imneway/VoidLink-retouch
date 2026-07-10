@@ -100,7 +100,7 @@
         <!--Stream Frame View Controller-->
         <scene sceneID="5Eb-q2-vjt">
             <objects>
-                <viewController id="mI3-9F-XwU" customClass="StreamFrameViewController" sceneMemberID="viewController">
+                <viewController storyboardIdentifier="streamFrameViewController" id="mI3-9F-XwU" customClass="StreamFrameViewController" sceneMemberID="viewController">
                     <layoutGuides>
                         <viewControllerLayoutGuide type="top" id="u8d-aX-gHk"/>
                         <viewControllerLayoutGuide type="bottom" id="kcN-yf-dtN"/>
