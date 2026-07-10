@@ -3071,10 +3071,18 @@ import UIKit
     override func willMove(toSuperview newSuperview: UIView?) {
         super.willMove(toSuperview: newSuperview)
         guard newSuperview == nil else { return }
+        // Coasting counts as active input even though the finger is already up:
+        // the aim pad's post-liftoff impulse drain (CADisplayLink, retained by
+        // the run loop) and the trackball momentum timer both keep SENDING
+        // events after this widget is removed — the aim pad's are latched
+        // right-stick values, which the host holds forever if the stream is
+        // torn down right after the last (non-zero) send.
         let hasActiveInput = self.pressed
             || self.motionButtonHeld
             || self.capturedTouches.count > 0
             || self.activePointerIds.count > 0
+            || aimTrackpadDisplayLink != nil
+            || trackballDecelerationTimer != nil
         if hasActiveInput {
             cancelActiveTouchesDueToGestureSuppression()
         }

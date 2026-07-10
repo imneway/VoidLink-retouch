@@ -978,6 +978,12 @@ BOOL isCustomResolution(int resolutionSelected) {
     dummyEventLabel.text = [LocalizationHelper localizedStringForKey:@"Anti-Stutter Keep-Alive"];
     dummyEventLabel.font = [UIFont systemFontOfSize:14];
     self.sendDummyEventSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    // layoutSections re-runs when switching Favorite/All settings modes and a
+    // fresh UISwitch defaults to OFF — saveSettings then persists whatever the
+    // switch shows, silently turning the setting off. Programmatic controls
+    // must reload their persisted state on (re)creation (storyboard-backed
+    // ones keep state across layoutSections; see installGyroInvertControls).
+    self.sendDummyEventSwitch.on = [[[DataManager alloc] init] getSettings].sendDummyEvent;
     UIStackView *dummyEventRow = [self swapButtonRowWithLabel:dummyEventLabel switch:self.sendDummyEventSwitch];
     UIStackView *sendDummyEventStack = [[UIStackView alloc] initWithArrangedSubviews:@[dummyEventRow]];
     sendDummyEventStack.axis = UILayoutConstraintAxisVertical;
