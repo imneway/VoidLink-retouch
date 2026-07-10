@@ -1154,7 +1154,11 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         textField.keyboardType = UIKeyboardTypeASCIICapable;
         textField.autocorrectionType = UITextAutocorrectionTypeNo;
         textField.spellCheckingType = UITextSpellCheckingTypeNo;
-        if(self->selectedWidgetView.minStickOffset > 0) textField.text = [NSString stringWithFormat:@"%d", (int)self->selectedWidgetView.minStickOffset];
+        // Aim pads always prefill the current value — including an explicit 0
+        // (floor disabled). Leaving the field blank means "reset to the type
+        // default" (6% for RSPADALT2), so a 0 that showed as blank would
+        // silently revert to 6% on any unrelated modify.
+        if(self->selectedWidgetView.minStickOffset > 0 || self->selectedWidgetView.hasAimTweak) textField.text = [NSString stringWithFormat:@"%d", (int)self->selectedWidgetView.minStickOffset];
     }];
     
     [alertController addTextFieldWithConfigurationHandler:^(UITextField *textField) {

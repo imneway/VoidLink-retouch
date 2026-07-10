@@ -2115,8 +2115,7 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     [self.view addSubview:_stageLabel];
     [self.view addSubview:_spinner];
     [self.view addSubview:_tipLabel];
-    [self applySnapToTopIfNeeded];
-    
+
     // Create time and battery display
     [self createTimeBatteryDisplay];
 
@@ -2141,6 +2140,14 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         [self.view insertSubview:self.metalViewController.view aboveSubview:_metalBackdropView];
         [self.metalViewController didMoveToParentViewController:self];
     }
+
+    // Snap-to-top must be (re)applied AFTER the Metal view controller exists:
+    // the earlier reConfig pass in this method ran before it was created, so
+    // its liftMetalVideoViewIfNeeded was a no-op — the touch layer was
+    // shifted but the video wasn't until the next reConfig (e.g. toggling
+    // anything in the sidebar), which is exactly the "snap not applied on
+    // entry" symptom.
+    [self applySnapToTopIfNeeded];
 
     _mainFrameViewcontroller.sessionLaunchedWithAbsoluteTouch = _settings.touchMode.intValue == AbsoluteTouch;
 }
@@ -2920,7 +2927,12 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         }
         
         [self->_streamView showOnScreenControls];
-        
+
+        // Re-apply snap-to-top now that the view hierarchy is final-sized and
+        // the Metal view (if any) exists — idempotent, covers any case where
+        // the viewDidLoad-time application ran against pre-layout bounds.
+        [self applySnapToTopIfNeeded];
+
         // 串流连接建立后，应用当前屏幕方向的方向锁定
         [self osc_applyLockForCurrentOrientation];
         
