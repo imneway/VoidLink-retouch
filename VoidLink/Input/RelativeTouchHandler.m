@@ -134,8 +134,15 @@ static const float QUICK_TAP_TIME_INTERVAL = 0.2;
 - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
     
     //check if touch point is spawned on the left or right upper half screen edges, this is the highest priority
-    CGPoint initialPoint = [[touches anyObject] locationInView:streamView];
-    if(initialPoint.y < slideGestureVerticalThreshold && (initialPoint.x < EDGE_TOLERANCE || initialPoint.x > screenWidthWithThreshold)) {
+    UITouch* initialTouch = [touches anyObject];
+    CGPoint initialPoint = [initialTouch locationInView:streamView];
+    BOOL initialTouchIsPencil = NO;
+#if !TARGET_OS_TV
+    // Apple Pencil is exempt from the edge dead zone: the edge slide gestures are
+    // finger-only, so pencil input stays interactive all the way to the screen edge.
+    initialTouchIsPencil = (initialTouch.type == UITouchTypePencil);
+#endif
+    if(!initialTouchIsPencil && initialPoint.y < slideGestureVerticalThreshold && (initialPoint.x < EDGE_TOLERANCE || initialPoint.x > screenWidthWithThreshold)) {
         self->touchPointSpawnedAtUpperScreenEdge = true;
         return;
     }

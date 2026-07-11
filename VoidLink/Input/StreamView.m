@@ -182,6 +182,10 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     // right-edge suppression that never received its matching "end" can't leave OSC
     // input dead until force-quit. Clears the process-wide static too.
     [OnScreenWidgetView forceResetGestureSuppression];
+    // Register as the Apple Pencil passthrough target: OSC widgets forward pencil
+    // touches here untouched, so pencil input always reaches the stream while the
+    // OSC stays finger-only.
+    OnScreenWidgetView.pencilPassthroughTarget = self;
     keyInputField = [[KeyboardInputField alloc] initWithFrame:CGRectZero];
     [keyInputField setKeyboardType:UIKeyboardTypeDefault];
     [keyInputField setAutocorrectionType:UITextAutocorrectionTypeNo];
@@ -1008,6 +1012,21 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 #endif
 
 - (BOOL)shouldIgnoreTouchesForGestureSuppression:(NSSet *)touches consume:(BOOL)consume {
+#if !TARGET_OS_TV
+    // Apple Pencil is exempt from edge-gesture suppression: the edge recognizers
+    // are finger-only, so a pencil touch can never be a slide candidate — don't
+    // let a finger-triggered suppression window eat pencil input.
+    BOOL allPencil = touches.count > 0;
+    for (UITouch *touch in touches) {
+        if (touch.type != UITouchTypePencil) {
+            allPencil = NO;
+            break;
+        }
+    }
+    if (allPencil) {
+        return NO;
+    }
+#endif
     BOOL matched = NO;
     for (UITouch *touch in touches) {
         NSNumber *addr = @((uintptr_t)touch);
@@ -1350,33 +1369,52 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 }
 
 - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
-    [touchHandler touchesCancelled:touches withEvent:event];
-    // iOS cancels (not ends) touches on system interruptions — edge gestures for
-    // Control/Notification Center, incoming calls, 4/5-finger multitasking swipes,
-    // palm rejection — exactly the situations frantic play produces. Without routing
-    // the cancel through the OSC release path, a legacy button whose touch got
-    // cancelled kept its flag set forever ("stuck pressed"), and the touch's entry
-    // in touchAddrsCapturedByOnScreenControls leaked — UIKit recycles UITouch
-    // objects, so a later unrelated touch with the same address would be silently
-    // swallowed by the native/relative touch handlers. handleTouchUpEvent is the
-    // release path: it only acts on touches it owns and also clears the captured-
-    // address entry, so calling it here is safe in every touch mode.
-    [self->onScreenControls handleTouchUpEvent:touches];
+    NSSet* nonStylusTouches = touches;
 #if !TARGET_OS_TV
-    if (settings.touchMode.intValue == NativeTouchOnly) return; //This is a native touch oriented fork, in pure native touch mode, this call back method deals with native touch only.
-    if (@available(iOS 13.4, *)){ //now only pencil events are restricted
-        for (UITouch* touch in touches) {
-            if (touch.type == UITouchTypePencil) {
-                if ([self sendStylusEvent:touch]) return;
+    // Send the pen CANCEL for stylus-handled pencil touches BEFORE the generic
+    // handlers, and keep those touches away from touchHandler entirely: on a
+    // pen-capable host the pencil's began/moved/ended all early-return through
+    // sendStylusEvent, so the native touch handlers never allocated a pointer id
+    // for it — letting the cancel fall through would make them emit an UP for
+    // pointer id 0 and could release an unrelated active touch.
+    if (settings.touchMode.intValue != NativeTouchOnly) {
+        if (@available(iOS 13.4, *)) {
+            NSMutableSet* filtered = nil;
+            for (UITouch* touch in touches) {
+                if (touch.type == UITouchTypePencil && [self sendStylusEvent:touch]) {
+                    if (filtered == nil) filtered = [touches mutableCopy];
+                    [filtered removeObject:touch];
+                }
             }
+            if (filtered != nil) nonStylusTouches = filtered;
         }
     }
 #endif
-    if ([self shouldIgnoreTouchesForGestureSuppression:touches consume:YES]) {
+    if (nonStylusTouches.count > 0) {
+        [touchHandler touchesCancelled:nonStylusTouches withEvent:event];
+        // iOS cancels (not ends) touches on system interruptions — edge gestures for
+        // Control/Notification Center, incoming calls, 4/5-finger multitasking swipes,
+        // palm rejection — exactly the situations frantic play produces. Without routing
+        // the cancel through the OSC release path, a legacy button whose touch got
+        // cancelled kept its flag set forever ("stuck pressed"), and the touch's entry
+        // in touchAddrsCapturedByOnScreenControls leaked — UIKit recycles UITouch
+        // objects, so a later unrelated touch with the same address would be silently
+        // swallowed by the native/relative touch handlers. handleTouchUpEvent is the
+        // release path: it only acts on touches it owns and also clears the captured-
+        // address entry, so calling it here is safe in every touch mode.
+        [self->onScreenControls handleTouchUpEvent:nonStylusTouches];
+    }
+#if !TARGET_OS_TV
+    if (settings.touchMode.intValue == NativeTouchOnly) return; //This is a native touch oriented fork, in pure native touch mode, this call back method deals with native touch only.
+#endif
+    if (nonStylusTouches.count == 0) {
+        return;
+    }
+    if ([self shouldIgnoreTouchesForGestureSuppression:nonStylusTouches consume:YES]) {
         return;
     }
     [self handleMouseButtonEvent:BUTTON_ACTION_RELEASE
-                      forTouches:touches
+                      forTouches:nonStylusTouches
                        withEvent:event];
 }
 

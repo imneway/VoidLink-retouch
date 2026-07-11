@@ -162,8 +162,9 @@
     [activePointerIds addObject:pointerIdObj];
     
     //check if touch point is spawned on the left or right upper half screen edges, event to remote PC. this is for better handling in-stream slide gesture
+    //Apple Pencil is exempt: the edge slide gestures are finger-only, so pencil input stays interactive all the way to the screen edge
     CGPoint initialPoint = [touch locationInView:self->streamView];
-    if(initialPoint.y < slideGestureVerticalThreshold && (initialPoint.x < EDGE_TOLERANCE || initialPoint.x > screenWidthWithThreshold)) {
+    if(touch.type != UITouchTypePencil && initialPoint.y < slideGestureVerticalThreshold && (initialPoint.x < EDGE_TOLERANCE || initialPoint.x > screenWidthWithThreshold)) {
         [blacklistedTouches addObject:touchAddrObj];
     }
 }

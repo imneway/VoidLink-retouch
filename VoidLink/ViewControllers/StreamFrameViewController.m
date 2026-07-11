@@ -526,6 +526,9 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
     _slideToSettingsRecognizer.normalizedThresholdDistance = _settings.slideToSettingsDistance.floatValue;
     _slideToSettingsRecognizer.delaysTouchesBegan = NO;
     _slideToSettingsRecognizer.delaysTouchesEnded = NO;
+    // Finger-only: Apple Pencil must stay fully interactive across the whole
+    // screen, including the edge zones — it never opens the settings sidebar.
+    _slideToSettingsRecognizer.allowedTouchTypes = @[@(UITouchTypeDirect)];
     [self.view addGestureRecognizer:_slideToSettingsRecognizer];
     // Right-side edge is freed; Command Manager is opened by on-screen widget "CMD"
 
@@ -537,6 +540,10 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
     _rightEdgeToggleOscRecognizer.delaysTouchesBegan = NO;
     _rightEdgeToggleOscRecognizer.delaysTouchesEnded = NO;
     _rightEdgeToggleOscRecognizer.cancelsTouchesInView = NO;
+    // Finger-only: pencil never toggles the OSC, and — since shouldReceiveTouch is
+    // what arms the right-edge gesture suppression — pencil touches near the right
+    // edge can no longer freeze OSC/stream input either.
+    _rightEdgeToggleOscRecognizer.allowedTouchTypes = @[@(UITouchTypeDirect)];
     _rightEdgeToggleOscRecognizer.delegate = self;
     _rightEdgeToggleOscRecognizer.edgeDelegate = self;
     // Right edge small gesture is standalone now; no dependency on Command Manager gesture

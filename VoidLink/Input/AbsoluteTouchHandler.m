@@ -63,8 +63,11 @@
 
 - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
     
-    CGPoint initialPoint = [[touches anyObject] locationInView:streamView];
-    if(initialPoint.y < slideGestureVerticalThreshold && (initialPoint.x < EDGE_TOLERANCE || initialPoint.x > screenWidthWithThreshold)) {
+    UITouch* initialTouch = [touches anyObject];
+    CGPoint initialPoint = [initialTouch locationInView:streamView];
+    // Apple Pencil is exempt from the edge dead zone: the edge slide gestures are
+    // finger-only, so pencil input stays interactive all the way to the screen edge.
+    if(initialTouch.type != UITouchTypePencil && initialPoint.y < slideGestureVerticalThreshold && (initialPoint.x < EDGE_TOLERANCE || initialPoint.x > screenWidthWithThreshold)) {
         self->touchPointSpawnedAtUpperScreenEdge = true;
         return; // we're done here. this touch event will not be sent to the remote PC.
     }

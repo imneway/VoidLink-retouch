@@ -1593,7 +1593,14 @@ static float L3_Y;
     BOOL updated = false;
     BOOL stickTouch = false;
     for (UITouch* touch in touches) {
-        
+#if !TARGET_OS_TV
+        // Apple Pencil never interacts with the legacy OSC: no button/stick
+        // capture and no dead-zone swallow. Pencil input always falls through
+        // to the stream (the OSC stays finger-only).
+        if (touch.type == UITouchTypePencil) {
+            continue;
+        }
+#endif
         bool touchEventCapturedByOsc = false; // this flag will be reset for every touch event in the for-loop
         
         CGPoint touchLocation = [touch locationInView:_view];

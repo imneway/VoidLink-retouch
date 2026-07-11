@@ -60,6 +60,47 @@ import UIKit
         }
     }
 
+    // MARK: - Apple Pencil passthrough
+    // Pencil input must ignore every OSC widget and reach the stream instead
+    // (finger-only OSC, like the system-wide "draw with Apple Pencil only" idea).
+    // StreamView registers itself here during setup; at runtime each widget
+    // forwards pencil touches to it untouched instead of handling them itself.
+    // Edit mode is exempt so widgets can still be selected/dragged with a pencil.
+    @objc static weak var pencilPassthroughTarget: UIView?
+    private var passthroughPencilTouches = Set<UITouch>()
+
+    // Splits pencil touches out of `touches`, forwards them to the passthrough
+    // target for the given phase, and returns the remaining (finger) touches the
+    // widget should keep handling. The began-time decision sticks for the touch's
+    // whole lifetime, even if edit mode flips mid-gesture.
+    private func extractPencilPassthroughTouches(_ touches: Set<UITouch>, with event: UIEvent?, phase: UITouch.Phase) -> Set<UITouch> {
+        let forwarded: Set<UITouch>
+        if phase == .began {
+            guard !OnScreenWidgetView.editMode, OnScreenWidgetView.pencilPassthroughTarget != nil else { return touches }
+            forwarded = touches.filter { $0.type == .pencil }
+            passthroughPencilTouches.formUnion(forwarded)
+        } else {
+            guard !passthroughPencilTouches.isEmpty else { return touches }
+            forwarded = touches.filter { passthroughPencilTouches.contains($0) }
+            if phase == .ended || phase == .cancelled {
+                passthroughPencilTouches.subtract(forwarded)
+            }
+        }
+        guard !forwarded.isEmpty else { return touches }
+        // If the target got torn down mid-touch, still keep the tracked pencil
+        // touches away from the widget logic — it never owned them.
+        if let target = OnScreenWidgetView.pencilPassthroughTarget {
+            switch phase {
+            case .began: target.touchesBegan(forwarded, with: event)
+            case .moved: target.touchesMoved(forwarded, with: event)
+            case .ended: target.touchesEnded(forwarded, with: event)
+            case .cancelled: target.touchesCancelled(forwarded, with: event)
+            default: break
+            }
+        }
+        return touches.subtracting(forwarded)
+    }
+
     // receiving the OnScreenControls instance from delegate
     @objc func getOnScreenControlsInstance(_ sender: Any) {
         if let controls = sender as? OnScreenControls {
@@ -1169,6 +1210,9 @@ import UIKit
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleFullscreenDoubleTap(_:)))
         tap.numberOfTapsRequired = 2
         tap.numberOfTouchesRequired = 1
+        // Finger-only: a pencil double-tap on the stream must not open the widget
+        // editor, and (cancelsTouchesInView) must never cancel in-flight pencil input.
+        tap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
         tap.cancelsTouchesInView = true
         tap.delaysTouchesBegan = false
         tap.delaysTouchesEnded = false
@@ -2656,6 +2700,10 @@ import UIKit
 //==============================================================================
     // Touch event handling
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Pencil passthrough runs before every other gate (including gesture
+        // suppression): pencil input always belongs to the stream, never the widget.
+        let touches = extractPencilPassthroughTouches(touches, with: event, phase: .began)
+        if touches.isEmpty { return }
         if OnScreenWidgetView.gesturesSuppressed {
             OnScreenWidgetView.logSuppressedTouchDrop()
             super.touchesBegan(touches, with: event)
@@ -2732,7 +2780,10 @@ import UIKit
             }
         }
                 
-        let allCapturedTouchesCount = event?.allTouches?.filter({ $0.view == self }).count // this will counts all valid touches within the self widgetView, and excludes touches in other widgetViews
+        // Counts all valid touches within the self widgetView, excluding touches in other
+        // widgetViews AND forwarded pencil-passthrough touches (their .view still points at
+        // this widget even though the stream owns them — counting them would fake a 2nd finger).
+        let allCapturedTouchesCount = event?.allTouches?.filter({ $0.view == self && !passthroughPencilTouches.contains($0) }).count
         if allCapturedTouchesCount == 2 {
             self.twoTouchesDetected = true
             if self.isAltStickPad {
@@ -2935,6 +2986,8 @@ import UIKit
     }
     
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let touches = extractPencilPassthroughTouches(touches, with: event, phase: .moved)
+        if touches.isEmpty { return }
         if OnScreenWidgetView.gesturesSuppressed {
             super.touchesMoved(touches, with: event)
             return
@@ -3057,6 +3110,11 @@ import UIKit
     // input. Routing to the same cleanup path the gesture-suppression observer
     // uses keeps both the local count and the host-side button state balanced.
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Forward passthrough pencil cancels to the stream; if the cancel set was
+        // pencil-only, the widget never owned those touches, so skip the
+        // active-input cleanup (it would wrongly release live finger touches).
+        let touches = extractPencilPassthroughTouches(touches, with: event, phase: .cancelled)
+        if touches.isEmpty { return }
         super.touchesCancelled(touches, with: event)
         cancelActiveTouchesDueToGestureSuppression()
     }
@@ -3212,6 +3270,8 @@ import UIKit
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let touches = extractPencilPassthroughTouches(touches, with: event, phase: .ended)
+        if touches.isEmpty { return }
         if OnScreenWidgetView.gesturesSuppressed {
             super.touchesEnded(touches, with: event)
             return
@@ -3245,7 +3305,10 @@ import UIKit
 
         if self.touchPadString != "MOUSEPAD" {quickDoubleTapDetected = false} //do not reset this flag here in mousePad mode
         
-        let allCapturedTouchesCount = event?.allTouches?.filter({ $0.view == self }).count // this will counts all valid touches within the self widgetView, and excludes touches in other widgetViews
+        // Counts all valid touches within the self widgetView, excluding touches in other
+        // widgetViews AND forwarded pencil-passthrough touches (their .view still points at
+        // this widget even though the stream owns them — counting them would fake a 2nd finger).
+        let allCapturedTouchesCount = event?.allTouches?.filter({ $0.view == self && !passthroughPencilTouches.contains($0) }).count
         
         
         // deal with pure MOUSPAD first
