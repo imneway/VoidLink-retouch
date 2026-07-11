@@ -719,22 +719,52 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
         // sequence right after attach so the existing ordering contract
         // ("resize must be called after relocation") is preserved.
 
-        // Anchor that pad widgets slip "just above" in sublayers. Starts as the stream
-        // view container (subviews[0] of streamFrameTopLayerView), gets promoted to the
-        // fullscreen trigger after that's inserted, and then walks up through each pad
+        // Anchor that pad widgets slip "just above" in sublayers, promoted to the
+        // fullscreen trigger after that's inserted, then walking up through each pad
         // so subsequent pads stack newer-on-top within the pad band.
+        //
+        // The anchor must be the TOPMOST view of the video base band, not simply
+        // subviews[0]. In the AVSB path the video renders INSIDE the stream container
+        // (self / the wrapping _scrollView in AbsoluteTouch), which sits at index 0,
+        // so the two used to coincide. In the Metal path the video is a SIBLING
+        // (metalVideoSiblingView) stacked above the stream container, plus an opaque
+        // backdrop below everything — after the controller's layering pass runs,
+        // subviews[0] is the backdrop, and anchoring pads "just above subviews[0]"
+        // buried them UNDER the opaque video and UNDER the touch layer: pads turned
+        // invisible AND untouchable while button widgets (appended on top in the
+        // loop below) kept working. Seen in the wild as "both sticks gone, every
+        // button fine" whenever a widget reload ran outside reConfig (profile
+        // orientation lock switch at connect, OSC ON toggle, layout tool close).
         UIView* lowerAnchor = self->streamFrameTopLayerView.subviews.firstObject;
+        {
+            NSArray<UIView*>* siblings = self->streamFrameTopLayerView.subviews;
+            UIView* container = (self.superview == self->streamFrameTopLayerView) ? self : self.superview;
+            if (container && container.superview == self->streamFrameTopLayerView) {
+                lowerAnchor = container;
+            }
+            UIView* videoSibling = self.metalVideoSiblingView;
+            if (videoSibling && videoSibling.superview == self->streamFrameTopLayerView) {
+                NSUInteger anchorIdx = lowerAnchor ? [siblings indexOfObjectIdenticalTo:lowerAnchor] : NSNotFound;
+                NSUInteger videoIdx = [siblings indexOfObjectIdenticalTo:videoSibling];
+                if (anchorIdx == NSNotFound || (videoIdx != NSNotFound && videoIdx > anchorIdx)) {
+                    lowerAnchor = videoSibling;
+                }
+            }
+        }
 
-        // Fullscreen trigger — same atIndex:1 contract as before. The stream-rendering
-        // view (self in non-AbsoluteTouch, or the wrapping _scrollView in AbsoluteTouch)
-        // is always at index 0 of streamFrameTopLayerView (see
-        // StreamFrameViewController.configZoomGestureAndAddStreamView). Avoid
-        // `aboveSubview:self`, which raises in AbsoluteTouch mode because self is nested
-        // inside _scrollView and isn't a direct subview of the host.
+        // Fullscreen trigger — slips just above the video base band (it used to be
+        // hard-coded atIndex:1, which relied on the same "video container at index 0"
+        // assumption the anchor comment above describes). Avoid `aboveSubview:self`,
+        // which raises in AbsoluteTouch mode because self is nested inside _scrollView
+        // and isn't a direct subview of the host.
         for (NSUInteger i = 0; i < fullscreenWidgets.count; i++) {
             OnScreenWidgetView* widgetView = fullscreenWidgets[i];
             OnScreenButtonState* buttonState = fullscreenStates[i];
-            [self->streamFrameTopLayerView insertSubview:widgetView atIndex:1];
+            if (lowerAnchor) {
+                [self->streamFrameTopLayerView insertSubview:widgetView aboveSubview:lowerAnchor];
+            } else {
+                [self->streamFrameTopLayerView insertSubview:widgetView atIndex:1];
+            }
             lowerAnchor = widgetView; // next pad slips above the fullscreen trigger
             // Runtime sizing comes from edge constraints in changeAndActivateContraints,
             // so storedCenter doesn't drive geometry here — but pin it to the midpoint

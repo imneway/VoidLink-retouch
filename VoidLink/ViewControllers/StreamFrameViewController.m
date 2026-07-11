@@ -2148,6 +2148,11 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         // Insert Metal view at the bottom of the view hierarchy (above the backdrop)
         [self.view insertSubview:self.metalViewController.view aboveSubview:_metalBackdropView];
         [self.metalViewController didMoveToParentViewController:self];
+        // Tell the widget reload which sibling is the video surface, so the
+        // touchPad band anchors ABOVE it instead of above subviews[0] (which
+        // is the backdrop after the layering pass — pads would otherwise get
+        // buried under the opaque video on any post-layering widget reload).
+        _streamView.metalVideoSiblingView = self.metalViewController.view;
     }
 
     // Snap-to-top must be (re)applied AFTER the Metal view controller exists:
@@ -2422,6 +2427,9 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         _hasLeftStreamPage = YES;
         [self stopSelfHealReconnectLoop];
         if (self.metalViewController) {
+            if (_streamView.metalVideoSiblingView == self.metalViewController.view) {
+                _streamView.metalVideoSiblingView = nil;
+            }
             [self.metalViewController.view removeFromSuperview];
             [self.metalViewController removeFromParentViewController];
             self.metalViewController = nil;

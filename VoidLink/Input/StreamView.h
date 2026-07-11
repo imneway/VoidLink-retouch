@@ -34,6 +34,10 @@
 #endif
 
 @property (assign, nonatomic) UIView* streamFrameTopLayerView;
+// The Metal video view when it renders as a SIBLING of this view on the top
+// layer (nil in the AVSB path, where video renders inside this view). Widget
+// reload anchors the touchPad band ABOVE it — see reloadOnScreenWidgetViews.
+@property (weak, nonatomic) UIView* metalVideoSiblingView;
 @property (assign, nonatomic) CGFloat streamAspectRatio;
 @property (assign, nonatomic) CGRect originalFrame;
 @property (assign, nonatomic) bool widgetToolOpened;
