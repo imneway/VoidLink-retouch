@@ -34,6 +34,20 @@
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     // [super touchesBegan:touches withEvent:event];
+    if (capturedUITouch != nil) {
+        // An edge slide is strictly single-finger. The old code overwrote
+        // capturedUITouch with the newest touch; when the FIRST finger then
+        // lifted, touchesEnded nil'ed the capture without notifying, and the
+        // second finger's lift matched nothing — the recognizer stranded in
+        // Possible with the edge-gesture suppression (begun in
+        // shouldReceiveTouch) never released, eating ALL OSC input for the
+        // rest of the session. Fail the gesture outright instead, which
+        // notifies the edgeDelegate and lifts the suppression immediately.
+        self.state = UIGestureRecognizerStateFailed;
+        [self notifyDelegateWithSuccess:NO];
+        capturedUITouch = nil;
+        return;
+    }
     UITouch *touch = [touches anyObject];
     capturedUITouch = touch;
     startPointX = [capturedUITouch locationInView:self.view].x;
@@ -62,7 +76,19 @@
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     // [super touchesEnded:touches withEvent:event];
-    
+
+    if (capturedUITouch == nil) {
+        // Sequence already finished (failed on a multi-touch join, or an
+        // unrelated touch is ending). Nothing to evaluate, and crucially do
+        // NOT touch state here.
+        return;
+    }
+    if (![touches containsObject:capturedUITouch]) {
+        // Some other touch ended while our candidate is still down; keep
+        // tracking the candidate. The old unconditional `capturedUITouch =
+        // nil` below is what orphaned the state machine.
+        return;
+    }
     if([touches containsObject:capturedUITouch]){
         CGFloat _endPointX = [capturedUITouch locationInView:self.view].x;
         CGFloat screenWidthInPoints = self.view.frame.size.width;

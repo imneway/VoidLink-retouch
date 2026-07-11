@@ -989,6 +989,20 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
         }
     }
 
+    // Safety net: the suppression only exists to shield an in-flight edge-slide
+    // candidate. Once the LAST candidate touch has lifted (this consume just
+    // emptied the set) there is nothing left to shield — if the recognizer's
+    // didFinish callback didn't already end the suppression (its state machine
+    // stranded in Possible), force it now, or every OSC widget stays dead for
+    // the rest of the session. This touch itself is still ignored (return YES).
+    if (consume && matched && oscGestureSuppressed && suppressedGestureTouchAddrs.count == 0) {
+        NSLog(@"[InputDiag] edge-gesture suppression force-ended: last candidate touch lifted without recognizer finish");
+        rightEdgeGestureSuppressionDepth = 0;
+        oscGestureSuppressed = NO;
+        [OnScreenWidgetView endGestureSuppression];
+        return YES;
+    }
+
     if (oscGestureSuppressed) {
         return YES;
     }

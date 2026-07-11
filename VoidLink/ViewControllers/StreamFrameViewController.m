@@ -624,6 +624,10 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
 
     // Restore persisted OSC ON/OFF state
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"oscManuallyDisabled"]) {
+        // Diagnostic: if the user reports "all OSC gone on entry, survives app
+        // restart", this line in Console is the smoking gun for the persisted
+        // toggle (vs. a stuck gesture suppression, which logs touch drops).
+        NSLog(@"[InputDiag] oscManuallyDisabled=YES -> clearing all OSC widgets at stream (re)config");
         [self->_streamView disableOnScreenControls];
         [self->_streamView clearOnScreenWidgets];
     }
@@ -1783,8 +1787,9 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
     OnScreenControlsLevel currentLevel = [self->_streamView getCurrentOscState];
     BOOL isOscObscured = [self->_streamView isOscObscuredByAlpha];
+    BOOL turningOn = (currentLevel == OnScreenControlsLevelOff || isOscObscured);
 
-    if (currentLevel == OnScreenControlsLevelOff || isOscObscured) {
+    if (turningOn) {
         // If OSC is off or obscured, turn it on
         [self->_streamView reloadOnScreenControlsRealtimeWith:(ControllerSupport*)self->_controllerSupport
                                                     andConfig:(StreamConfiguration*)self->_streamConfig];
@@ -1796,10 +1801,14 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         [self->_streamView disableOnScreenControls]; // Disable OSC completely
         [self->_streamView clearOnScreenWidgets]; // Remove all onscreen widgets completely
     }
-    
-    // Persist OSC ON/OFF state
-    BOOL oscIsNowOff = [self->_streamView getCurrentOscState] == OnScreenControlsLevelOff;
-    [[NSUserDefaults standardUserDefaults] setBool:oscIsNowOff forKey:@"oscManuallyDisabled"];
+
+    // Persist OSC ON/OFF state from the INTENT (which branch ran), not by
+    // reading the level back: in touch modes where the legacy OSC level stays
+    // Off even with widgets shown (e.g. AbsoluteTouch — isOscEnabled is false
+    // but isOnScreenButtonEnabled is true), the read-back said "Off" right
+    // after the user turned everything ON, poisoning oscManuallyDisabled so
+    // the next stream entry silently wiped every widget — across restarts.
+    [[NSUserDefaults standardUserDefaults] setBool:!turningOn forKey:@"oscManuallyDisabled"];
     [[NSUserDefaults standardUserDefaults] synchronize];
 
     // Update button title
