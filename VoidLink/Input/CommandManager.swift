@@ -50,7 +50,22 @@ import UIKit
 // Define the CommandManager class
 @objc public class CommandManager: NSObject {
     @objc public static let shared = CommandManager()
-    
+
+    // Serial queue for custom keyboard-combo buttons (e.g. WIN+CTRL+SHIFT+ALT+1).
+    // A plain serial DispatchQueue gives us, for free, exactly the two properties
+    // this needs: (1) two combo sends can never interleave their key-down/key-up
+    // packets, which previously could leave a modifier logically stuck down on the
+    // host when a second tap landed mid-sequence of the first; (2) rapid repeat
+    // taps are each still delivered in full, back-to-back, rather than the later
+    // tap cancelling/clobbering the earlier one. Off the main thread so per-key
+    // timing isn't stretched by UI work, and moonlight-common-c's Li* send calls
+    // are designed to be called from any thread.
+    private let comboSendQueue = DispatchQueue(label: "com.voidlink.keyCombo", qos: .userInitiated)
+    private static let modifierKeyNames: Set<String> = [
+        "WIN", "LWIN", "RWIN", "CTRL", "LCTRL", "RCTRL",
+        "SHIFT", "LSHIFT", "RSHIFT", "ALT", "LALT", "RALT"
+    ]
+
     @objc public static let mouseButtonMappings: [String: Int32] = [
         "M_LEFT" : BUTTON_LEFT,
         "MLEFT" : BUTTON_LEFT,
@@ -256,10 +271,10 @@ import UIKit
         "F13": 0x7C,         // VK_F13
         "F14": 0x7D,         // VK_F14
         "F15": 0x7E,         // VK_F15
-        "F16": 0x80,         // VK_F16
-        "F17": 0x81,         // VK_F17
-        "F18": 0x82,         // VK_F18
-        "F19": 0x83,         // VK_F19
+        "F16": 0x7F,         // VK_F16
+        "F17": 0x80,         // VK_F17
+        "F18": 0x81,         // VK_F18
+        "F19": 0x82,         // VK_F19
         "A": 0x41,           // 'A' key
         "B": 0x42,           // 'B' key
         "C": 0x43,           // 'C' key
@@ -908,50 +923,56 @@ import UIKit
         viewController?.reloadTableView()
     }
     
-    @objc public func sendKeyComboCommand(keyboardCmdStrings: [String], delay: TimeInterval = 0.2, index: Int = 0) { // we need a large delay for WAN streaming
-        // 如果已处理完所有按键，则开始释放按键
-        guard index < keyboardCmdStrings.count else {
-            // 释放按键
+    // Runs the whole down/up sequence for one combo on comboSendQueue. Queued (not
+    // dispatched concurrently), so overlapping taps queue up and each one still
+    // gets a clean, uninterrupted down->up cycle instead of corrupting each other's
+    // modifier state. finalKeyDelay keeps the original WAN-tuned pacing before any
+    // non-modifier key; modifier-to-modifier gaps only need to be long enough to
+    // land as distinct packets, not to survive host-side frame polling.
+    @objc public func sendKeyComboCommand(keyboardCmdStrings: [String], finalKeyDelay: TimeInterval = 0.2) {
+        comboSendQueue.async {
+            for (i, keyStr) in keyboardCmdStrings.enumerated() {
+                guard let keyCode = CommandManager.keyboardButtonMappings[keyStr] else {
+                    print("No mapping found for \(keyStr)")
+                    continue
+                }
+                // Gap goes BEFORE this key's down, sized for the key about to be
+                // sent — so a non-modifier still gets the full WAN-tuned lead time
+                // to let every modifier already land on the host first.
+                if i > 0 {
+                    let gap: TimeInterval = CommandManager.modifierKeyNames.contains(keyStr) ? 0.02 : finalKeyDelay
+                    Thread.sleep(forTimeInterval: gap)
+                }
+                LiSendKeyboardEvent(keyCode, Int8(KEY_ACTION_DOWN), 0)
+            }
+            Thread.sleep(forTimeInterval: finalKeyDelay) // brief hold before release
             for keyStr in keyboardCmdStrings.reversed() { // 从后往前释放按键
                 if let keyCode = CommandManager.keyboardButtonMappings[keyStr] {
-                    LiSendKeyboardEvent(keyCode, Int8(KEY_ACTION_UP), 0)  // 释放按键
+                    LiSendKeyboardEvent(keyCode, Int8(KEY_ACTION_UP), 0)
                 }
             }
-            return
         }
-         
-        // 获取当前按键的映射值
-        if let keyCode = CommandManager.keyboardButtonMappings[keyboardCmdStrings[index]] {
-            // 发送当前按键的按下事件
-            LiSendKeyboardEvent(keyCode, Int8(KEY_ACTION_DOWN), 0)
+    }
 
-            // 延迟后递归处理下一个按键
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                self.sendKeyComboCommand(keyboardCmdStrings: keyboardCmdStrings, delay: delay, index: index + 1)
-            }
-        } else {
-            print("No mapping found for \(keyboardCmdStrings[index])")
-            // 如果当前按键没有映射，跳过当前按键并继续下一个
-            self.sendKeyComboCommand(keyboardCmdStrings: keyboardCmdStrings, delay: delay, index: index + 1)
-        }
-    }
-    
-    @objc public func sendKeyComboDown(keyboardCmdStrings: [String]) { // we need a large delay for WAN streaming
-        for keyStr in keyboardCmdStrings {
-            if let keyCode = CommandManager.keyboardButtonMappings[keyStr] {
-                LiSendKeyboardEvent(keyCode, Int8(KEY_ACTION_DOWN), 0)  // 释放按键
+    @objc public func sendKeyComboDown(keyboardCmdStrings: [String]) {
+        comboSendQueue.async {
+            for keyStr in keyboardCmdStrings {
+                if let keyCode = CommandManager.keyboardButtonMappings[keyStr] {
+                    LiSendKeyboardEvent(keyCode, Int8(KEY_ACTION_DOWN), 0)
+                }
             }
         }
     }
-    
-    @objc public func sendKeyComboUp(keyboardCmdStrings: [String]) { // we need a large delay for WAN streaming
-        for keyStr in keyboardCmdStrings {
-            if let keyCode = CommandManager.keyboardButtonMappings[keyStr] {
-                LiSendKeyboardEvent(keyCode, Int8(KEY_ACTION_UP), 0)  // 释放按键
+
+    @objc public func sendKeyComboUp(keyboardCmdStrings: [String]) {
+        comboSendQueue.async {
+            for keyStr in keyboardCmdStrings {
+                if let keyCode = CommandManager.keyboardButtonMappings[keyStr] {
+                    LiSendKeyboardEvent(keyCode, Int8(KEY_ACTION_UP), 0)
+                }
             }
         }
-        return
     }
-    
-    
+
+
 }
