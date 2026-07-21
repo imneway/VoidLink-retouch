@@ -135,13 +135,22 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     }
     if (s.snapScreenToTop) {
         // 只对“外部黑边”（设备 vs 实际串流宽高比）对齐，避免触点映射偏移
+        // 这里的公式必须和 StreamFrameViewController.applySnapToTopIfNeeded 里
+        // 计算 topBlackBar 的公式逐项对齐（比例模式选择 + 竖屏减半），因为
+        // liftMetalVideoViewIfNeeded 会把这里的返回值当作 Metal 视图的基准偏移，
+        // 和调用方已经算好的偏移叠加——两边公式一旦不一致就会导致 Metal 画面和
+        // StreamView/OSC 图层错位（旋转后底部露白、竖屏位置不对，皆源于此）。
         CGFloat viewWidth = self.bounds.size.width;
         CGFloat viewHeight = self.bounds.size.height;
-        CGFloat frameAspect = self->streamAspectRatio; // 实际视频帧宽高比
+        CGFloat frameAspect = (s.snapScreenRatioMode.integerValue == 0) ? (16.0f/9.0f) : self->streamAspectRatio;
         if (frameAspect <= 0.0f) frameAspect = 16.0f/9.0f;
         CGFloat frameHeight = viewWidth / frameAspect; // iPad：按宽等比
         CGFloat topBlackBar = (viewHeight - frameHeight) / 2.0f;
         if (topBlackBar < 0) topBlackBar = 0;
+        // Portrait: use half of the offset (not full top-align), mirrors applySnapToTopIfNeeded
+        if (viewHeight > viewWidth) {
+            topBlackBar = topBlackBar * 0.5f;
+        }
         return topBlackBar;
     }
     return 0.0f;
