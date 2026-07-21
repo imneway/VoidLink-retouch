@@ -1359,6 +1359,10 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     [OnScreenWidgetView forceResetGestureSuppression];
 }
 
+- (BOOL)pointHitsAnyVisibleLegacyOscButton:(CGPoint)point {
+    return onScreenControls ? [onScreenControls pointHitsAnyVisibleLegacyOscButton:point] : NO;
+}
+
 - (void)willMoveToWindow:(UIWindow *)newWindow {
     [super willMoveToWindow:newWindow];
     if (newWindow == nil) {

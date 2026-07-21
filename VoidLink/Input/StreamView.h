@@ -57,6 +57,12 @@
 - (void)beginRightEdgeGestureSuppressionForTouch:(UITouch *)touch;
 - (void)endRightEdgeGestureSuppression;
 
+// Forwards to OnScreenControls' legacy (CALayer-based) button/stick hit test, in
+// streamFrameTopLayerView's coordinate space. Lets callers outside StreamView (e.g.
+// the right-edge gesture recognizer's delegate) tell whether a point lands on a
+// legacy OSC control without reaching into the private onScreenControls ivar.
+- (BOOL)pointHitsAnyVisibleLegacyOscButton:(CGPoint)point;
+
 // Obscure OSC layers by alpha while keeping them interactive
 - (void)setOscObscuredByAlpha:(BOOL)enabled;
 - (BOOL)isOscObscuredByAlpha;

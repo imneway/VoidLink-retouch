@@ -2644,8 +2644,33 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
     if (gestureRecognizer == _rightEdgeToggleOscRecognizer) {
-        CustomEdgeSlideGestureRecognizer *edgeRecognizer = (CustomEdgeSlideGestureRecognizer *)gestureRecognizer;
+        // A touch that hit-tested onto an OSC widget/button is unambiguously that
+        // widget's own tap, not the start of a right-edge swipe -- never suppress it,
+        // even if it sits inside the edge tolerance strip below. This runs (via
+        // shouldReceiveTouch) before the widget's own -touchesBegan, and
+        // beginRightEdgeGestureSuppressionForTouch: sets the suppression flag
+        // synchronously -- so without this check, any OSC element placed within the
+        // tolerance strip would have every touch whose contact point lands inside it
+        // swallowed by its own trigger, deterministically, while a touch landing just
+        // outside works fine. That reads as "occasionally does nothing" from the
+        // widget's own natural touch-point variance, not an intermittent glitch.
+        // Covers both widget families: new-style OnScreenWidgetView (UIView-based,
+        // walk the superview chain) and legacy OSC buttons/sticks (CALayer-based, no
+        // matching UIView -- checked via StreamView's own hit test instead).
+        UIView *hitView = touch.view;
+        while (hitView != nil) {
+            if ([hitView isKindOfClass:[OnScreenWidgetView class]]) {
+                return NO;
+            }
+            hitView = hitView.superview;
+        }
+
         CGPoint location = [touch locationInView:gestureRecognizer.view];
+        if ([self->_streamView pointHitsAnyVisibleLegacyOscButton:location]) {
+            return NO;
+        }
+
+        CustomEdgeSlideGestureRecognizer *edgeRecognizer = (CustomEdgeSlideGestureRecognizer *)gestureRecognizer;
         CGRect bounds = gestureRecognizer.view.bounds;
         CGFloat tolerance = MAX(edgeRecognizer.EDGE_TOLERANCE, 24.0f);
         BOOL withinEdge = NO;
