@@ -663,13 +663,8 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
     _streamView.frame = f;
     _streamView.originalFrame = f; // so keyboard lift restores correctly
 
-    // Move Metal video view by the same amount. liftMetalVideoViewIfNeeded internally
-    // re-derives this exact offset via -[StreamView currentSnapOffset] (kept in lockstep
-    // with the topBlackBar formula above) and adds it to the liftHeight argument, so pass
-    // 0 here -- passing topBlackBar again would double-apply the offset, which is what
-    // caused the Metal view to drift away from the StreamView/OSC layer after rotation
-    // (visible as a white gap at the bottom, and a wrong position in portrait).
-    [_streamView liftMetalVideoViewIfNeeded:0];
+    // Move Metal video view by the same amount (if applicable)
+    [_streamView liftMetalVideoViewIfNeeded:topBlackBar];
 
     // Show/update ratio button
     [self updateSnapRatioButton];
@@ -2062,12 +2057,6 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         // Insert Metal view at the bottom of the view hierarchy
         [self.view insertSubview:self.metalViewController.view atIndex:0];
         [self.metalViewController didMoveToParentViewController:self];
-        // The Metal view is created *after* the earlier applySnapToTopIfNeeded call, so
-        // it starts at Y=0 while the StreamView/OSC layers are already shifted up by the
-        // snap offset. Apply the base snap offset now so the very first rendered frame is
-        // aligned, instead of showing one misaligned frame until a rotation/reload/keyboard
-        // event happens to re-run liftMetalVideoViewIfNeeded.
-        [self->_streamView liftMetalVideoViewIfNeeded:0];
     }
 }
 
