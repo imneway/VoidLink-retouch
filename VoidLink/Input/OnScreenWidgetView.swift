@@ -320,7 +320,9 @@ import UIKit
     // The arc keeps a fixed lead ahead of the fingertip so the finger can never cover it.
     private let altDirectionArcLayer = CAShapeLayer()
     private let altThresholdRingLayer = CAShapeLayer()
-    private let altArcBackingRingLayer = CAShapeLayer() // faint solid ring the arc rides on
+    private let altArcBackingRingLayer = CAShapeLayer()  // 1pt BFBFBF outline the arc rides on
+    private let altArcBackingFillLayer = CAGradientLayer() // radial fill: clear center -> BFBFBF edge
+    private let altArcBackingMaskLayer = CAShapeLayer()   // circular mask clipping the gradient
     private static let altArcLeadDistance: CGFloat = 45   // arc radius = finger travel + this lead
     private static let altArcMinClearance: CGFloat = 20   // arc floor = threshold ring radius + this
     private static let altArcShowTravel: CGFloat = 6      // hide the arc below this finger travel
@@ -751,6 +753,7 @@ import UIKit
         altDirectionArcLayer.removeFromSuperlayer()
         altThresholdRingLayer.removeFromSuperlayer()
         altArcBackingRingLayer.removeFromSuperlayer()
+        altArcBackingFillLayer.removeFromSuperlayer()
         altBackgroundLayer.removeFromSuperlayer()
         altPointerLayer.removeFromSuperlayer()
         stickBallLayer.removeFromSuperlayer()
@@ -1755,6 +1758,13 @@ import UIKit
         // user-calibrated palette of the original assets; a thin dark stroke keeps the
         // edge readable on light backgrounds, and a white outer glow swells with
         // finger travel (glow is the normalized 0-1 deflection).
+        // Self-contained disabled-actions transaction: adoptSuccessorPadTouch calls
+        // showVectorAltIndicator() -> here outside any outer transaction, so without
+        // this the mask/gradient geometry would implicitly animate from a stale
+        // radius on a fast re-grip.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         let halfSpan: CGFloat = run ? 37 : 22
         let thickness: CGFloat = run ? 3.5 : 2.5
         let peak: CGFloat = run ? 9 : 6
@@ -1767,10 +1777,15 @@ import UIKit
         altDirectionArcLayer.shadowColor = UIColor.white.cgColor
         altDirectionArcLayer.shadowOffset = .zero
         altDirectionArcLayer.shadowRadius = 2 + 2 * glow
-        altDirectionArcLayer.shadowOpacity = Float(0.25 + 0.45 * glow)
-        // Backing ring rides at the same radius, un-rotated (a full circle).
+        altDirectionArcLayer.shadowOpacity = Float(0.15 + 0.30 * glow)
+        // Backing sits at the same radius, un-rotated (a full circle): outline + a
+        // radial fill masked to that circle.
         altArcBackingRingLayer.path = UIBezierPath(arcCenter: .zero, radius: radius,
                                                    startAngle: 0, endAngle: 2 * .pi, clockwise: true).cgPath
+        let box = CGRect(x: 0, y: 0, width: radius * 2, height: radius * 2)
+        altArcBackingFillLayer.bounds = box
+        altArcBackingMaskLayer.frame = box
+        altArcBackingMaskLayer.path = UIBezierPath(ovalIn: box).cgPath
     }
 
     private var altEffectiveResponseExponent: CGFloat {
@@ -1781,6 +1796,7 @@ import UIKit
         altThresholdRingLayer.removeAllAnimations()
         altDirectionArcLayer.removeAllAnimations()
         altArcBackingRingLayer.removeAllAnimations()
+        altArcBackingFillLayer.removeAllAnimations()
         // Screen boundary where the curved stick output crosses the run threshold,
         // mirroring sendLeftStickTouchPadEvent: output = (travel*sens/Range)^Curve.
         // Unequal axis sensitivities make that boundary an ellipse, not a circle.
@@ -1800,15 +1816,25 @@ import UIKit
         altThresholdRingLayer.shadowOpacity = 0.30
         altThresholdRingLayer.position = self.touchBeganPosInSuperLayer
 
-        // Faint solid ring under the arc (Figma-calibrated: BFBFBF fill 6% + BFBFBF
-        // 10% 1pt inside stroke). Un-rotated full circle at the arc radius.
+        // Backing under the arc (Figma-calibrated: BFBFBF radial fill 0%->6%
+        // center-to-edge + BFBFBF 10% 1pt stroke). Un-rotated circle at arc radius.
         let bfbfbf: CGFloat = 0.749
-        altArcBackingRingLayer.fillColor = UIColor(white: bfbfbf, alpha: 0.06).cgColor
+        altArcBackingFillLayer.type = .radial
+        altArcBackingFillLayer.colors = [UIColor(white: bfbfbf, alpha: 0.0).cgColor,
+                                         UIColor(white: bfbfbf, alpha: 0.06).cgColor]
+        altArcBackingFillLayer.locations = [0, 1]
+        altArcBackingFillLayer.startPoint = CGPoint(x: 0.5, y: 0.5)
+        altArcBackingFillLayer.endPoint = CGPoint(x: 1, y: 1) // radius reaches the mask edge
+        altArcBackingFillLayer.mask = altArcBackingMaskLayer
+        altArcBackingFillLayer.position = self.touchBeganPosInSuperLayer
+
+        altArcBackingRingLayer.fillColor = UIColor.clear.cgColor
         altArcBackingRingLayer.strokeColor = UIColor(white: bfbfbf, alpha: 0.10).cgColor
         altArcBackingRingLayer.lineWidth = 1
         altArcBackingRingLayer.position = self.touchBeganPosInSuperLayer
 
-        // Layer order (bottom→top): backing ring, threshold ring, direction arc.
+        // Layer order (bottom→top): backing fill, backing outline, threshold ring, direction arc.
+        if altArcBackingFillLayer.superlayer == nil { self.layer.superlayer?.addSublayer(altArcBackingFillLayer) }
         if altArcBackingRingLayer.superlayer == nil { self.layer.superlayer?.addSublayer(altArcBackingRingLayer) }
         if altThresholdRingLayer.superlayer == nil { self.layer.superlayer?.addSublayer(altThresholdRingLayer) }
 
@@ -1823,8 +1849,10 @@ import UIKit
         altThresholdRingLayer.isHidden = false
         altDirectionArcLayer.isHidden = true // stays hidden until the finger actually moves
         altArcBackingRingLayer.isHidden = true // tracks the arc's visibility
+        altArcBackingFillLayer.isHidden = true
         altThresholdRingLayer.opacity = 0.0
         altArcBackingRingLayer.opacity = 1.0
+        altArcBackingFillLayer.opacity = 1.0
         CATransaction.begin()
         CATransaction.setDisableActions(false) // the caller's transaction disables actions
         CATransaction.setAnimationDuration(0.2)
@@ -1836,6 +1864,7 @@ import UIKit
         altThresholdRingLayer.position = self.touchBeganPosInSuperLayer
         altDirectionArcLayer.position = self.touchBeganPosInSuperLayer
         altArcBackingRingLayer.position = self.touchBeganPosInSuperLayer
+        altArcBackingFillLayer.position = self.touchBeganPosInSuperLayer
         // Self-heal from an interrupted fade-out (e.g. re-grip landing mid-fade):
         // model opacity is 1.0 during the normal fade-in, so this never fights it.
         if altThresholdRingLayer.isHidden || altThresholdRingLayer.opacity < 1.0 {
@@ -1848,15 +1877,19 @@ import UIKit
         if travel < Self.altArcShowTravel {
             altDirectionArcLayer.isHidden = true
             altArcBackingRingLayer.isHidden = true
+            altArcBackingFillLayer.isHidden = true
             return
         }
         if altDirectionArcLayer.isHidden || altDirectionArcLayer.opacity < 1.0 {
             altDirectionArcLayer.removeAllAnimations()
             altArcBackingRingLayer.removeAllAnimations()
+            altArcBackingFillLayer.removeAllAnimations()
             altDirectionArcLayer.isHidden = false
             altDirectionArcLayer.opacity = 1.0
             altArcBackingRingLayer.isHidden = false
             altArcBackingRingLayer.opacity = 1.0
+            altArcBackingFillLayer.isHidden = false
+            altArcBackingFillLayer.opacity = 1.0
         }
 
         // Clamp the arc between the threshold ring and the maximum useful travel,
@@ -1884,6 +1917,7 @@ import UIKit
             altThresholdRingLayer.opacity = 0.0
             altDirectionArcLayer.opacity = 0.0
             altArcBackingRingLayer.opacity = 0.0
+            altArcBackingFillLayer.opacity = 0.0
             CATransaction.setCompletionBlock {
                 // A quick re-grip can land inside this 0.2s fade; hiding then would
                 // blank the indicator for the whole new touch.
@@ -1891,6 +1925,7 @@ import UIKit
                 self.altThresholdRingLayer.isHidden = true
                 self.altDirectionArcLayer.isHidden = true
                 self.altArcBackingRingLayer.isHidden = true
+                self.altArcBackingFillLayer.isHidden = true
                 self.altDirectionArcLayer.setAffineTransform(.identity)
             }
             CATransaction.commit()
@@ -1898,9 +1933,11 @@ import UIKit
             altThresholdRingLayer.isHidden = true
             altDirectionArcLayer.isHidden = true
             altArcBackingRingLayer.isHidden = true
+            altArcBackingFillLayer.isHidden = true
             altThresholdRingLayer.opacity = 0.0
             altDirectionArcLayer.opacity = 0.0
             altArcBackingRingLayer.opacity = 0.0
+            altArcBackingFillLayer.opacity = 0.0
             altDirectionArcLayer.setAffineTransform(.identity)
         }
     }
