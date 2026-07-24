@@ -1862,6 +1862,42 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     [self.aimAxisSnapLabel setText:[LocalizationHelper localizedStringForKey:@"Axis Snap: %.0f°", self->selectedWidgetView.aimTrackpadAxisSnapDegrees]];
 }
 
+// Small "ⓘ" helper button for slider rows. Text glyph instead of an SF Symbol
+// so it renders on the iOS 12 deployment target too.
+- (UIButton*)makeSliderInfoButtonWithAction:(SEL)action {
+    UIButton* button = [UIButton buttonWithType:UIButtonTypeSystem];
+    [button setTitle:@"ⓘ" forState:UIControlStateNormal];
+    button.titleLabel.font = [UIFont systemFontOfSize:16];
+    [button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [button.widthAnchor constraintEqualToConstant:24].active = YES;
+    [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    return button;
+}
+
+- (void)presentSliderInfoAlertWithTitle:(NSString*)title message:(NSString*)message {
+    UIAlertController* alert = [UIAlertController alertControllerWithTitle:title
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)stickRangeInfoTapped {
+    [self presentSliderInfoAlertWithTitle:@"Stick Range"
+                                  message:@"手指从按下点推多远(pt)摇杆达到满偏。\n\n"
+                                           "默认值:普通摇杆 35;LSPADALT / RSPADALT 55;瞄准板 RSPADALT2 42。\n\n"
+                                           "越大 → 同样的手指行程输出越小,走路区间越大、跑步越晚触发。"
+                                           "跑步触发半径 ≈ Range × 阈值^(1/Curve),阈值由游戏决定(常见 0.5~0.9)。"];
+}
+
+- (void)stickCurveInfoTapped {
+    [self presentSliderInfoAlertWithTitle:@"Stick Curve"
+                                  message:@"输出响应曲线的指数。输出 = (行程/Range)^Curve。\n\n"
+                                           "默认值:ALT 摇杆 1.38;瞄准板 RSPADALT2 1.18。\n\n"
+                                           "1.0 = 线性;越大低速区越平缓(小幅推杆更精细、走路更好控),"
+                                           "接近满偏时增益越陡。仅在大于 1.0 时生效。"];
+}
+
 - (void)stickInputScaleSliderMoved:(UISlider* )sender{
     if(self->selectedWidgetView != nil && self->widgetViewSelected){
         self->selectedWidgetView.stickInputScale = sender.value;
@@ -1962,8 +1998,10 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.stickInputScaleSlider.tintColor = sliderTint;
     [self.stickInputScaleSlider addTarget:self action:@selector(stickInputScaleSliderMoved:) forControlEvents:UIControlEventValueChanged];
 
-    self.stickInputScaleStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.stickInputScaleLabel, self.stickInputScaleSlider]];
+    UIButton* stickRangeInfoButton = [self makeSliderInfoButtonWithAction:@selector(stickRangeInfoTapped)];
+    self.stickInputScaleStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.stickInputScaleLabel, self.stickInputScaleSlider, stickRangeInfoButton]];
     self.stickInputScaleStack.axis = UILayoutConstraintAxisHorizontal;
+    self.stickInputScaleStack.spacing = 6;
     self.stickInputScaleStack.translatesAutoresizingMaskIntoConstraints = NO;
     [self.stickInputScaleStack.heightAnchor constraintEqualToConstant:20].active = YES;
     self.stickInputScaleStack.hidden = YES;
@@ -1983,8 +2021,10 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     self.stickResponseExponentSlider.tintColor = sliderTint;
     [self.stickResponseExponentSlider addTarget:self action:@selector(stickResponseExponentSliderMoved:) forControlEvents:UIControlEventValueChanged];
 
-    self.stickResponseExponentStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.stickResponseExponentLabel, self.stickResponseExponentSlider]];
+    UIButton* stickCurveInfoButton = [self makeSliderInfoButtonWithAction:@selector(stickCurveInfoTapped)];
+    self.stickResponseExponentStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.stickResponseExponentLabel, self.stickResponseExponentSlider, stickCurveInfoButton]];
     self.stickResponseExponentStack.axis = UILayoutConstraintAxisHorizontal;
+    self.stickResponseExponentStack.spacing = 6;
     self.stickResponseExponentStack.translatesAutoresizingMaskIntoConstraints = NO;
     [self.stickResponseExponentStack.heightAnchor constraintEqualToConstant:20].active = YES;
     self.stickResponseExponentStack.hidden = YES;
