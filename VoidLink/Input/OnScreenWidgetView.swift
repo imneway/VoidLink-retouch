@@ -332,6 +332,13 @@ import UIKit
     private var touchTapTimeStamp: TimeInterval
     private let QUICK_TAP_TIME_INTERVAL = 0.2
     private let ALT_STICK_DOUBLE_TAP_STATIONARY_SLOP: CGFloat = 8.0
+    // ALT stick pads defer the double-tap stick-click by this long: the second
+    // tap's DOWN alone can't distinguish a stick-click from a quick re-grip that
+    // immediately drags. Movement beyond the tap slop inside the window cancels
+    // the click; a lift inside the window fires a clean press+release; a touch
+    // still stationary at the deadline fires with hold semantics.
+    private static let altDoubleTapConfirmDelay: TimeInterval = 0.08
+    private var pendingDoubleTapComboWork: DispatchWorkItem? = nil
     private var altStickTouchMovedBeyondTapSlop: Bool = false
     private var altStickTouchHadMultipleTouches: Bool = false
     private var lastAltStickTouchWasStationaryTap: Bool = true
@@ -1422,6 +1429,10 @@ import UIKit
                              currentLocation.y - touchBeganLocation.y)
         if movement > ALT_STICK_DOUBLE_TAP_STATIONARY_SLOP {
             altStickTouchMovedBeyondTapSlop = true
+            // The touch turned into a drag: this was stick movement, not the
+            // second half of a double-click. Drop the deferred stick-click.
+            pendingDoubleTapComboWork?.cancel()
+            pendingDoubleTapComboWork = nil
         }
     }
 
@@ -1434,6 +1445,28 @@ import UIKit
 
     private func triggerQuickDoubleTapCombo(showIndicator: Bool = true) {
         guard shouldTriggerQuickDoubleTapCombo else { return }
+        if isAltStickPad {
+            // See altDoubleTapConfirmDelay: hold fire until the touch proves it's a
+            // tap, not the start of a stick stroke. recordAltStickDoubleTapMovement
+            // cancels on movement; releaseQuickDoubleTapComboIfNeeded(fireIfPending:)
+            // converts an early lift into a clean click.
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.pendingDoubleTapComboWork = nil
+                guard self.touchBegan,
+                      !self.altStickTouchMovedBeyondTapSlop,
+                      !self.altStickTouchHadMultipleTouches else { return }
+                self.fireQuickDoubleTapCombo(showIndicator: showIndicator)
+            }
+            pendingDoubleTapComboWork?.cancel()
+            pendingDoubleTapComboWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + OnScreenWidgetView.altDoubleTapConfirmDelay, execute: work)
+            return
+        }
+        fireQuickDoubleTapCombo(showIndicator: showIndicator)
+    }
+
+    private func fireQuickDoubleTapCombo(showIndicator: Bool) {
         if showIndicator {
             self.showl3r3Indicator()
         }
@@ -1441,7 +1474,25 @@ import UIKit
         self.quickDoubleTapComboHeld = true
     }
 
-    private func releaseQuickDoubleTapComboIfNeeded() {
+    private func releaseQuickDoubleTapComboIfNeeded(fireIfPending: Bool = false) {
+        if let pending = pendingDoubleTapComboWork {
+            pending.cancel()
+            pendingDoubleTapComboWork = nil
+            // Lifted inside the confirmation window without moving: a genuine quick
+            // double-tap. Deliver the click as a short press+release. Cancel paths
+            // (fireIfPending == false) just drop the pending click.
+            if fireIfPending && !altStickTouchMovedBeyondTapSlop && !altStickTouchHadMultipleTouches {
+                let strings = self.comboButtonStrings
+                sendComboButtonsDownEvent(comboStrings: strings)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    // Intentionally strong capture: the UP must fire even if the
+                    // widget is removed within the 50ms window — a dropped release
+                    // would leave the stick-click token stuck host-side.
+                    self.sendComboButtonsUpEvent(comboStrings: strings)
+                }
+                return
+            }
+        }
         guard quickDoubleTapComboHeld else { return }
         sendComboButtonsUpEvent(comboStrings: comboButtonStrings)
         quickDoubleTapComboHeld = false
@@ -2062,7 +2113,14 @@ import UIKit
     }
     
     private func handlebuttonUp() {
-        if !OnScreenWidgetView.editMode && !CommandManager.specialOverlayButtonCmds.contains(self.cmdString) {
+        // touchPad widgets never route their presses through handleButtonDown — their
+        // combo tokens (hardcoded OSCL3/OSCR3 for stick pads, or hybrid extras) are
+        // pressed and released exclusively by the quick-double-tap path. Sending the
+        // release block here made EVERY pad lift emit an unmatched UP for its token
+        // (e.g. each LSPADALT lift released L3 host-side), which cut short the same
+        // token held by any other widget. Visual cleanup below still runs.
+        if !OnScreenWidgetView.editMode && !CommandManager.specialOverlayButtonCmds.contains(self.cmdString)
+            && self.widgetType != WidgetTypeEnum.touchPad {
             // Release exactly the branch that went down (latched at button-down), so a
             // mid-press change in arming can't strand keys held.
             let releaseStrings = self.heldDispatchStrings ?? self.comboButtonStrings
@@ -2788,6 +2846,10 @@ import UIKit
             self.twoTouchesDetected = true
             if self.isAltStickPad {
                 self.altStickTouchHadMultipleTouches = true
+                // A second finger disqualifies the pending stick-click: this is
+                // no longer a clean double-tap sequence.
+                self.pendingDoubleTapComboWork?.cancel()
+                self.pendingDoubleTapComboWork = nil
             }
         }
         
@@ -3004,7 +3066,27 @@ import UIKit
         }
         super.touchesMoved(touches, with: event)
         if !OnScreenWidgetView.editMode {
-            
+
+            // Re-anchor guard: a move for a touch whose touchesBegan this widget never
+            // processed (dropped by a gesture-suppression window, or state cleared
+            // mid-touch by an external cancel). Offset-based pads would otherwise
+            // compute deflection against the PREVIOUS grip's anchor — the stick pins
+            // to a wrong direction (far stale anchor) or barely moves (near stale
+            // anchor) until the finger lifts. Adopt the current point as a fresh
+            // anchor and let the stroke continue from zero.
+            if !self.touchPadString.isEmpty && !self.touchBegan, let touch = touches.first {
+                self.touchBegan = true
+                self.firstTouchMoved = false
+                self.touchBeganLocation = touch.location(in: self)
+                self.latestTouchLocation = self.touchBeganLocation
+                if let superLayer = self.layer.superlayer {
+                    self.touchBeganPosInSuperLayer = superLayer.convert(self.touchBeganLocation, from: self.layer)
+                }
+                if self.isAimStickPad {
+                    self.aimHasAnchor = false
+                }
+            }
+
             if !self.touchPadString.isEmpty{
                 handleTouchPadMoveEvent(touches, with: event)
             }
@@ -3354,7 +3436,7 @@ import UIKit
         
         // then other types of pads or buttons with touchPad function
         if !OnScreenWidgetView.editMode && !self.touchPadString.isEmpty {
-            releaseQuickDoubleTapComboIfNeeded()
+            releaseQuickDoubleTapComboIfNeeded(fireIfPending: true)
             switch self.touchPadString{
             case "LSPAD", "LSPADALT":
                 self.onScreenControls.clearLeftStickTouchPadFlag()

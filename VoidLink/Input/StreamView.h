@@ -60,6 +60,10 @@
 
 - (void)beginRightEdgeGestureSuppressionForTouch:(UITouch *)touch;
 - (void)endRightEdgeGestureSuppression;
+// Whether the point (in streamFrameTopLayerView coordinates) lands on a visible
+// legacy OSC CALayer button. Forwarded to OnScreenControls for callers (the host
+// VC's gesture delegate) that don't hold the OnScreenControls instance.
+- (BOOL)pointHitsAnyVisibleLegacyOscButton:(CGPoint)point;
 
 // Obscure OSC layers by alpha while keeping them interactive
 - (void)setOscObscuredByAlpha:(BOOL)enabled;

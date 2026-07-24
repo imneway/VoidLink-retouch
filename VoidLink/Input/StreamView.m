@@ -1418,6 +1418,13 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
                        withEvent:event];
 }
 
+- (BOOL)pointHitsAnyVisibleLegacyOscButton:(CGPoint)point {
+    if (onScreenControls == nil) {
+        return NO;
+    }
+    return [onScreenControls pointHitsAnyVisibleLegacyOscButton:point];
+}
+
 - (void)beginRightEdgeGestureSuppressionForTouch:(UITouch *)touch {
     if (!oscGestureSuppressed) {
         oscGestureSuppressed = YES;

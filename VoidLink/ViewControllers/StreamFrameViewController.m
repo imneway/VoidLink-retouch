@@ -2840,13 +2840,24 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         CustomEdgeSlideGestureRecognizer *edgeRecognizer = (CustomEdgeSlideGestureRecognizer *)gestureRecognizer;
         CGPoint location = [touch locationInView:gestureRecognizer.view];
         CGRect bounds = gestureRecognizer.view.bounds;
-        CGFloat tolerance = MAX(edgeRecognizer.EDGE_TOLERANCE, 24.0f);
+        // Must match the recognizer's own success window (EDGE_TOLERANCE): a touch
+        // that can't possibly complete the gesture must not become a candidate.
+        // The old code widened this to 24pt and pre-suppressed ALL OSC input for the
+        // touch's whole lifetime (beginRightEdgeGestureSuppressionForTouch) — every
+        // touch landing in the band froze the widgets, zeroed active sticks, and
+        // left widgets that missed their touchesBegan computing stick offsets from
+        // a stale anchor once the window lifted. The recognizer works like the
+        // settings edge-slide now: observe passively, act only on a completed
+        // swipe. The suppression machinery stays dormant (never armed).
+        CGFloat tolerance = edgeRecognizer.EDGE_TOLERANCE;
         BOOL withinEdge = NO;
 
         if (edgeRecognizer.edges & UIRectEdgeRight) {
-            withinEdge = location.x >= (CGRectGetMaxX(bounds) - tolerance);
+            // Strict comparisons to match the recognizer's own success test
+            // (CustomEdgeSlideGestureRecognizer touchesEnded).
+            withinEdge = location.x > (CGRectGetMaxX(bounds) - tolerance);
         } else if (edgeRecognizer.edges & UIRectEdgeLeft) {
-            withinEdge = location.x <= tolerance;
+            withinEdge = location.x < tolerance;
         } else if (edgeRecognizer.edges & UIRectEdgeTop) {
             withinEdge = location.y <= tolerance;
         } else if (edgeRecognizer.edges & UIRectEdgeBottom) {
@@ -2857,7 +2868,18 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
             return NO;
         }
 
-        [self->_streamView beginRightEdgeGestureSuppressionForTouch:touch];
+        // A touch starting on an OSC element belongs to that control, never to the
+        // edge gesture — otherwise a button hugging the edge (e.g. R2) can feed the
+        // recognizer. Walk up from the hit-tested view to cover widget subviews.
+        for (UIView *hitView = touch.view; hitView != nil; hitView = hitView.superview) {
+            if ([hitView isKindOfClass:[OnScreenWidgetView class]]) {
+                return NO;
+            }
+        }
+        // Same for the legacy CALayer OSC buttons (they don't appear as views).
+        if ([self->_streamView pointHitsAnyVisibleLegacyOscButton:location]) {
+            return NO;
+        }
     }
     return YES;
 }
