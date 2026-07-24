@@ -323,7 +323,7 @@ import UIKit
     private let altArcBackingRingLayer = CAShapeLayer()  // 1pt BFBFBF outline the arc rides on
     private let altArcBackingFillLayer = CAGradientLayer() // radial fill: clear center -> BFBFBF edge
     private let altArcBackingMaskLayer = CAShapeLayer()   // circular mask clipping the gradient
-    private static let altArcLeadDistance: CGFloat = 45   // arc radius = finger travel + this lead
+    private static let altArcLeadDistance: CGFloat = 55   // arc radius = finger travel + this lead
     private static let altArcMinClearance: CGFloat = 20   // arc floor = threshold ring radius + this
     private static let altArcShowTravel: CGFloat = 6      // hide the arc below this finger travel
     private static let altRunOutputThreshold: CGFloat = 0.6 // stick output magnitude treated as run
@@ -1776,7 +1776,7 @@ import UIKit
         altDirectionArcLayer.fillColor = UIColor(white: 1.0, alpha: run ? 0.48 : 0.32).cgColor
         altDirectionArcLayer.shadowColor = UIColor.white.cgColor
         altDirectionArcLayer.shadowOffset = .zero
-        altDirectionArcLayer.shadowRadius = 2 + 2 * glow
+        altDirectionArcLayer.shadowRadius = 2
         altDirectionArcLayer.shadowOpacity = Float(0.15 + 0.30 * glow)
         // Backing sits at the same radius, un-rotated (a full circle): outline + a
         // radial fill masked to that circle.
