@@ -325,6 +325,10 @@ import UIKit
     private let altArcBackingMaskLayer = CAShapeLayer()   // circular mask clipping the gradient
     private static let altArcLeadDistance: CGFloat = 50   // arc radius = finger travel + this lead
     private static let altThresholdRingInset: CGFloat = 5 // draw the dashed ring this much inside the boundary
+    // Aim pad (RSPADALT2) uses a smaller finger throw and no walk/run split: tighter
+    // lead + a small fixed floor so the arc hugs the finger instead of the run boundary.
+    private static let altAimArcLeadDistance: CGFloat = 35
+    private static let altAimArcMinRadius: CGFloat = 30
     private static let altArcMinClearance: CGFloat = 20   // arc floor = threshold ring radius + this
     private static let altArcShowTravel: CGFloat = 6      // hide the arc below this finger travel
     private static let altRunOutputThreshold: CGFloat = 0.6 // stick output magnitude treated as run
@@ -1740,7 +1744,7 @@ import UIKit
     // the radius changes every frame, which bitmap assets cannot do.
     private func makeAltArcPath(radius: CGFloat, halfSpanDeg: CGFloat, thickness: CGFloat, peak: CGFloat) -> CGPath {
         let halfSpan = halfSpanDeg * .pi / 180
-        let apexHalf = min(halfSpan * 0.21, 7 * .pi / 180)
+        let apexHalf = min(halfSpan * 0.24, 8 * .pi / 180)
         let up = -CGFloat.pi / 2
         let ro = radius + thickness / 2
         let ri = max(radius - thickness / 2, 1)
@@ -1768,19 +1772,13 @@ import UIKit
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        let halfSpan: CGFloat = run ? 24 : 14
+        let halfSpan: CGFloat = run ? 31 : 18
         let thickness: CGFloat = 2.5
-        let peak: CGFloat = run ? 9 : 6
+        let peak: CGFloat = run ? 8.1 : 5.4
         let arcPath = makeAltArcPath(radius: radius, halfSpanDeg: halfSpan, thickness: thickness, peak: peak)
         altDirectionArcLayer.path = arcPath
-        // Explicit shadowPath keeps the animated glow off the slow content-derived
-        // shadow mask path (120Hz frame budget).
-        altDirectionArcLayer.shadowPath = arcPath
         altDirectionArcLayer.fillColor = UIColor(white: 1.0, alpha: run ? 0.48 : 0.32).cgColor
-        altDirectionArcLayer.shadowColor = UIColor.white.cgColor
-        altDirectionArcLayer.shadowOffset = .zero
-        altDirectionArcLayer.shadowRadius = 2
-        altDirectionArcLayer.shadowOpacity = Float(0.10 + 0.20 * glow)
+        altDirectionArcLayer.shadowOpacity = 0 // outer glow disabled per feedback
         // Backing sits at the same radius, un-rotated (a full circle): outline + a
         // radial fill masked to that circle.
         altArcBackingRingLayer.path = UIBezierPath(arcCenter: .zero, radius: radius,
@@ -1862,21 +1860,25 @@ import UIKit
         altDirectionArcLayer.lineJoin = .round // avoid miter spikes at the apex
         altDirectionArcLayer.position = self.touchBeganPosInSuperLayer
         altDirectionArcLayer.setAffineTransform(.identity)
-        applyAltArcState(run: false, radius: ringRadiusX + Self.altArcMinClearance, glow: 0)
+        let initialRadius = isAimStickPad ? Self.altAimArcMinRadius : ringRadiusX + Self.altArcMinClearance
+        applyAltArcState(run: isAimStickPad, radius: initialRadius, glow: 0)
         if altDirectionArcLayer.superlayer == nil { self.layer.superlayer?.addSublayer(altDirectionArcLayer) }
 
-        altThresholdRingLayer.isHidden = false
+        // Aim pad has no walk/run split, so it shows no threshold ring.
+        altThresholdRingLayer.isHidden = isAimStickPad
         altDirectionArcLayer.isHidden = true // stays hidden until the finger actually moves
         altArcBackingRingLayer.isHidden = true // tracks the arc's visibility
         altArcBackingFillLayer.isHidden = true
-        altThresholdRingLayer.opacity = 0.0
         altArcBackingRingLayer.opacity = 1.0
         altArcBackingFillLayer.opacity = 1.0
-        CATransaction.begin()
-        CATransaction.setDisableActions(false) // the caller's transaction disables actions
-        CATransaction.setAnimationDuration(0.2)
-        altThresholdRingLayer.opacity = 1.0
-        CATransaction.commit()
+        altThresholdRingLayer.opacity = 0.0 // aim pad leaves it hidden at 0; others fade in
+        if !isAimStickPad {
+            CATransaction.begin()
+            CATransaction.setDisableActions(false) // the caller's transaction disables actions
+            CATransaction.setAnimationDuration(0.2)
+            altThresholdRingLayer.opacity = 1.0
+            CATransaction.commit()
+        }
     }
 
     private func updateVectorAltIndicator() {
@@ -1886,7 +1888,8 @@ import UIKit
         altArcBackingFillLayer.position = self.touchBeganPosInSuperLayer
         // Self-heal from an interrupted fade-out (e.g. re-grip landing mid-fade):
         // model opacity is 1.0 during the normal fade-in, so this never fights it.
-        if altThresholdRingLayer.isHidden || altThresholdRingLayer.opacity < 1.0 {
+        // Aim pad never shows the threshold ring, so leave it hidden there.
+        if !isAimStickPad, altThresholdRingLayer.isHidden || altThresholdRingLayer.opacity < 1.0 {
             altThresholdRingLayer.removeAllAnimations()
             altThresholdRingLayer.isHidden = false
             altThresholdRingLayer.opacity = 1.0
@@ -1916,14 +1919,17 @@ import UIKit
         // sensitivities the input boundary is an ellipse.
         let angle = atan2(offSetY, offSetX)
         let sensAlongDirection = max(hypot(sensitivityFactorX * cos(angle), sensitivityFactorY * sin(angle)), 0.01)
+        let lead = isAimStickPad ? Self.altAimArcLeadDistance : Self.altArcLeadDistance
         let boundaryAlongDirection = stickInputScale * pow(altEffectiveRunThreshold, 1.0 / altEffectiveResponseExponent) / sensAlongDirection
-        let minRadius = boundaryAlongDirection + Self.altArcMinClearance
-        let maxRadius = stickInputScale / sensAlongDirection + Self.altArcLeadDistance
-        let radius = min(max(minRadius, travel + Self.altArcLeadDistance), maxRadius)
+        // Aim pad hugs the finger from a small floor; other pads sit outside the run ring.
+        let minRadius = isAimStickPad ? Self.altAimArcMinRadius : boundaryAlongDirection + Self.altArcMinClearance
+        let maxRadius = stickInputScale / sensAlongDirection + lead
+        let radius = min(max(minRadius, travel + lead), maxRadius)
         let weightedMag = hypot(offSetX * sensitivityFactorX, offSetY * sensitivityFactorY)
         let normalizedDeflection = min(weightedMag / stickInputScale, 1.0)
         let output = pow(normalizedDeflection, altEffectiveResponseExponent)
-        let run = output >= altEffectiveRunThreshold
+        // Aim pad has no walk state: always draw the run-styled arc.
+        let run = isAimStickPad || output >= altEffectiveRunThreshold
         applyAltArcState(run: run, radius: radius, glow: normalizedDeflection)
         altDirectionArcLayer.setAffineTransform(CGAffineTransform(rotationAngle: angle + .pi / 2))
     }
