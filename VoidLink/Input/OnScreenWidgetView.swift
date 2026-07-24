@@ -1772,9 +1772,9 @@ import UIKit
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        let halfSpan: CGFloat = run ? 31 : 18
+        let halfSpan: CGFloat = run ? 30 : 18
         let thickness: CGFloat = 2.5
-        let peak: CGFloat = run ? 8.1 : 5.4
+        let peak: CGFloat = run ? 6.9 : 4.6
         let arcPath = makeAltArcPath(radius: radius, halfSpanDeg: halfSpan, thickness: thickness, peak: peak)
         altDirectionArcLayer.path = arcPath
         altDirectionArcLayer.fillColor = UIColor(white: 1.0, alpha: run ? 0.48 : 0.32).cgColor
@@ -1826,7 +1826,7 @@ import UIKit
         altThresholdRingLayer.fillColor = UIColor.clear.cgColor
         altThresholdRingLayer.strokeColor = UIColor(white: 1.0, alpha: 0.15).cgColor
         altThresholdRingLayer.lineWidth = 1.0
-        altThresholdRingLayer.lineDashPattern = [5, 4]
+        altThresholdRingLayer.lineDashPattern = nil // solid ring per feedback
         altThresholdRingLayer.shadowColor = UIColor.black.cgColor
         altThresholdRingLayer.shadowOffset = CGSize(width: 0, height: 0.75)
         altThresholdRingLayer.shadowRadius = 0
