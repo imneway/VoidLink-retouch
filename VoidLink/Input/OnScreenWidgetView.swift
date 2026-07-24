@@ -328,7 +328,9 @@ import UIKit
     private static let altArcMinClearance: CGFloat = 20   // arc floor = threshold ring radius + this
     private static let altArcShowTravel: CGFloat = 6      // hide the arc below this finger travel
     private static let altRunOutputThreshold: CGFloat = 0.6 // stick output magnitude treated as run
-    private var usesVectorAltIndicator: Bool { return self.touchPadString == "LSPADALT" }
+    private var usesVectorAltIndicator: Bool {
+        return self.touchPadString == "LSPADALT" || self.touchPadString == "RSPADALT2"
+    }
     private let altIndicatorMaxScale: CGFloat = 1.05
     private var touchBeganPosInSuperLayer: CGPoint = .zero
 
@@ -1610,7 +1612,7 @@ import UIKit
             stickMarkerRelativeLocation = CGPointMake(touchBeganLocation.x, touchBeganLocation.y)
         }
         
-        if self.touchPadString == "LSPADALT" {
+        if self.usesVectorAltIndicator {
             // ALT 自有指示器，不创建十字或小球
             showStickBall(at: stickMarkerRelativeLocation)
             self.crossMarkLayer.isHidden = true
@@ -1738,7 +1740,7 @@ import UIKit
     // the radius changes every frame, which bitmap assets cannot do.
     private func makeAltArcPath(radius: CGFloat, halfSpanDeg: CGFloat, thickness: CGFloat, peak: CGFloat) -> CGPath {
         let halfSpan = halfSpanDeg * .pi / 180
-        let apexHalf = min(halfSpan * 0.3, 10 * .pi / 180)
+        let apexHalf = min(halfSpan * 0.21, 7 * .pi / 180)
         let up = -CGFloat.pi / 2
         let ro = radius + thickness / 2
         let ri = max(radius - thickness / 2, 1)
@@ -1766,8 +1768,8 @@ import UIKit
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        let halfSpan: CGFloat = run ? 37 : 22
-        let thickness: CGFloat = 2
+        let halfSpan: CGFloat = run ? 24 : 14
+        let thickness: CGFloat = 2.5
         let peak: CGFloat = run ? 9 : 6
         let arcPath = makeAltArcPath(radius: radius, halfSpanDeg: halfSpan, thickness: thickness, peak: peak)
         altDirectionArcLayer.path = arcPath
@@ -1793,6 +1795,19 @@ import UIKit
         return (stickResponseExponent.isFinite && stickResponseExponent > 1.0) ? stickResponseExponent : 1.0
     }
 
+    // The run threshold (Self.altRunOutputThreshold) targets the FINAL stick output
+    // sent to the host, but sendLeft/RightStickTouchPadEvent lifts that output off a
+    // minStickOffset floor: sent ≈ minFrac + (1-minFrac)*curved. Solve the curved
+    // deflection where the sent magnitude reaches the target so the ring and the
+    // walk/run switch line up with real output (RSPADALT2 sets a 0.06 floor; LSPADALT
+    // leaves it 0, so this is a no-op there).
+    private var altEffectiveRunThreshold: CGFloat {
+        guard stickMaxOffset > 0 else { return Self.altRunOutputThreshold }
+        let minFrac = min(max(minStickOffset / stickMaxOffset, 0), 0.95)
+        let t = (Self.altRunOutputThreshold - minFrac) / (1 - minFrac)
+        return min(max(t, 0.05), 0.95)
+    }
+
     private func showVectorAltIndicator() {
         altThresholdRingLayer.removeAllAnimations()
         altDirectionArcLayer.removeAllAnimations()
@@ -1801,7 +1816,7 @@ import UIKit
         // Screen boundary where the curved stick output crosses the run threshold,
         // mirroring sendLeftStickTouchPadEvent: output = (travel*sens/Range)^Curve.
         // Unequal axis sensitivities make that boundary an ellipse, not a circle.
-        let boundaryWeighted = stickInputScale * pow(Self.altRunOutputThreshold, 1.0 / altEffectiveResponseExponent)
+        let boundaryWeighted = stickInputScale * pow(altEffectiveRunThreshold, 1.0 / altEffectiveResponseExponent)
         let ringRadiusX = boundaryWeighted / max(sensitivityFactorX, 0.01)
         let ringRadiusY = boundaryWeighted / max(sensitivityFactorY, 0.01)
         // Threshold ring is drawn 5pt tighter than the true run boundary.
@@ -1901,14 +1916,14 @@ import UIKit
         // sensitivities the input boundary is an ellipse.
         let angle = atan2(offSetY, offSetX)
         let sensAlongDirection = max(hypot(sensitivityFactorX * cos(angle), sensitivityFactorY * sin(angle)), 0.01)
-        let boundaryAlongDirection = stickInputScale * pow(Self.altRunOutputThreshold, 1.0 / altEffectiveResponseExponent) / sensAlongDirection
+        let boundaryAlongDirection = stickInputScale * pow(altEffectiveRunThreshold, 1.0 / altEffectiveResponseExponent) / sensAlongDirection
         let minRadius = boundaryAlongDirection + Self.altArcMinClearance
         let maxRadius = stickInputScale / sensAlongDirection + Self.altArcLeadDistance
         let radius = min(max(minRadius, travel + Self.altArcLeadDistance), maxRadius)
         let weightedMag = hypot(offSetX * sensitivityFactorX, offSetY * sensitivityFactorY)
         let normalizedDeflection = min(weightedMag / stickInputScale, 1.0)
         let output = pow(normalizedDeflection, altEffectiveResponseExponent)
-        let run = output >= Self.altRunOutputThreshold
+        let run = output >= altEffectiveRunThreshold
         applyAltArcState(run: run, radius: radius, glow: normalizedDeflection)
         altDirectionArcLayer.setAffineTransform(CGAffineTransform(rotationAngle: angle + .pi / 2))
     }
