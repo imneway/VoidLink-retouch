@@ -316,6 +316,15 @@ import UIKit
     private var altPointerLayer = CALayer()
     private var altBackgroundLayer = CALayer()
     @objc public var altIndicatorSize: CGFloat = 160
+    // LSPADALT redesigned vector indicator: rotating direction arc + run-threshold ring.
+    // The arc keeps a fixed lead ahead of the fingertip so the finger can never cover it.
+    private let altDirectionArcLayer = CAShapeLayer()
+    private let altThresholdRingLayer = CAShapeLayer()
+    private static let altArcLeadDistance: CGFloat = 30   // arc radius = finger travel + this lead
+    private static let altArcMinRadius: CGFloat = 45      // starting radius right after touch down
+    private static let altArcShowTravel: CGFloat = 6      // hide the arc below this finger travel
+    private static let altRunOutputThreshold: CGFloat = 0.5 // stick output magnitude treated as run
+    private var usesVectorAltIndicator: Bool { return self.touchPadString == "LSPADALT" }
     private let altIndicatorMaxScale: CGFloat = 1.05
     private var touchBeganPosInSuperLayer: CGPoint = .zero
 
@@ -378,6 +387,9 @@ import UIKit
         // direction reproduces the old mask and sends no new DOWN.
         previousButtonMask = Direction.initialStatus.rawValue
         directionPadTouchBegan = true
+        // The primary's lift may have started the indicator fade-out; re-anchor and
+        // re-show it for the adopted grip, or the whole touch stays invisible.
+        if usesVectorAltIndicator { showVectorAltIndicator() }
     }
     private var altStickTouchHadMultipleTouches: Bool = false
     private var lastAltStickTouchWasStationaryTap: Bool = true
@@ -733,6 +745,14 @@ import UIKit
     deinit {
         aimTrackpadDisplayLink?.invalidate()
         OnScreenWidgetView.activeInstances.remove(self)
+        // These indicator layers live on the widget's SUPERlayer, so removing the
+        // widget view alone would orphan them there.
+        altDirectionArcLayer.removeFromSuperlayer()
+        altThresholdRingLayer.removeFromSuperlayer()
+        altBackgroundLayer.removeFromSuperlayer()
+        altPointerLayer.removeFromSuperlayer()
+        stickBallLayer.removeFromSuperlayer()
+        crossMarkLayer.removeFromSuperlayer()
     }
     
     // ======================================================================================================
@@ -1671,7 +1691,9 @@ import UIKit
         }
 
         // ALT variant: add background + pointer at touch point (replacing cross)
-        if self.isAltStickPad {
+        if self.usesVectorAltIndicator {
+            showVectorAltIndicator()
+        } else if self.isAltStickPad {
             altBackgroundLayer.bounds = CGRect(x: 0, y: 0, width: altIndicatorSize, height: altIndicatorSize)
             altBackgroundLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
             altBackgroundLayer.contentsScale = UIScreen.main.scale
@@ -1703,13 +1725,155 @@ import UIKit
         CATransaction.commit()
     }
 
-    
+    // MARK: - LSPADALT vector indicator (direction arc + run-threshold ring)
+
+    // Arc band with a pointed apex, built pointing up around the origin; the layer is
+    // rotated to the stick direction. Vector paths keep edge thickness constant while
+    // the radius changes every frame, which bitmap assets cannot do.
+    private func makeAltArcPath(radius: CGFloat, halfSpanDeg: CGFloat, thickness: CGFloat, peak: CGFloat) -> CGPath {
+        let halfSpan = halfSpanDeg * .pi / 180
+        let apexHalf = min(halfSpan * 0.3, 10 * .pi / 180)
+        let up = -CGFloat.pi / 2
+        let ro = radius + thickness / 2
+        let ri = max(radius - thickness / 2, 1)
+        let path = UIBezierPath()
+        path.move(to: CGPoint(x: ro * cos(up - halfSpan), y: ro * sin(up - halfSpan)))
+        path.addArc(withCenter: .zero, radius: ro, startAngle: up - halfSpan, endAngle: up - apexHalf, clockwise: true)
+        path.addLine(to: CGPoint(x: (ro + peak) * cos(up), y: (ro + peak) * sin(up)))
+        path.addLine(to: CGPoint(x: ro * cos(up + apexHalf), y: ro * sin(up + apexHalf)))
+        path.addArc(withCenter: .zero, radius: ro, startAngle: up + apexHalf, endAngle: up + halfSpan, clockwise: true)
+        path.addLine(to: CGPoint(x: ri * cos(up + halfSpan), y: ri * sin(up + halfSpan)))
+        path.addArc(withCenter: .zero, radius: ri, startAngle: up + halfSpan, endAngle: up - halfSpan, clockwise: false)
+        path.close()
+        return path.cgPath
+    }
+
+    private func applyAltArcState(run: Bool, radius: CGFloat) {
+        // Walk: short/thin/dim. Run: long/thick/bright. Opacities follow the
+        // user-calibrated palette of the original assets (white fill + faint black drop shadow).
+        let halfSpan: CGFloat = run ? 44 : 26
+        let thickness: CGFloat = run ? 7 : 5
+        let peak: CGFloat = run ? 9 : 6
+        altDirectionArcLayer.path = makeAltArcPath(radius: radius, halfSpanDeg: halfSpan, thickness: thickness, peak: peak)
+        altDirectionArcLayer.fillColor = UIColor(white: 1.0, alpha: run ? 0.66 : 0.40).cgColor
+    }
+
+    private var altEffectiveResponseExponent: CGFloat {
+        return (stickResponseExponent.isFinite && stickResponseExponent > 1.0) ? stickResponseExponent : 1.0
+    }
+
+    private func showVectorAltIndicator() {
+        altThresholdRingLayer.removeAllAnimations()
+        altDirectionArcLayer.removeAllAnimations()
+        // Screen boundary where the curved stick output crosses the run threshold,
+        // mirroring sendLeftStickTouchPadEvent: output = (travel*sens/Range)^Curve.
+        // Unequal axis sensitivities make that boundary an ellipse, not a circle.
+        let boundaryWeighted = stickInputScale * pow(Self.altRunOutputThreshold, 1.0 / altEffectiveResponseExponent)
+        let ringRadiusX = boundaryWeighted / max(sensitivityFactorX, 0.01)
+        let ringRadiusY = boundaryWeighted / max(sensitivityFactorY, 0.01)
+
+        altThresholdRingLayer.path = UIBezierPath(ovalIn: CGRect(x: -ringRadiusX, y: -ringRadiusY,
+                                                                 width: ringRadiusX * 2, height: ringRadiusY * 2)).cgPath
+        altThresholdRingLayer.fillColor = UIColor.clear.cgColor
+        altThresholdRingLayer.strokeColor = UIColor(white: 1.0, alpha: 0.30).cgColor
+        altThresholdRingLayer.lineWidth = 1.0
+        altThresholdRingLayer.lineDashPattern = [5, 4]
+        altThresholdRingLayer.shadowColor = UIColor.black.cgColor
+        altThresholdRingLayer.shadowOffset = CGSize(width: 0, height: 0.75)
+        altThresholdRingLayer.shadowRadius = 0
+        altThresholdRingLayer.shadowOpacity = 0.30
+        altThresholdRingLayer.position = self.touchBeganPosInSuperLayer
+        if altThresholdRingLayer.superlayer == nil { self.layer.superlayer?.addSublayer(altThresholdRingLayer) }
+
+        altDirectionArcLayer.shadowColor = UIColor.black.cgColor
+        altDirectionArcLayer.shadowOffset = CGSize(width: 0, height: 1.5)
+        altDirectionArcLayer.shadowRadius = 0
+        altDirectionArcLayer.shadowOpacity = 0.10
+        altDirectionArcLayer.strokeColor = UIColor.clear.cgColor
+        altDirectionArcLayer.position = self.touchBeganPosInSuperLayer
+        altDirectionArcLayer.setAffineTransform(.identity)
+        applyAltArcState(run: false, radius: Self.altArcMinRadius)
+        if altDirectionArcLayer.superlayer == nil { self.layer.superlayer?.addSublayer(altDirectionArcLayer) }
+
+        altThresholdRingLayer.isHidden = false
+        altDirectionArcLayer.isHidden = true // stays hidden until the finger actually moves
+        altThresholdRingLayer.opacity = 0.0
+        CATransaction.begin()
+        CATransaction.setDisableActions(false) // the caller's transaction disables actions
+        CATransaction.setAnimationDuration(0.2)
+        altThresholdRingLayer.opacity = 1.0
+        CATransaction.commit()
+    }
+
+    private func updateVectorAltIndicator() {
+        altThresholdRingLayer.position = self.touchBeganPosInSuperLayer
+        altDirectionArcLayer.position = self.touchBeganPosInSuperLayer
+        // Self-heal from an interrupted fade-out (e.g. re-grip landing mid-fade):
+        // model opacity is 1.0 during the normal fade-in, so this never fights it.
+        if altThresholdRingLayer.isHidden || altThresholdRingLayer.opacity < 1.0 {
+            altThresholdRingLayer.removeAllAnimations()
+            altThresholdRingLayer.isHidden = false
+            altThresholdRingLayer.opacity = 1.0
+        }
+
+        let travel = hypot(offSetX, offSetY)
+        if travel < Self.altArcShowTravel {
+            altDirectionArcLayer.isHidden = true
+            return
+        }
+        if altDirectionArcLayer.isHidden || altDirectionArcLayer.opacity < 1.0 {
+            altDirectionArcLayer.removeAllAnimations()
+            altDirectionArcLayer.isHidden = false
+            altDirectionArcLayer.opacity = 1.0
+        }
+
+        // Cap the arc at the maximum useful travel along the CURRENT direction —
+        // with unequal axis sensitivities the input boundary is an ellipse.
+        let angle = atan2(offSetY, offSetX)
+        let sensAlongDirection = max(hypot(sensitivityFactorX * cos(angle), sensitivityFactorY * sin(angle)), 0.01)
+        let maxRadius = stickInputScale / sensAlongDirection + Self.altArcLeadDistance
+        let radius = min(max(Self.altArcMinRadius, travel + Self.altArcLeadDistance), maxRadius)
+        let weightedMag = hypot(offSetX * sensitivityFactorX, offSetY * sensitivityFactorY)
+        let output = pow(min(weightedMag / stickInputScale, 1.0), altEffectiveResponseExponent)
+        let run = output >= Self.altRunOutputThreshold
+        applyAltArcState(run: run, radius: radius)
+        altDirectionArcLayer.setAffineTransform(CGAffineTransform(rotationAngle: angle + .pi / 2))
+    }
+
+    private func hideVectorAltIndicator(animated: Bool) {
+        if animated {
+            CATransaction.begin()
+            CATransaction.setDisableActions(false)
+            CATransaction.setAnimationDuration(0.2)
+            altThresholdRingLayer.opacity = 0.0
+            altDirectionArcLayer.opacity = 0.0
+            CATransaction.setCompletionBlock {
+                // A quick re-grip can land inside this 0.2s fade; hiding then would
+                // blank the indicator for the whole new touch.
+                guard !self.touchBegan else { return }
+                self.altThresholdRingLayer.isHidden = true
+                self.altDirectionArcLayer.isHidden = true
+                self.altDirectionArcLayer.setAffineTransform(.identity)
+            }
+            CATransaction.commit()
+        } else {
+            altThresholdRingLayer.isHidden = true
+            altDirectionArcLayer.isHidden = true
+            altThresholdRingLayer.opacity = 0.0
+            altDirectionArcLayer.opacity = 0.0
+            altDirectionArcLayer.setAffineTransform(.identity)
+        }
+    }
+
     @objc public func updateStickIndicator(){
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         self.stickBallLayer.removeAllAnimations()
         if !OnScreenWidgetView.editMode {
-            if self.isAltStickPad {
+            if self.usesVectorAltIndicator {
+                updateVectorAltIndicator()
+            }
+            else if self.isAltStickPad {
                 let k = CGFloat(18.0)/stickInputScale
                 var x = offSetX*sensitivityFactorX * k
                 var y = offSetY*sensitivityFactorY * k
@@ -1774,6 +1938,9 @@ import UIKit
         if self.isAltStickPad {
             self.stickBallLayer.position = CGPoint(x: CGRectGetMinX(self.frame) + self.touchBeganLocation.x,
                                                    y: CGRectGetMinY(self.frame) + self.touchBeganLocation.y)
+            if self.usesVectorAltIndicator {
+                hideVectorAltIndicator(animated: true)
+            }
             // fade out ALT indicator (background & pointer)
             CATransaction.begin()
             CATransaction.setAnimationDuration(0.2)
@@ -1821,6 +1988,7 @@ import UIKit
         self.altPointerLayer.opacity = 0.0
         self.altBackgroundLayer.setAffineTransform(.identity)
         self.altPointerLayer.setAffineTransform(.identity)
+        hideVectorAltIndicator(animated: false)
         CATransaction.commit()
     }
     
