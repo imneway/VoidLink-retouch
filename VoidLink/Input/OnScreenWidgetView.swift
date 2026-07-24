@@ -320,10 +320,10 @@ import UIKit
     // The arc keeps a fixed lead ahead of the fingertip so the finger can never cover it.
     private let altDirectionArcLayer = CAShapeLayer()
     private let altThresholdRingLayer = CAShapeLayer()
-    private static let altArcLeadDistance: CGFloat = 30   // arc radius = finger travel + this lead
-    private static let altArcMinRadius: CGFloat = 45      // starting radius right after touch down
+    private static let altArcLeadDistance: CGFloat = 45   // arc radius = finger travel + this lead
+    private static let altArcMinClearance: CGFloat = 20   // arc floor = threshold ring radius + this
     private static let altArcShowTravel: CGFloat = 6      // hide the arc below this finger travel
-    private static let altRunOutputThreshold: CGFloat = 0.5 // stick output magnitude treated as run
+    private static let altRunOutputThreshold: CGFloat = 0.6 // stick output magnitude treated as run
     private var usesVectorAltIndicator: Bool { return self.touchPadString == "LSPADALT" }
     private let altIndicatorMaxScale: CGFloat = 1.05
     private var touchBeganPosInSuperLayer: CGPoint = .zero
@@ -1748,14 +1748,24 @@ import UIKit
         return path.cgPath
     }
 
-    private func applyAltArcState(run: Bool, radius: CGFloat) {
-        // Walk: short/thin/dim. Run: long/thick/bright. Opacities follow the
-        // user-calibrated palette of the original assets (white fill + faint black drop shadow).
+    private func applyAltArcState(run: Bool, radius: CGFloat, glow: CGFloat) {
+        // Walk: short/thin/dim. Run: long/thick/bright. Fill opacities follow the
+        // user-calibrated palette of the original assets; a thin dark stroke keeps the
+        // edge readable on light backgrounds, and a white outer glow swells with
+        // finger travel (glow is the normalized 0-1 deflection).
         let halfSpan: CGFloat = run ? 44 : 26
-        let thickness: CGFloat = run ? 7 : 5
+        let thickness: CGFloat = run ? 3.5 : 2.5
         let peak: CGFloat = run ? 9 : 6
-        altDirectionArcLayer.path = makeAltArcPath(radius: radius, halfSpanDeg: halfSpan, thickness: thickness, peak: peak)
+        let arcPath = makeAltArcPath(radius: radius, halfSpanDeg: halfSpan, thickness: thickness, peak: peak)
+        altDirectionArcLayer.path = arcPath
+        // Explicit shadowPath keeps the animated glow off the slow content-derived
+        // shadow mask path (120Hz frame budget).
+        altDirectionArcLayer.shadowPath = arcPath
         altDirectionArcLayer.fillColor = UIColor(white: 1.0, alpha: run ? 0.66 : 0.40).cgColor
+        altDirectionArcLayer.shadowColor = UIColor.white.cgColor
+        altDirectionArcLayer.shadowOffset = .zero
+        altDirectionArcLayer.shadowRadius = 2 + 6 * glow
+        altDirectionArcLayer.shadowOpacity = Float(0.25 + 0.45 * glow)
     }
 
     private var altEffectiveResponseExponent: CGFloat {
@@ -1785,14 +1795,12 @@ import UIKit
         altThresholdRingLayer.position = self.touchBeganPosInSuperLayer
         if altThresholdRingLayer.superlayer == nil { self.layer.superlayer?.addSublayer(altThresholdRingLayer) }
 
-        altDirectionArcLayer.shadowColor = UIColor.black.cgColor
-        altDirectionArcLayer.shadowOffset = CGSize(width: 0, height: 1.5)
-        altDirectionArcLayer.shadowRadius = 0
-        altDirectionArcLayer.shadowOpacity = 0.10
-        altDirectionArcLayer.strokeColor = UIColor.clear.cgColor
+        altDirectionArcLayer.strokeColor = UIColor(white: 0.0, alpha: 0.25).cgColor
+        altDirectionArcLayer.lineWidth = 0.75
+        altDirectionArcLayer.lineJoin = .round // avoid miter spikes at the apex
         altDirectionArcLayer.position = self.touchBeganPosInSuperLayer
         altDirectionArcLayer.setAffineTransform(.identity)
-        applyAltArcState(run: false, radius: Self.altArcMinRadius)
+        applyAltArcState(run: false, radius: ringRadiusX + Self.altArcMinClearance, glow: 0)
         if altDirectionArcLayer.superlayer == nil { self.layer.superlayer?.addSublayer(altDirectionArcLayer) }
 
         altThresholdRingLayer.isHidden = false
@@ -1827,16 +1835,20 @@ import UIKit
             altDirectionArcLayer.opacity = 1.0
         }
 
-        // Cap the arc at the maximum useful travel along the CURRENT direction —
-        // with unequal axis sensitivities the input boundary is an ellipse.
+        // Clamp the arc between the threshold ring and the maximum useful travel,
+        // both measured along the CURRENT direction — with unequal axis
+        // sensitivities the input boundary is an ellipse.
         let angle = atan2(offSetY, offSetX)
         let sensAlongDirection = max(hypot(sensitivityFactorX * cos(angle), sensitivityFactorY * sin(angle)), 0.01)
+        let boundaryAlongDirection = stickInputScale * pow(Self.altRunOutputThreshold, 1.0 / altEffectiveResponseExponent) / sensAlongDirection
+        let minRadius = boundaryAlongDirection + Self.altArcMinClearance
         let maxRadius = stickInputScale / sensAlongDirection + Self.altArcLeadDistance
-        let radius = min(max(Self.altArcMinRadius, travel + Self.altArcLeadDistance), maxRadius)
+        let radius = min(max(minRadius, travel + Self.altArcLeadDistance), maxRadius)
         let weightedMag = hypot(offSetX * sensitivityFactorX, offSetY * sensitivityFactorY)
-        let output = pow(min(weightedMag / stickInputScale, 1.0), altEffectiveResponseExponent)
+        let normalizedDeflection = min(weightedMag / stickInputScale, 1.0)
+        let output = pow(normalizedDeflection, altEffectiveResponseExponent)
         let run = output >= Self.altRunOutputThreshold
-        applyAltArcState(run: run, radius: radius)
+        applyAltArcState(run: run, radius: radius, glow: normalizedDeflection)
         altDirectionArcLayer.setAffineTransform(CGAffineTransform(rotationAngle: angle + .pi / 2))
     }
 
