@@ -323,7 +323,8 @@ import UIKit
     private let altArcBackingRingLayer = CAShapeLayer()  // 1pt BFBFBF outline the arc rides on
     private let altArcBackingFillLayer = CAGradientLayer() // radial fill: clear center -> BFBFBF edge
     private let altArcBackingMaskLayer = CAShapeLayer()   // circular mask clipping the gradient
-    private static let altArcLeadDistance: CGFloat = 55   // arc radius = finger travel + this lead
+    private static let altArcLeadDistance: CGFloat = 50   // arc radius = finger travel + this lead
+    private static let altThresholdRingInset: CGFloat = 5 // draw the dashed ring this much inside the boundary
     private static let altArcMinClearance: CGFloat = 20   // arc floor = threshold ring radius + this
     private static let altArcShowTravel: CGFloat = 6      // hide the arc below this finger travel
     private static let altRunOutputThreshold: CGFloat = 0.6 // stick output magnitude treated as run
@@ -1766,7 +1767,7 @@ import UIKit
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         let halfSpan: CGFloat = run ? 37 : 22
-        let thickness: CGFloat = run ? 3.5 : 2.5
+        let thickness: CGFloat = 2
         let peak: CGFloat = run ? 9 : 6
         let arcPath = makeAltArcPath(radius: radius, halfSpanDeg: halfSpan, thickness: thickness, peak: peak)
         altDirectionArcLayer.path = arcPath
@@ -1777,7 +1778,7 @@ import UIKit
         altDirectionArcLayer.shadowColor = UIColor.white.cgColor
         altDirectionArcLayer.shadowOffset = .zero
         altDirectionArcLayer.shadowRadius = 2
-        altDirectionArcLayer.shadowOpacity = Float(0.15 + 0.30 * glow)
+        altDirectionArcLayer.shadowOpacity = Float(0.10 + 0.20 * glow)
         // Backing sits at the same radius, un-rotated (a full circle): outline + a
         // radial fill masked to that circle.
         altArcBackingRingLayer.path = UIBezierPath(arcCenter: .zero, radius: radius,
@@ -1803,11 +1804,14 @@ import UIKit
         let boundaryWeighted = stickInputScale * pow(Self.altRunOutputThreshold, 1.0 / altEffectiveResponseExponent)
         let ringRadiusX = boundaryWeighted / max(sensitivityFactorX, 0.01)
         let ringRadiusY = boundaryWeighted / max(sensitivityFactorY, 0.01)
+        // Threshold ring is drawn 5pt tighter than the true run boundary.
+        let ringDrawX = max(ringRadiusX - Self.altThresholdRingInset, 1)
+        let ringDrawY = max(ringRadiusY - Self.altThresholdRingInset, 1)
 
-        altThresholdRingLayer.path = UIBezierPath(ovalIn: CGRect(x: -ringRadiusX, y: -ringRadiusY,
-                                                                 width: ringRadiusX * 2, height: ringRadiusY * 2)).cgPath
+        altThresholdRingLayer.path = UIBezierPath(ovalIn: CGRect(x: -ringDrawX, y: -ringDrawY,
+                                                                 width: ringDrawX * 2, height: ringDrawY * 2)).cgPath
         altThresholdRingLayer.fillColor = UIColor.clear.cgColor
-        altThresholdRingLayer.strokeColor = UIColor(white: 1.0, alpha: 0.30).cgColor
+        altThresholdRingLayer.strokeColor = UIColor(white: 1.0, alpha: 0.15).cgColor
         altThresholdRingLayer.lineWidth = 1.0
         altThresholdRingLayer.lineDashPattern = [5, 4]
         altThresholdRingLayer.shadowColor = UIColor.black.cgColor
@@ -1821,7 +1825,7 @@ import UIKit
         let bfbfbf: CGFloat = 0.749
         altArcBackingFillLayer.type = .radial
         altArcBackingFillLayer.colors = [UIColor(white: bfbfbf, alpha: 0.0).cgColor,
-                                         UIColor(white: bfbfbf, alpha: 0.06).cgColor]
+                                         UIColor(white: bfbfbf, alpha: 0.03).cgColor]
         altArcBackingFillLayer.locations = [0, 1]
         altArcBackingFillLayer.startPoint = CGPoint(x: 0.5, y: 0.5)
         altArcBackingFillLayer.endPoint = CGPoint(x: 1, y: 1) // radius reaches the mask edge
@@ -1829,7 +1833,7 @@ import UIKit
         altArcBackingFillLayer.position = self.touchBeganPosInSuperLayer
 
         altArcBackingRingLayer.fillColor = UIColor.clear.cgColor
-        altArcBackingRingLayer.strokeColor = UIColor(white: bfbfbf, alpha: 0.10).cgColor
+        altArcBackingRingLayer.strokeColor = UIColor(white: bfbfbf, alpha: 0.05).cgColor
         altArcBackingRingLayer.lineWidth = 1
         altArcBackingRingLayer.position = self.touchBeganPosInSuperLayer
 
