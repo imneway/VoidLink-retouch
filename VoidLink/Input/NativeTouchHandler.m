@@ -158,7 +158,14 @@
     NSNumber* touchAddrObj = @((uintptr_t)touch);
     unassignedPointerIds = [pointerIdPool mutableCopy]; //reset unassignedPointerIds
     [unassignedPointerIds minusSet:activePointerIds];
-    NSNumber* pointerIdObj = @([[unassignedPointerIds anyObject] unsignedIntValue]);
+    NSNumber* freePointerId = [unassignedPointerIds anyObject];
+    if (freePointerId == nil) {
+        // Pool exhausted: leave the touch unregistered. Registering the nil-derived
+        // id 0 would collide with a live finger's pointer host-side; sendTouchEvent
+        // skips unregistered touches instead.
+        return;
+    }
+    NSNumber* pointerIdObj = @([freePointerId unsignedIntValue]);
     [pointerIdDict setObject:pointerIdObj forKey:touchAddrObj];
     [activePointerIds addObject:pointerIdObj];
     
@@ -202,7 +209,15 @@
     CGSize videoSize = [self getVideoAreaSize];
     CGFloat normalizedX = location.x / videoSize.width;
     CGFloat normalizedY = location.y / videoSize.height;
-    uint8_t pointerId = [self retrievePointerIdFromDict:touch];
+    NSNumber* pointerIdObj = [pointerIdDict objectForKey:@((uintptr_t)touch)];
+    if (pointerIdObj == nil) {
+        // Never-registered touch: its DOWN was consumed elsewhere (OSC capture, a
+        // dropped began, pool exhaustion). unsignedIntValue on nil fabricates
+        // pointerId 0, which hijacks another live finger's pointer host-side —
+        // seen as touch-point teleporting / phantom taps. Drop the event instead.
+        return;
+    }
+    uint8_t pointerId = [pointerIdObj unsignedIntValue];
 
     if([self getPointerObjFromDict:touch].needResetCoords){ // access whether the current pointer has reached the boundary, and need a coord reset.
         LiSendTouchEvent(LI_TOUCH_EVENT_UP, pointerId, normalizedX, normalizedY, 0, 0, 0, 0);  //event must sent from the lowest level directy by LiSendTouchEvent to simulate continous dragging to another point on screen

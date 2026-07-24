@@ -75,6 +75,9 @@ static NSSet *validPositionButtonNames;
     ControllerSupport *_controllerSupport;
     VoidController *_controller;
     NSMutableArray* _deadTouches;
+    // Hold counts per controller-button flag for the widget-side press/release
+    // wrappers — see pressDownControllerButton. Guarded by @synchronized(self).
+    NSMutableDictionary<NSNumber*, NSNumber*>* _oscButtonHoldCounts;
     BOOL _swapABButtons;
     BOOL _swapXYButtons;
     BOOL _largerStickLR1;
@@ -208,14 +211,56 @@ static float L3_Y;
     [_controllerSupport updateFinished:_controller];
 }
 
+// Widget-side button flags are hold-COUNTED: two sources can legitimately hold
+// the same token at once (a B+R2 conditional combo and a plain B button, a
+// double-tap L3 and another combo containing OSCL3). Raw set/clear let one
+// source's UP release the other's live hold. The flag is set on 0→1 and
+// cleared only when the count returns to 0; a release at count 0 still clears
+// (bulk cleanup paths — DPAD 4-way release etc. — keep their semantics).
+// Counter access is synchronized: combo tokens press/release from the per-widget
+// serial send queues, not just the main thread.
 - (void) pressDownControllerButton: (int)flag{
-    [_controllerSupport setButtonFlag:_controller flags:flag];
+    // Count mutation and flag mutation stay inside ONE critical section:
+    // per-widget combo queues press/release concurrently, and a 0→1 press
+    // reordered against a 1→0 release would leave the flag contradicting
+    // its count (a held button host-side with count 0, or vice versa).
+    @synchronized (self) {
+        if (_oscButtonHoldCounts == nil) { _oscButtonHoldCounts = [[NSMutableDictionary alloc] init]; }
+        int count = [_oscButtonHoldCounts[@(flag)] intValue];
+        _oscButtonHoldCounts[@(flag)] = @(count + 1);
+        if (count == 0) {
+            [_controllerSupport setButtonFlag:_controller flags:flag];
+        }
+    }
     [_controllerSupport updateFinished:_controller];
 }
 
 - (void) releaseControllerButton: (int)flag{
-    [_controllerSupport clearButtonFlag:_controller flags:flag];
+    @synchronized (self) {
+        int count = [_oscButtonHoldCounts[@(flag)] intValue];
+        if (count > 0) { count -= 1; }
+        _oscButtonHoldCounts[@(flag)] = @(count);
+        if (count == 0) {
+            [_controllerSupport clearButtonFlag:_controller flags:flag];
+        }
+    }
     [_controllerSupport updateFinished:_controller];
+}
+
+// Hard reset for cleanup paths: forget all holds and clear the given flags
+// unconditionally, so a leaked press can't strand a button down forever.
+- (void) forceReleaseAllCountedButtons {
+    BOOL clearedAny = NO;
+    @synchronized (self) {
+        for (NSNumber* flagObj in [_oscButtonHoldCounts allKeys]) {
+            [_controllerSupport clearButtonFlag:_controller flags:[flagObj intValue]];
+            clearedAny = YES;
+        }
+        [_oscButtonHoldCounts removeAllObjects];
+    }
+    if (clearedAny) {
+        [_controllerSupport updateFinished:_controller];
+    }
 }
 
 - (void) updateLeftTrigger:(unsigned char)input{
@@ -335,6 +380,10 @@ static float L3_Y;
 - (void) popMotionButtonPause { [_controllerSupport popMotionButtonPause]; }
 
 - (void) cancelAllActiveTouches {
+    // Global cleanup: also forget every counted widget-side hold so a leaked
+    // press can never strand a button down past this point.
+    [self forceReleaseAllCountedButtons];
+
     NSMutableSet *activeTouches = [NSMutableSet set];
 
     if (_aTouch) { [activeTouches addObject:_aTouch]; }

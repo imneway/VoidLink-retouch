@@ -340,6 +340,45 @@ import UIKit
     private static let altDoubleTapConfirmDelay: TimeInterval = 0.08
     private var pendingDoubleTapComboWork: DispatchWorkItem? = nil
     private var altStickTouchMovedBeyondTapSlop: Bool = false
+
+    // Stick/direction pads are single-logical-touch surfaces, but the view must
+    // still enable multi-touch (see touchesBegan): with it off, UIKit silently
+    // drops a new touch that overlaps the previous one (fast re-grips: the new
+    // contact lands before the old one fully lifts) and NEVER delivers it — the
+    // pad reads dead for that entire grip. Instead we designate one primary touch,
+    // ignore extras, and adopt a live successor when the primary lifts.
+    private var primaryPadTouchId: ObjectIdentifier? = nil
+    private var usesPrimaryTouchTracking: Bool {
+        return widgetType == WidgetTypeEnum.touchPad
+            && !touchPadString.isEmpty
+            && touchPadString != "MOUSEPAD"
+            && touchPadString != "DS4TOUCH"
+    }
+
+    private func adoptSuccessorPadTouch(from event: UIEvent?, excluding ended: Set<UITouch>) {
+        guard let successor = event?.allTouches?.first(where: { candidate in
+            candidate.view == self
+                && !ended.contains(candidate)
+                && !passthroughPencilTouches.contains(candidate)
+                && (candidate.phase == .began || candidate.phase == .moved || candidate.phase == .stationary)
+        }) else { return }
+        primaryPadTouchId = ObjectIdentifier(successor)
+        // Fresh anchor at the successor's current position — the new grip's stroke
+        // starts from zero deflection there.
+        touchBegan = true
+        firstTouchMoved = false
+        touchBeganLocation = successor.location(in: self)
+        latestTouchLocation = touchBeganLocation
+        if let superLayer = self.layer.superlayer {
+            touchBeganPosInSuperLayer = superLayer.convert(touchBeganLocation, from: self.layer)
+        }
+        if isAimStickPad { aimHasAnchor = false }
+        // Direction pads: the primary's lift released every direction host-side.
+        // Without resetting the mask state, a successor moving in the SAME
+        // direction reproduces the old mask and sends no new DOWN.
+        previousButtonMask = Direction.initialStatus.rawValue
+        directionPadTouchBegan = true
+    }
     private var altStickTouchHadMultipleTouches: Bool = false
     private var lastAltStickTouchWasStationaryTap: Bool = true
     @objc public var stickIndicatorOffset: CGFloat = 120
@@ -446,7 +485,10 @@ import UIKit
     // quick tap's UP block could overtake the delayed DOWN block and the host was
     // left with the key stuck pressed. One serial queue per widget keeps every
     // down/up sequence in submission order while staying off the main thread.
-    private let comboSendQueue = DispatchQueue(label: "com.voidlink.combo-send", qos: .userInteractive)
+    // Per-widget FIFO that TARGETS the app-wide serial key queue: this widget's
+    // sequences stay ordered AND can't interleave with any other widget's (or a
+    // legacy "+" combo's) raw DOWN/UP events mid-chord.
+    private let comboSendQueue = DispatchQueue(label: "com.voidlink.combo-send", qos: .userInteractive, target: CommandManager.keySendSerialQueue)
     
     //controller touch pad
     private var pointerIdPool: Set<UInt32>
@@ -1880,85 +1922,42 @@ import UIKit
         if nearZeroPoint {pressedButtonMask = 0}
         
         if pressedButtonMask != previousButtonMask || directionPadTouchBegan {
+            // Send only TRANSITIONS (bit-diff against the previous mask). The old
+            // code re-pressed every still-held direction and re-released every idle
+            // one on each change — harmless with idempotent bit-setting, but the
+            // controller flags are hold-COUNTED now (pressDownControllerButton), so
+            // a re-press without a matching extra release stranded the direction
+            // down; keyboard pads also flooded redundant UP events.
+            let effectivePreviousMask = directionPadTouchBegan ? 0 : previousButtonMask
             directionPadTouchBegan = false
-            if(pressedButtonMask & Direction.up.rawValue == Direction.up.rawValue) {
-            showLrudDirectionIndicator(with: upIndicator)
-            switch touchPadString {
-                case "WASDPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["W"]!,Int8(KEY_ACTION_DOWN), 0)
-                case "ARROWPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["UP_ARROW"]!,Int8(KEY_ACTION_DOWN), 0)
-                case "DPAD": self.onScreenControls.pressDownControllerButton(UP_FLAG)
-                default: break
+            let directions: [(Direction, CAShapeLayer, String, String, Int32)] = [
+                (.up, upIndicator, "W", "UP_ARROW", UP_FLAG),
+                (.down, downIndicator, "S", "DOWN_ARROW", DOWN_FLAG),
+                (.left, leftIndicator, "A", "LEFT_ARROW", LEFT_FLAG),
+                (.right, rightIndicator, "D", "RIGHT_ARROW", RIGHT_FLAG),
+            ]
+            for (direction, indicator, wasdKey, arrowKey, dpadFlag) in directions {
+                let isDown = pressedButtonMask & direction.rawValue == direction.rawValue
+                if isDown {
+                    showLrudDirectionIndicator(with: indicator)
+                } else {
+                    indicator.borderColor = UIColor.clear.cgColor
                 }
-            }
-            else{
-                //self.upIndicator.removeFromSuperlayer()
-                self.upIndicator.borderColor = UIColor.clear.cgColor
+                let wasDown = effectivePreviousMask & direction.rawValue == direction.rawValue
+                guard isDown != wasDown else { continue }
                 switch touchPadString {
-                case "WASDPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["W"]!,Int8(KEY_ACTION_UP), 0)
-                case "ARROWPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["UP_ARROW"]!,Int8(KEY_ACTION_UP), 0)
-                case "DPAD": self.onScreenControls.releaseControllerButton(UP_FLAG)
-                default: break
-                }
-            }
-            if(pressedButtonMask & Direction.down.rawValue == Direction.down.rawValue){
-                showLrudDirectionIndicator(with: downIndicator)
-                switch touchPadString {
-                case "WASDPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["S"]!,Int8(KEY_ACTION_DOWN), 0)
-                case "ARROWPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["DOWN_ARROW"]!,Int8(KEY_ACTION_DOWN), 0)
-                case "DPAD": self.onScreenControls.pressDownControllerButton(DOWN_FLAG)
-                default: break
-                }
-            }
-            else{
-                // self.downIndicator.removeFromSuperlayer()
-                self.downIndicator.borderColor = UIColor.clear.cgColor
-                switch touchPadString {
-                case "WASDPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["S"]!,Int8(KEY_ACTION_UP), 0)
-                case "ARROWPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["DOWN_ARROW"]!,Int8(KEY_ACTION_UP), 0)
-                case "DPAD": self.onScreenControls.releaseControllerButton(DOWN_FLAG)
-                default: break
-                }
-            }
-            if(pressedButtonMask & Direction.left.rawValue == Direction.left.rawValue){
-                showLrudDirectionIndicator(with: leftIndicator)
-                switch touchPadString {
-                case "WASDPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["A"]!,Int8(KEY_ACTION_DOWN), 0)
-                case "ARROWPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["LEFT_ARROW"]!,Int8(KEY_ACTION_DOWN), 0)
-                case "DPAD": self.onScreenControls.pressDownControllerButton(LEFT_FLAG)
-                default: break
-                }
-            }
-            else{
-                // self.leftIndicator.removeFromSuperlayer()
-                self.leftIndicator.borderColor = UIColor.clear.cgColor
-                switch touchPadString {
-                case "WASDPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["A"]!,Int8(KEY_ACTION_UP), 0)
-                case "ARROWPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["LEFT_ARROW"]!,Int8(KEY_ACTION_UP), 0)
-                case "DPAD": self.onScreenControls.releaseControllerButton(LEFT_FLAG)
-                default: break
-                }
-            }
-            if(pressedButtonMask & Direction.right.rawValue == Direction.right.rawValue){
-                showLrudDirectionIndicator(with: rightIndicator)
-                switch touchPadString {
-                case "WASDPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["D"]!,Int8(KEY_ACTION_DOWN), 0)
-                case "ARROWPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["RIGHT_ARROW"]!,Int8(KEY_ACTION_DOWN), 0)
-                case "DPAD": self.onScreenControls.pressDownControllerButton(RIGHT_FLAG)
-                default: break
-                }
-            }
-            else{
-                // self.rightIndicator.removeFromSuperlayer()
-                self.rightIndicator.borderColor = UIColor.clear.cgColor
-                switch touchPadString {
-                case "WASDPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["D"]!,Int8(KEY_ACTION_UP), 0)
-                case "ARROWPAD": LiSendKeyboardEvent(CommandManager.keyboardButtonMappings["RIGHT_ARROW"]!,Int8(KEY_ACTION_UP), 0)
-                case "DPAD": self.onScreenControls.releaseControllerButton(RIGHT_FLAG)
+                case "WASDPAD":
+                    LiSendKeyboardEvent(CommandManager.keyboardButtonMappings[wasdKey]!, Int8(isDown ? KEY_ACTION_DOWN : KEY_ACTION_UP), 0)
+                case "ARROWPAD":
+                    LiSendKeyboardEvent(CommandManager.keyboardButtonMappings[arrowKey]!, Int8(isDown ? KEY_ACTION_DOWN : KEY_ACTION_UP), 0)
+                case "DPAD":
+                    if isDown { self.onScreenControls.pressDownControllerButton(dpadFlag) }
+                    else { self.onScreenControls.releaseControllerButton(dpadFlag) }
                 default: break
                 }
             }
         }
-        
+
         previousButtonMask = pressedButtonMask
         
         CATransaction.commit()
@@ -2120,10 +2119,13 @@ import UIKit
         // (e.g. each LSPADALT lift released L3 host-side), which cut short the same
         // token held by any other widget. Visual cleanup below still runs.
         if !OnScreenWidgetView.editMode && !CommandManager.specialOverlayButtonCmds.contains(self.cmdString)
-            && self.widgetType != WidgetTypeEnum.touchPad {
+            && self.widgetType != WidgetTypeEnum.touchPad,
+           let releaseStrings = self.heldDispatchStrings {
             // Release exactly the branch that went down (latched at button-down), so a
-            // mid-press change in arming can't strand keys held.
-            let releaseStrings = self.heldDispatchStrings ?? self.comboButtonStrings
+            // mid-press change in arming can't strand keys held. No fallback when
+            // nothing is latched: releasing comboButtonStrings anyway emitted duplicate
+            // UPs (second lift of a multi-finger press, slide-up passes) that cut short
+            // the same token held by another widget.
             self.sendComboButtonsUpEvent(comboStrings: releaseStrings, intervalMs: self.heldDispatchIntervalMs)
             self.deactivateMotion()
             // Release the mirrored legacy-button highlight (visual only; see handleButtonDown).
@@ -2760,7 +2762,7 @@ import UIKit
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         // Pencil passthrough runs before every other gate (including gesture
         // suppression): pencil input always belongs to the stream, never the widget.
-        let touches = extractPencilPassthroughTouches(touches, with: event, phase: .began)
+        var touches = extractPencilPassthroughTouches(touches, with: event, phase: .began)
         if touches.isEmpty { return }
         if OnScreenWidgetView.gesturesSuppressed {
             OnScreenWidgetView.logSuppressedTouchDrop()
@@ -2779,6 +2781,28 @@ import UIKit
                 NotificationCenter.default.post(name: Notification.Name("OnScreenWidgetViewSelected"), object: self)
             }
             return
+        }
+        if usesPrimaryTouchTracking && !OnScreenWidgetView.editMode {
+            if let primary = primaryPadTouchId,
+               event?.allTouches?.contains(where: {
+                   ObjectIdentifier($0) == primary && $0.phase != .ended && $0.phase != .cancelled
+               }) == true {
+                // Already tracking a live grip — extra fingers are ignored, but a
+                // second finger still disqualifies a pending ALT stick-click.
+                if isAltStickPad {
+                    altStickTouchHadMultipleTouches = true
+                    pendingDoubleTapComboWork?.cancel()
+                    pendingDoubleTapComboWork = nil
+                }
+                super.touchesBegan(touches, with: event)
+                return
+            }
+            // No live primary (or a stale id whose touch already left the event
+            // stream) — adopt this touch and drop any sibling begans in the set.
+            if let adopted = touches.first {
+                primaryPadTouchId = ObjectIdentifier(adopted)
+                if touches.count > 1 { touches = [adopted] }
+            }
         }
         self.touchBegan = true
         self.directionPadTouchBegan = true
@@ -2808,8 +2832,16 @@ import UIKit
             self.aimLastMoveTimestamp = CACurrentMediaTime()
         }
         super.touchesBegan(touches, with: event)
-        // self.isMultipleTouchEnabled = self.touchPadString == "MOUSEPAD" // only enable multi-touch in mousePad mode
+        // Buttons: multi-finger drumming. touchPads: MUST be multi-touch too — with
+        // it off, UIKit silently drops a new touch that overlaps the previous one
+        // (fast re-grips) and never delivers it, leaving the pad dead for that whole
+        // grip. Stick/direction pads track one primary touch and ignore the rest
+        // (usesPrimaryTouchTracking); MOUSEPAD/DS4TOUCH regain their designed
+        // multi-finger behavior (two-finger right-click / multi-pointer).
+        // (Edit mode keeps pads single-touch: primary filtering is runtime-only, and
+        // a second delivered finger would corrupt moveByTouch's drag deltas there.)
         self.isMultipleTouchEnabled = self.widgetType == WidgetTypeEnum.button
+            || (self.widgetType == WidgetTypeEnum.touchPad && !OnScreenWidgetView.editMode)
 
         if !OnScreenWidgetView.editMode && self.touchPadString == "TRACKBALL" {
             stopTrackballMomentum()
@@ -3007,12 +3039,28 @@ import UIKit
     }
 
     
-    private func handleButtonSlidingUp(touches: Set<UITouch>) {
+    private func handleButtonSlidingUp(touches: Set<UITouch>, with event: UIEvent?) {
         for touch in touches {
             for subview in self.superview?.subviews ?? [] {
                 if let widget = subview as? OnScreenWidgetView{
                     if !widget.capturedTouches.contains(touch) || widget.slideMode == ButtonSlideMode.disabled.rawValue {continue}
-                    widget.handlebuttonUp()
+                    // Drop the capture record with the release — UIKit recycles UITouch
+                    // objects, and a stale entry makes the recycled touch look already
+                    // captured (slide-in stops pressing) and mis-fires slide-out UPs.
+                    widget.capturedTouches.remove(touch)
+                    // Only release when NO other finger still holds the target — either
+                    // another captured (slid-in / direct) touch, or a live direct touch
+                    // in the event. Without this, lifting a finger that merely slid
+                    // across silences a button another finger is still pressing.
+                    let stillHeld = widget.capturedTouches.count > 0
+                        || event?.allTouches?.contains(where: { other in
+                            other.view == widget
+                                && other !== touch
+                                && (other.phase == .began || other.phase == .moved || other.phase == .stationary)
+                        }) == true
+                    if !stillHeld {
+                        widget.handlebuttonUp()
+                    }
                 }
             }
         }
@@ -3048,7 +3096,7 @@ import UIKit
     }
     
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        let touches = extractPencilPassthroughTouches(touches, with: event, phase: .moved)
+        var touches = extractPencilPassthroughTouches(touches, with: event, phase: .moved)
         if touches.isEmpty { return }
         if OnScreenWidgetView.gesturesSuppressed {
             super.touchesMoved(touches, with: event)
@@ -3063,6 +3111,22 @@ import UIKit
                 self.moveByTouch(touch: touch)
             }
             return // still no slide / touchpad behavior in runtime
+        }
+        if usesPrimaryTouchTracking && !OnScreenWidgetView.editMode {
+            if let primary = primaryPadTouchId {
+                let filtered = touches.filter { ObjectIdentifier($0) == primary }
+                if filtered.isEmpty {
+                    // Only ignored extra fingers moved.
+                    super.touchesMoved(touches, with: event)
+                    return
+                }
+                touches = filtered
+            } else if let touch = touches.first {
+                // Moves for a grip we never saw begin (dropped began / mid-touch
+                // cleanup): adopt it; the re-anchor guard below resets the anchor.
+                primaryPadTouchId = ObjectIdentifier(touch)
+                if touches.count > 1 { touches = [touch] }
+            }
         }
         super.touchesMoved(touches, with: event)
         if !OnScreenWidgetView.editMode {
@@ -3198,6 +3262,11 @@ import UIKit
         let touches = extractPencilPassthroughTouches(touches, with: event, phase: .cancelled)
         if touches.isEmpty { return }
         super.touchesCancelled(touches, with: event)
+        if usesPrimaryTouchTracking && !OnScreenWidgetView.editMode, let primary = primaryPadTouchId,
+           !touches.contains(where: { ObjectIdentifier($0) == primary }) {
+            // Only ignored extra fingers were cancelled; the primary grip continues.
+            return
+        }
         cancelActiveTouchesDueToGestureSuppression()
     }
 
@@ -3329,6 +3398,7 @@ import UIKit
         pressed = false
         twoTouchesDetected = false
         touchBegan = false
+        primaryPadTouchId = nil
         mousePointerMoved = false
         quickDoubleTapDetected = false
         quickDoubleTapComboHeld = false
@@ -3352,7 +3422,7 @@ import UIKit
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        let touches = extractPencilPassthroughTouches(touches, with: event, phase: .ended)
+        var touches = extractPencilPassthroughTouches(touches, with: event, phase: .ended)
         if touches.isEmpty { return }
         if OnScreenWidgetView.gesturesSuppressed {
             super.touchesEnded(touches, with: event)
@@ -3376,6 +3446,16 @@ import UIKit
                 }
             }
             return
+        }
+        if usesPrimaryTouchTracking && !OnScreenWidgetView.editMode, let primary = primaryPadTouchId {
+            let filtered = touches.filter { ObjectIdentifier($0) == primary }
+            if filtered.isEmpty {
+                // Only ignored extra fingers lifted; the primary grip continues.
+                super.touchesEnded(touches, with: event)
+                return
+            }
+            touches = filtered
+            primaryPadTouchId = nil
         }
         self.touchBegan = false
         super.touchesEnded(touches, with: event)
@@ -3511,8 +3591,13 @@ import UIKit
             self.lrudIndicatorBall.isHidden = true
         }
                                 
-        if !OnScreenWidgetView.editMode && !self.cmdString.contains("+") && !self.comboButtonStrings.isEmpty { // if the command(keystring contains "+", it's a legacy multi-key command
-            self.handleButtonSlidingUp(touches: touches)
+        if !OnScreenWidgetView.editMode {
+            if !self.cmdString.contains("+") && !self.comboButtonStrings.isEmpty { // legacy "+" combos don't slide
+                self.handleButtonSlidingUp(touches: touches, with: event)
+            }
+            // Always drop ended touches from this widget's own capture records —
+            // legacy "+" buttons union their touches in touchesBegan but never
+            // cleared them, so a recycled UITouch inherited stale capture state.
             self.capturedTouches.minus(touches)
         }
         
@@ -3573,7 +3658,27 @@ import UIKit
             }
         }
         
-        self.handlebuttonUp()
+        // Buttons: release only when the LAST finger lifts. Multi-finger drumming
+        // used to release the latched combo on the FIRST lift (the remaining
+        // finger's hold went silent host-side) and then re-release a fallback set
+        // on the second lift, cutting short the same token held elsewhere.
+        if widgetType == WidgetTypeEnum.button && !OnScreenWidgetView.editMode,
+           event?.allTouches?.contains(where: { other in
+               other.view == self
+                   && !touches.contains(other)
+                   && !passthroughPencilTouches.contains(other)
+                   && (other.phase == .began || other.phase == .moved || other.phase == .stationary)
+           }) == true {
+            // another finger still holds this button — keep it down
+        } else {
+            self.handlebuttonUp()
+        }
+
+        // A pad whose primary touch just lifted adopts any other finger already
+        // resting on it (fast overlapping re-grip) as the new grip.
+        if usesPrimaryTouchTracking && !OnScreenWidgetView.editMode && primaryPadTouchId == nil {
+            adoptSuccessorPadTouch(from: event, excluding: touches)
+        }
         // Restore alpha if we highlighted in touchesBegan. Never re-hide a widget while
         // editing (editMode) — see the touchesCancelled note above; lifting the finger
         // after positioning a widget would otherwise drop it to 0.02.

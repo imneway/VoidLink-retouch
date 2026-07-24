@@ -908,31 +908,40 @@ import UIKit
         viewController?.reloadTableView()
     }
     
-    @objc public func sendKeyComboCommand(keyboardCmdStrings: [String], delay: TimeInterval = 0.2, index: Int = 0) { // we need a large delay for WAN streaming
-        // 如果已处理完所有按键，则开始释放按键
-        guard index < keyboardCmdStrings.count else {
-            // 释放按键
-            for keyStr in keyboardCmdStrings.reversed() { // 从后往前释放按键
-                if let keyCode = CommandManager.keyboardButtonMappings[keyStr] {
-                    LiSendKeyboardEvent(keyCode, Int8(KEY_ACTION_UP), 0)  // 释放按键
-                }
-            }
-            return
-        }
-         
-        // 获取当前按键的映射值
-        if let keyCode = CommandManager.keyboardButtonMappings[keyboardCmdStrings[index]] {
-            // 发送当前按键的按下事件
-            LiSendKeyboardEvent(keyCode, Int8(KEY_ACTION_DOWN), 0)
+    // ONE serial queue for every synthetic key/button sequence in the app. Legacy
+    // "+" combos send here directly; each widget's comboSendQueue TARGETS this
+    // queue (per-widget FIFO preserved, global mutual exclusion added). Without a
+    // shared bottom queue, two sources could interleave raw DOWN/UP events and
+    // corrupt the host's modifier/chord state — e.g. a legacy CTRL+C releasing
+    // CTRL in the middle of another combo that still depends on it. The old
+    // implementation was worse still: main-queue asyncAfter recursion with no
+    // re-entrancy guard at all.
+    @objc public static let keySendSerialQueue = DispatchQueue(label: "com.voidlink.key-send", qos: .userInteractive)
 
-            // 延迟后递归处理下一个按键
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                self.sendKeyComboCommand(keyboardCmdStrings: keyboardCmdStrings, delay: delay, index: index + 1)
+    @objc public func sendKeyComboCommand(keyboardCmdStrings: [String]) {
+        CommandManager.keySendSerialQueue.async {
+            let mappedCodes = keyboardCmdStrings.compactMap { keyStr -> CShort? in
+                guard let keyCode = CommandManager.keyboardButtonMappings[keyStr] else {
+                    print("No mapping found for \(keyStr)")
+                    return nil
+                }
+                return keyCode
             }
-        } else {
-            print("No mapping found for \(keyboardCmdStrings[index])")
-            // 如果当前按键没有映射，跳过当前按键并继续下一个
-            self.sendKeyComboCommand(keyboardCmdStrings: keyboardCmdStrings, delay: delay, index: index + 1)
+            guard !mappedCodes.isEmpty else { return }
+            for (index, keyCode) in mappedCodes.enumerated() {
+                if index > 0 {
+                    // Modifiers ride close together; the final (functional) key waits
+                    // longer so the host reliably sees the full modifier set down
+                    // (matters for WAN streaming and AHK-style host-side hooks).
+                    usleep(index == mappedCodes.count - 1 ? 200_000 : 20_000)
+                }
+                LiSendKeyboardEvent(keyCode, Int8(KEY_ACTION_DOWN), 0)
+            }
+            usleep(50_000) // brief hold so the full chord registers before release
+            for keyCode in mappedCodes.reversed() { // 从后往前释放按键
+                LiSendKeyboardEvent(keyCode, Int8(KEY_ACTION_UP), 0)
+                usleep(20_000)
+            }
         }
     }
     
