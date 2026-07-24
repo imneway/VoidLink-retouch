@@ -1332,6 +1332,16 @@ import UIKit
         guard let superview = self.superview else { return true }
         let locationInSuper = touch.location(in: superview)
 
+        // Left/right edge strips are gesture country (right-edge OSC toggle,
+        // slide-to-settings): a short edge swipe still fits inside a tap
+        // recognizer's movement tolerance, so two rapid swipes read as a double
+        // tap and fired this widget's combo. The old right-edge pre-suppression
+        // masked that by accident; exempt the strips deterministically instead.
+        let edgeStrip: CGFloat = 24
+        if locationInSuper.x < edgeStrip || locationInSuper.x > superview.bounds.width - edgeStrip {
+            return false
+        }
+
         // 1) Reject if a sibling UIControl (snap-ratio toggle, OSC on/off, etc.) or another
         // widget view would handle the touch. superview.hitTest recursively finds what UIKit
         // would actually deliver this touch to; the fullscreen widget's own hitTest returns
