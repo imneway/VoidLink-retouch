@@ -324,11 +324,24 @@ import UIKit
     private let altArcBackingFillLayer = CAGradientLayer() // radial fill: clear center -> BFBFBF edge
     private let altArcBackingMaskLayer = CAShapeLayer()   // circular mask clipping the gradient
     private static let altArcLeadDistance: CGFloat = 50   // arc radius = finger travel + this lead
-    private static let altThresholdRingInset: CGFloat = 5 // draw the dashed ring this much inside the boundary
+    private static let altThresholdRingInset: CGFloat = 5 // draw the ring this much inside the boundary
     // Aim pad (RSPADALT2) uses a smaller finger throw and no walk/run split: tighter
     // lead + a small fixed floor so the arc hugs the finger instead of the run boundary.
     private static let altAimArcLeadDistance: CGFloat = 35
     private static let altAimArcMinRadius: CGFloat = 30
+    // Arc band shape, shared by every pad. The apex is in points so its aspect ratio
+    // never changes; walk scales both dimensions by one factor.
+    private static let altArcThickness: CGFloat = 3
+    private static let altArcApexHalfWidth: CGFloat = 8
+    private static let altArcApexHeight: CGFloat = 6.9
+    private static let altArcWalkApexScale: CGFloat = 0.85
+
+    // The only per-pad divergence in arc geometry: how the radius tracks the finger.
+    // `floor == nil` means "sit just outside the run boundary" (computed by the caller).
+    private var altArcRadiusShape: (lead: CGFloat, floor: CGFloat?) {
+        return isAimStickPad ? (Self.altAimArcLeadDistance, Self.altAimArcMinRadius)
+                             : (Self.altArcLeadDistance, nil)
+    }
     private static let altArcMinClearance: CGFloat = 20   // arc floor = threshold ring radius + this
     private static let altArcShowTravel: CGFloat = 6      // hide the arc below this finger travel
     private static let altRunOutputThreshold: CGFloat = 0.6 // stick output magnitude treated as run
@@ -1742,17 +1755,28 @@ import UIKit
     // Arc band with a pointed apex, built pointing up around the origin; the layer is
     // rotated to the stick direction. Vector paths keep edge thickness constant while
     // the radius changes every frame, which bitmap assets cannot do.
-    private func makeAltArcPath(radius: CGFloat, halfSpanDeg: CGFloat, thickness: CGFloat, peak: CGFloat) -> CGPath {
+    private func makeAltArcPath(radius: CGFloat, halfSpanDeg: CGFloat, thickness: CGFloat,
+                                apexHalfWidth: CGFloat, apexHeight: CGFloat) -> CGPath {
         let halfSpan = halfSpanDeg * .pi / 180
-        // Fixed apex width, decoupled from the span so walk and run share one apex.
-        let apexHalf = min(7.2 * .pi / 180, halfSpan * 0.9)
         let up = -CGFloat.pi / 2
         let ro = radius + thickness / 2
         let ri = max(radius - thickness / 2, 1)
+        // The apex is specified in POINTS and converted to an angle at the current
+        // radius, so its width:height ratio stays fixed for every pad and every
+        // deflection. An angular apex would widen as the arc grows.
+        let apexHalf = min(asin(min(apexHalfWidth / ro, 1)), halfSpan * 0.9)
+        // A narrow span can clamp the angle below the requested width; shrink the
+        // height by the same factor so the apex still scales uniformly.
+        let effectiveHalfWidth = ro * sin(apexHalf)
+        let effectiveHeight = apexHeight * min(effectiveHalfWidth / max(apexHalfWidth, 0.01), 1)
+        // Measure height from the chord joining the apex feet (at ro*cos(apexHalf)),
+        // not from ro itself: the arc's sagitta would otherwise inflate the apex at
+        // small radii, where apexHalf is largest.
+        let tipRadius = ro * cos(apexHalf) + effectiveHeight
         let path = UIBezierPath()
         path.move(to: CGPoint(x: ro * cos(up - halfSpan), y: ro * sin(up - halfSpan)))
         path.addArc(withCenter: .zero, radius: ro, startAngle: up - halfSpan, endAngle: up - apexHalf, clockwise: true)
-        path.addLine(to: CGPoint(x: (ro + peak) * cos(up), y: (ro + peak) * sin(up)))
+        path.addLine(to: CGPoint(x: tipRadius * cos(up), y: tipRadius * sin(up)))
         path.addLine(to: CGPoint(x: ro * cos(up + apexHalf), y: ro * sin(up + apexHalf)))
         path.addArc(withCenter: .zero, radius: ro, startAngle: up + apexHalf, endAngle: up + halfSpan, clockwise: true)
         path.addLine(to: CGPoint(x: ri * cos(up + halfSpan), y: ri * sin(up + halfSpan)))
@@ -1773,12 +1797,15 @@ import UIKit
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        // Walk vs run differ only in span angle and fill opacity; thickness and apex
-        // are identical.
+        // Walk vs run differ in span angle, fill opacity, and one uniform apex scale
+        // (the apex keeps its aspect ratio). Everything else is shared by both pads.
         let halfSpan: CGFloat = run ? 30 : 18
-        let thickness: CGFloat = 3
-        let peak: CGFloat = 6.9
-        let arcPath = makeAltArcPath(radius: radius, halfSpanDeg: halfSpan, thickness: thickness, peak: peak)
+        let apexScale: CGFloat = run ? 1.0 : Self.altArcWalkApexScale
+        let arcPath = makeAltArcPath(radius: radius,
+                                     halfSpanDeg: halfSpan,
+                                     thickness: Self.altArcThickness,
+                                     apexHalfWidth: Self.altArcApexHalfWidth * apexScale,
+                                     apexHeight: Self.altArcApexHeight * apexScale)
         altDirectionArcLayer.path = arcPath
         altDirectionArcLayer.fillColor = UIColor(white: 1.0, alpha: run ? 0.48 : 0.32).cgColor
         altDirectionArcLayer.shadowOpacity = 0 // outer glow disabled per feedback
@@ -1863,7 +1890,7 @@ import UIKit
         altDirectionArcLayer.lineJoin = .round // avoid miter spikes at the apex
         altDirectionArcLayer.position = self.touchBeganPosInSuperLayer
         altDirectionArcLayer.setAffineTransform(.identity)
-        let initialRadius = isAimStickPad ? Self.altAimArcMinRadius : ringRadiusX + Self.altArcMinClearance
+        let initialRadius = altArcRadiusShape.floor ?? ringRadiusX + Self.altArcMinClearance
         applyAltArcState(run: isAimStickPad, radius: initialRadius, glow: 0)
         if altDirectionArcLayer.superlayer == nil { self.layer.superlayer?.addSublayer(altDirectionArcLayer) }
 
@@ -1922,12 +1949,11 @@ import UIKit
         // sensitivities the input boundary is an ellipse.
         let angle = atan2(offSetY, offSetX)
         let sensAlongDirection = max(hypot(sensitivityFactorX * cos(angle), sensitivityFactorY * sin(angle)), 0.01)
-        let lead = isAimStickPad ? Self.altAimArcLeadDistance : Self.altArcLeadDistance
+        let shape = altArcRadiusShape
         let boundaryAlongDirection = stickInputScale * pow(altEffectiveRunThreshold, 1.0 / altEffectiveResponseExponent) / sensAlongDirection
-        // Aim pad hugs the finger from a small floor; other pads sit outside the run ring.
-        let minRadius = isAimStickPad ? Self.altAimArcMinRadius : boundaryAlongDirection + Self.altArcMinClearance
-        let maxRadius = stickInputScale / sensAlongDirection + lead
-        let radius = min(max(minRadius, travel + lead), maxRadius)
+        let minRadius = shape.floor ?? boundaryAlongDirection + Self.altArcMinClearance
+        let maxRadius = stickInputScale / sensAlongDirection + shape.lead
+        let radius = min(max(minRadius, travel + shape.lead), maxRadius)
         let weightedMag = hypot(offSetX * sensitivityFactorX, offSetY * sensitivityFactorY)
         let normalizedDeflection = min(weightedMag / stickInputScale, 1.0)
         let output = pow(normalizedDeflection, altEffectiveResponseExponent)
