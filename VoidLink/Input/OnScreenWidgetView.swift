@@ -1744,7 +1744,8 @@ import UIKit
     // the radius changes every frame, which bitmap assets cannot do.
     private func makeAltArcPath(radius: CGFloat, halfSpanDeg: CGFloat, thickness: CGFloat, peak: CGFloat) -> CGPath {
         let halfSpan = halfSpanDeg * .pi / 180
-        let apexHalf = min(halfSpan * 0.24, 8 * .pi / 180)
+        // Fixed apex width, decoupled from the span so walk and run share one apex.
+        let apexHalf = min(7.2 * .pi / 180, halfSpan * 0.9)
         let up = -CGFloat.pi / 2
         let ro = radius + thickness / 2
         let ri = max(radius - thickness / 2, 1)
@@ -1775,7 +1776,7 @@ import UIKit
         // Walk vs run differ only in span angle and fill opacity; thickness and apex
         // are identical.
         let halfSpan: CGFloat = run ? 30 : 18
-        let thickness: CGFloat = 2.5
+        let thickness: CGFloat = 3
         let peak: CGFloat = 6.9
         let arcPath = makeAltArcPath(radius: radius, halfSpanDeg: halfSpan, thickness: thickness, peak: peak)
         altDirectionArcLayer.path = arcPath
