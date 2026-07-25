@@ -1772,9 +1772,11 @@ import UIKit
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
+        // Walk vs run differ only in span angle and fill opacity; thickness and apex
+        // are identical.
         let halfSpan: CGFloat = run ? 30 : 18
         let thickness: CGFloat = 2.5
-        let peak: CGFloat = run ? 6.9 : 4.6
+        let peak: CGFloat = 6.9
         let arcPath = makeAltArcPath(radius: radius, halfSpanDeg: halfSpan, thickness: thickness, peak: peak)
         altDirectionArcLayer.path = arcPath
         altDirectionArcLayer.fillColor = UIColor(white: 1.0, alpha: run ? 0.48 : 0.32).cgColor
