@@ -44,10 +44,6 @@ static NSSet *validPositionButtonNames;
     UITouch* _xTouch;
     UITouch* _yTouch;
     UITouch* _dpadTouch;
-    UITouch* _upTouch;
-    UITouch* _leftTouch;
-    UITouch* _rightTouch;
-    UITouch* _downTouch;
     UITouch* _lsTouch;
     UITouch* _rsTouch;
     UITouch* _startTouch;
@@ -102,6 +98,11 @@ static NSSet *validPositionButtonNames;
     BOOL _dpadDownActive;
     BOOL _dpadLeftActive;
     BOOL _dpadRightActive;
+    // 8-way sector the sticky d-pad touch currently holds (0 = right, going
+    // clockwise in 45° steps; -1 = none). Direction is derived from the angle
+    // around the d-pad hub, so the finger keeps steering the d-pad even after
+    // it leaves the button band, and diagonals (two flags) become reachable.
+    int _dpadSector;
     // Selected profile's button states, decoded once per updateControls cycle.
     // The custom-layout path used to re-decode the whole profile in five separate
     // passes (updateControls, setDPadCenter, setAnalogStickPositions,
@@ -391,10 +392,6 @@ static float L3_Y;
     if (_xTouch) { [activeTouches addObject:_xTouch]; }
     if (_yTouch) { [activeTouches addObject:_yTouch]; }
     if (_dpadTouch) { [activeTouches addObject:_dpadTouch]; }
-    if (_upTouch) { [activeTouches addObject:_upTouch]; }
-    if (_leftTouch) { [activeTouches addObject:_leftTouch]; }
-    if (_rightTouch) { [activeTouches addObject:_rightTouch]; }
-    if (_downTouch) { [activeTouches addObject:_downTouch]; }
     if (_lsTouch) { [activeTouches addObject:_lsTouch]; }
     if (_rsTouch) { [activeTouches addObject:_rsTouch]; }
     if (_startTouch) { [activeTouches addObject:_startTouch]; }
@@ -486,6 +483,7 @@ static float L3_Y;
     }
     _controller = [controllerSupport getOscController];
     _deadTouches = [[NSMutableArray alloc] init];
+    _dpadSector = -1;
     // Face-button swap settings are intentionally physical-controller-only.
     // Keep the virtual OSC button layout canonical even when swap is enabled.
     // if (streamConfig) {
@@ -1328,6 +1326,72 @@ static float L3_Y;
     [_r3Button removeFromSuperlayer];
 }
 
+// Maps an 8-way sector index (0 = right, clockwise in 45° steps because screen
+// y grows downward; -1 = none) to the up-to-two d-pad directions it holds.
+static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left, BOOL *right) {
+    *up = *down = *left = *right = NO;
+    switch (sector) {
+        case 0: *right = YES; break;
+        case 1: *right = YES; *down = YES; break;
+        case 2: *down = YES; break;
+        case 3: *down = YES; *left = YES; break;
+        case 4: *left = YES; break;
+        case 5: *left = YES; *up = YES; break;
+        case 6: *up = YES; break;
+        case 7: *up = YES; *right = YES; break;
+    }
+}
+
+// Sticky 8-way sector for the d-pad touch at `loc` (in _view coords). Purely
+// angle-based around the d-pad hub, so radius doesn't matter: the finger keeps
+// driving the d-pad after sliding off the buttons. Two stability rules:
+//   - Inside the hub dead zone (the empty square between the four arrows) the
+//     previous sector is kept, so a finger crossing the center doesn't flicker
+//     through opposite directions.
+//   - A small angular hysteresis past the 22.5° sector edge is required before
+//     switching sectors, so a finger resting on a boundary doesn't rapidly
+//     toggle a diagonal's second flag.
+- (int) dpadSectorForLocation:(CGPoint)loc {
+    CGFloat dx = loc.x - D_PAD_CENTER_X;
+    CGFloat dy = loc.y - D_PAD_CENTER_Y;
+    CGFloat deadZoneRadius = MAX(10.0f, D_PAD_CENTER_Y - CGRectGetMaxY(_upButton.frame));
+    if (hypot(dx, dy) < deadZoneRadius) {
+        return _dpadSector;
+    }
+    CGFloat angleDeg = atan2(dy, dx) * 180.0 / M_PI;
+    if (_dpadSector >= 0) {
+        CGFloat sectorCenterDeg = _dpadSector * 45.0f;
+        CGFloat diff = angleDeg - sectorCenterDeg;
+        while (diff > 180.0f) diff -= 360.0f;
+        while (diff < -180.0f) diff += 360.0f;
+        if (fabs(diff) <= 22.5f + 4.0f) {
+            return _dpadSector;
+        }
+    }
+    int sector = (int)floorf((angleDeg + 22.5f) / 45.0f);
+    return ((sector % 8) + 8) % 8;
+}
+
+// Whether a fresh touch-down at `loc` should be captured by the d-pad. Beyond
+// the four arrow layers themselves, any point within the d-pad's circumscribed
+// circle counts (diagonal gaps and the hub), so a press between two arrows
+// starts a diagonal instead of leaking to the dead-zone swallow below.
+- (BOOL) dpadCapturesTouchAtLocation:(CGPoint)loc {
+    if ([_upButton.presentationLayer hitTest:loc] ||
+        [_downButton.presentationLayer hitTest:loc] ||
+        [_leftButton.presentationLayer hitTest:loc] ||
+        [_rightButton.presentationLayer hitTest:loc]) {
+        return YES;
+    }
+    // The gap check must reject a hidden/detached d-pad itself (hideButtons
+    // detaches layers via removeFromSuperlayer), mirroring what hitTest would do.
+    if (_upButton.hidden || _upButton.superlayer == nil) {
+        return NO;
+    }
+    CGFloat outerRadius = D_PAD_CENTER_Y - CGRectGetMinY(_upButton.frame);
+    return hypot(loc.x - D_PAD_CENTER_X, loc.y - D_PAD_CENTER_Y) <= outerRadius;
+}
+
 - (BOOL) handleTouchMovedEvent:touches {
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
@@ -1388,62 +1452,75 @@ static float L3_Y;
             [_controllerSupport clearButtonFlag:_controller
                                           flags:UP_FLAG | DOWN_FLAG | LEFT_FLAG | RIGHT_FLAG];
 
-            // Allow the user to slide their finger to another d-pad button.
+            // Sticky 8-way steering: the held directions come from the angle
+            // around the d-pad hub (see dpadSectorForLocation:), not from
+            // hit-testing the arrow layers. So the finger keeps driving the
+            // d-pad after sliding outside the button band, and diagonals
+            // (two flags at once) work — the old per-layer hit test could
+            // never report two disjoint arrows for one point.
             // Press feedback (haptics + highlight) and the release visual are only
             // applied on the enter/leave TRANSITION for each direction — running
             // them on every touchesMoved event allocated a feedback generator and
             // buzzed at event rate (up to 120 Hz) while the finger rested on a
             // button, stalling the main thread during play. The button flags are
             // still recomputed every event (cheap), and any transition marks the
-            // event as updated so the cleared/set flags are actually flushed —
-            // previously sliding OFF the whole d-pad never sent the release.
-            BOOL nowUp = [_upButton.presentationLayer hitTest:touchLocation] != nil;
+            // event as updated so the cleared/set flags are actually flushed.
+            int prevSector = _dpadSector;
+            _dpadSector = [self dpadSectorForLocation:touchLocation];
+            BOOL nowUp, nowDown, nowLeft, nowRight;
+            dpadSectorToDirections(_dpadSector, &nowUp, &nowDown, &nowLeft, &nowRight);
             if (nowUp) {
                 [_controllerSupport setButtonFlag:_controller flags:UP_FLAG];
-                if (!_dpadUpActive) { [self oscButtonTouchDownFeedback:_upButton]; }
+                if (!_dpadUpActive) { [self oscButtonTouchDownFeedback:_upButton withHaptics:NO]; }
                 updated = true;
             } else if (_dpadUpActive) {
-                _upButton.opacity = [_originalControllerLayerOpacityDict[_upButton.name] floatValue];
+                _upButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_upButton.name] floatValue];
                 _upButton.shadowOpacity = 0.0;
                 updated = true;
             }
             _dpadUpActive = nowUp;
 
-            BOOL nowDown = [_downButton.presentationLayer hitTest:touchLocation] != nil;
             if (nowDown) {
                 [_controllerSupport setButtonFlag:_controller flags:DOWN_FLAG];
-                if (!_dpadDownActive) { [self oscButtonTouchDownFeedback:_downButton]; }
+                if (!_dpadDownActive) { [self oscButtonTouchDownFeedback:_downButton withHaptics:NO]; }
                 updated = true;
             } else if (_dpadDownActive) {
-                _downButton.opacity = [_originalControllerLayerOpacityDict[_downButton.name] floatValue];
+                _downButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_downButton.name] floatValue];
                 _downButton.shadowOpacity = 0.0;
                 updated = true;
             }
             _dpadDownActive = nowDown;
 
-            BOOL nowLeft = [_leftButton.presentationLayer hitTest:touchLocation] != nil;
             if (nowLeft) {
                 [_controllerSupport setButtonFlag:_controller flags:LEFT_FLAG];
-                if (!_dpadLeftActive) { [self oscButtonTouchDownFeedback:_leftButton]; }
+                if (!_dpadLeftActive) { [self oscButtonTouchDownFeedback:_leftButton withHaptics:NO]; }
                 updated = true;
             } else if (_dpadLeftActive) {
-                _leftButton.opacity = [_originalControllerLayerOpacityDict[_leftButton.name] floatValue];
+                _leftButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_leftButton.name] floatValue];
                 _leftButton.shadowOpacity = 0.0;
                 updated = true;
             }
             _dpadLeftActive = nowLeft;
 
-            BOOL nowRight = [_rightButton.presentationLayer hitTest:touchLocation] != nil;
             if (nowRight) {
                 [_controllerSupport setButtonFlag:_controller flags:RIGHT_FLAG];
-                if (!_dpadRightActive) { [self oscButtonTouchDownFeedback:_rightButton]; }
+                if (!_dpadRightActive) { [self oscButtonTouchDownFeedback:_rightButton withHaptics:NO]; }
                 updated = true;
             } else if (_dpadRightActive) {
-                _rightButton.opacity = [_originalControllerLayerOpacityDict[_rightButton.name] floatValue];
+                _rightButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_rightButton.name] floatValue];
                 _rightButton.shadowOpacity = 0.0;
                 updated = true;
             }
             _dpadRightActive = nowRight;
+
+            // Exactly one buzz per sector change — a diagonal enters two arrows,
+            // and e.g. right+down -> down enters none; neither should double-buzz
+            // or stay silent — so haptics are decoupled from the per-arrow visual
+            // transitions above.
+            if (_dpadSector != prevSector && _dpadSector >= 0) {
+                CALayer *arrow = nowUp ? _upButton : nowDown ? _downButton : nowLeft ? _leftButton : _rightButton;
+                [self oscFireHapticForButton:arrow];
+            }
 
             buttonTouch = true;
         } else if (touch == _aTouch) {
@@ -1520,30 +1597,37 @@ static float L3_Y;
     button.shadowOpacity = 1.0;
     button.shadowRadius = 0.0; // Adjust the radius to simulate border thickness
     
+    if (haptics) {
+        [self oscFireHapticForButton:button];
+    }
+
+    [CATransaction commit];
+}
+
+// Haptic-only half of the press feedback: fires the button's configured impact
+// style (respecting its vibration setting) without touching any visuals. The
+// d-pad sector logic uses this to buzz exactly once per sector change, even
+// when the change enters two arrows (diagonal) or only leaves one.
+- (void)oscFireHapticForButton:(CALayer *)button {
     NSNumber *style = [OnScreenControls.layerVibrationStyleDic objectForKey:button.name];
     uint8_t vibrationStyle = [style unsignedCharValue];
-    
-    bool vibraiontOn;
+
+    bool vibrationOn;
     if (@available(iOS 13.0, *)) {
-        vibraiontOn = vibrationStyle < UIImpactFeedbackStyleRigid+1;
+        vibrationOn = vibrationStyle < UIImpactFeedbackStyleRigid+1;
     } else {
-        vibraiontOn = vibrationStyle < UIImpactFeedbackStyleHeavy+1;
+        vibrationOn = vibrationStyle < UIImpactFeedbackStyleHeavy+1;
     }
-    // NSLog(@"vibration on: %d",vibraiontOn);
+    if (!vibrationOn) return;
 
-    if(haptics && vibraiontOn){
-        // Reuse the generator across presses — allocating one per press (plus a
-        // synchronous NSLog) is a measurable main-thread stall during rapid input.
-        if (vibrationGenerator == nil || _vibrationGeneratorStyle != vibrationStyle) {
-            vibrationGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:vibrationStyle];
-            _vibrationGeneratorStyle = vibrationStyle;
-        }
-        [vibrationGenerator impactOccurred];
-        [vibrationGenerator prepare]; // keep the taptic engine warm for the next press
+    // Reuse the generator across presses — allocating one per press (plus a
+    // synchronous NSLog) is a measurable main-thread stall during rapid input.
+    if (vibrationGenerator == nil || _vibrationGeneratorStyle != vibrationStyle) {
+        vibrationGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:vibrationStyle];
+        _vibrationGeneratorStyle = vibrationStyle;
     }
-
-    
-    [CATransaction commit];
+    [vibrationGenerator impactOccurred];
+    [vibrationGenerator prepare]; // keep the taptic engine warm for the next press
 }
 
 #pragma mark - Widget -> legacy mirror highlight (visual only)
@@ -1688,40 +1772,43 @@ static float L3_Y;
             if (_obscuredByAlpha) { _yButton.opacity = 1.0; }
             updated = true;
             touchEventCapturedByOsc = true;
-        } else if (_dpadTouch == nil && [_upButton.presentationLayer hitTest:touchLocation]) {
-            [_controllerSupport setButtonFlag:_controller flags:UP_FLAG];
+        } else if (_dpadTouch == nil && [self dpadCapturesTouchAtLocation:touchLocation]) {
             _dpadTouch = touch;
-            _upTouch = touch;
-            _dpadUpActive = YES; _dpadDownActive = _dpadLeftActive = _dpadRightActive = NO;
-            [self oscButtonTouchDownFeedback:_upButton];
-            if (_obscuredByAlpha) { _upButton.opacity = 1.0; }
-            updated = true;
-            touchEventCapturedByOsc = true;
-        } else if (_dpadTouch == nil && [_downButton.presentationLayer hitTest:touchLocation]) {
-            [_controllerSupport setButtonFlag:_controller flags:DOWN_FLAG];
-            _dpadTouch = touch;
-            _downTouch = touch;
-            _dpadDownActive = YES; _dpadUpActive = _dpadLeftActive = _dpadRightActive = NO;
-            [self oscButtonTouchDownFeedback:_downButton];
-            if (_obscuredByAlpha) { _downButton.opacity = 1.0; }
-            updated = true;
-            touchEventCapturedByOsc = true;
-        } else if (_dpadTouch == nil && [_leftButton.presentationLayer hitTest:touchLocation]) {
-            [_controllerSupport setButtonFlag:_controller flags:LEFT_FLAG];
-            _dpadTouch = touch;
-            _leftTouch = touch;
-            _dpadLeftActive = YES; _dpadUpActive = _dpadDownActive = _dpadRightActive = NO;
-            [self oscButtonTouchDownFeedback:_leftButton];
-            if (_obscuredByAlpha) { _leftButton.opacity = 1.0; }
-            updated = true;
-            touchEventCapturedByOsc = true;
-        } else if (_dpadTouch == nil && [_rightButton.presentationLayer hitTest:touchLocation]) {
-            [_controllerSupport setButtonFlag:_controller flags:RIGHT_FLAG];
-            _dpadTouch = touch;
-            _rightTouch = touch;
-            _dpadRightActive = YES; _dpadUpActive = _dpadDownActive = _dpadLeftActive = NO;
-            [self oscButtonTouchDownFeedback:_rightButton];
-            if (_obscuredByAlpha) { _rightButton.opacity = 1.0; }
+            _dpadSector = -1;
+            _dpadSector = [self dpadSectorForLocation:touchLocation];
+            BOOL nowUp, nowDown, nowLeft, nowRight;
+            dpadSectorToDirections(_dpadSector, &nowUp, &nowDown, &nowLeft, &nowRight);
+            if (nowUp) {
+                [_controllerSupport setButtonFlag:_controller flags:UP_FLAG];
+                [self oscButtonTouchDownFeedback:_upButton withHaptics:NO];
+                if (_obscuredByAlpha) { _upButton.opacity = 1.0; }
+            }
+            if (nowDown) {
+                [_controllerSupport setButtonFlag:_controller flags:DOWN_FLAG];
+                [self oscButtonTouchDownFeedback:_downButton withHaptics:NO];
+                if (_obscuredByAlpha) { _downButton.opacity = 1.0; }
+            }
+            if (nowLeft) {
+                [_controllerSupport setButtonFlag:_controller flags:LEFT_FLAG];
+                [self oscButtonTouchDownFeedback:_leftButton withHaptics:NO];
+                if (_obscuredByAlpha) { _leftButton.opacity = 1.0; }
+            }
+            if (nowRight) {
+                [_controllerSupport setButtonFlag:_controller flags:RIGHT_FLAG];
+                [self oscButtonTouchDownFeedback:_rightButton withHaptics:NO];
+                if (_obscuredByAlpha) { _rightButton.opacity = 1.0; }
+            }
+            // One buzz for the whole press, even when it lands on a diagonal
+            // (two arrows). A hub-dead-zone press holds no direction yet and
+            // stays silent until the finger picks a sector.
+            if (_dpadSector >= 0) {
+                CALayer *arrow = nowUp ? _upButton : nowDown ? _downButton : nowLeft ? _leftButton : _rightButton;
+                [self oscFireHapticForButton:arrow];
+            }
+            _dpadUpActive = nowUp;
+            _dpadDownActive = nowDown;
+            _dpadLeftActive = nowLeft;
+            _dpadRightActive = nowRight;
             updated = true;
             touchEventCapturedByOsc = true;
         } else if (_startTouch == nil && [_startButton.presentationLayer hitTest:touchLocation]) {
@@ -1832,6 +1919,20 @@ static float L3_Y;
             // Record a discrete legacy-button tap as the "last activation" so conditional
             // widgets (e.g. armed by a legacy X press) can read it. Single token = single tap.
             NSString *armToken = [self armTokenForTouchLocation:touchLocation];
+            // The arrow hit-tests miss the diagonal gaps / hub the sticky d-pad
+            // now captures. For the d-pad's own touch, fall back to the captured
+            // sector: a cardinal sector arms its arrow token; a diagonal holds
+            // two directions at once and has no single-token representation, so
+            // it arms nothing (recordLastActivationToken takes a single token).
+            if (!armToken && touch == _dpadTouch) {
+                switch (_dpadSector) {
+                    case 0: armToken = @"OSCRIGHT"; break;
+                    case 2: armToken = @"OSCDOWN"; break;
+                    case 4: armToken = @"OSCLEFT"; break;
+                    case 6: armToken = @"OSCUP"; break;
+                    default: break;
+                }
+            }
             if (armToken) [[CommandManager shared] recordLastActivationToken:armToken];
             [touchAddrsCapturedByOnScreenControls addObject:@((uintptr_t)touch)];
         }
@@ -1888,6 +1989,7 @@ static float L3_Y;
             [_controllerSupport clearButtonFlag:_controller
                                           flags:UP_FLAG | DOWN_FLAG | LEFT_FLAG | RIGHT_FLAG];
             _dpadTouch = nil;
+            _dpadSector = -1;
             _dpadUpActive = _dpadDownActive = _dpadLeftActive = _dpadRightActive = NO;
             _upButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_upButton.name] floatValue];
             _upButton.shadowOpacity = 0.0;
