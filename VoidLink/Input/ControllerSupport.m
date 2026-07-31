@@ -87,6 +87,16 @@ static const uint32_t PHYSICAL_COMBO_TAP_HOLD_MS = 50;
     // cycles that fire after the host's 10s zombie-session window. Main
     // thread only.
     NSMutableArray<NSDate*>* _pendingReattachDeadlines;
+    // Wall-clock time (epoch seconds) when the previous session's host-side
+    // zombie is certainly gone (last heartbeat + ping timeout + margin). A
+    // reattach cycle whose re-arrival runs after this moment necessarily won
+    // a fresh slot 0, so the remaining cycles can be cancelled. 0 = unknown.
+    NSTimeInterval _reattachZombieClearTime;
+    // True between a reattach cycle's detach and its re-arrival (~0.4s).
+    // updateFinished drops sends during the window: a full-mask event there
+    // would make the host legacy-allocate an empty-metadata pad and then
+    // reject our arrival. Set/cleared on main; read racily elsewhere (benign).
+    BOOL _reattachHoldSends;
     bool _swapABButtons;
     bool _swapXYButtons;
     int _gyroMode;
@@ -1212,6 +1222,14 @@ static NSInteger sAliveControllerSupportCount = 0;
         return;
     }
 
+    // A gamepad reattach cycle is between its detach and re-arrival (~0.4s):
+    // any full-mask event sent now would make the host legacy-allocate an
+    // empty-metadata pad and reject the pending arrival. Drop input for the
+    // window — the pad it would drive is mid-replug anyway.
+    if (_reattachHoldSends) {
+        return;
+    }
+
     // --- Input-path diagnostic (throttled ≈1/sec) -------------------------------
     // Counts updateFinished calls per second and reports the last sender + payload.
     // A runaway rate (hundreds/sec) with a stale sender pointer fingers an orphan
@@ -1421,6 +1439,14 @@ static NSInteger sAliveControllerSupportCount = 0;
 
 -(BOOL) reportControllerArrival:(VoidController*) voidController
 {
+    // A reattach cycle is between detach and re-arrival: any arrival sent now
+    // (e.g. a physical controller connecting) would land mid-replug and race
+    // the cycle's own arrival. Report "not yet" — every caller retries.
+    // Phase 2 itself clears the hold before it calls in, so it's unaffected.
+    if (_reattachHoldSends) {
+        return NO;
+    }
+
     // Only report arrival once
     if (voidController.reportedArrival) {
         return YES;
@@ -2622,7 +2648,7 @@ static NSInteger sAliveControllerSupportCount = 0;
 // and a re-sent arrival then allocates a brand-new device. Packets for one
 // controller travel on a single reliable ENet channel, so the
 // free -> arrival -> full-mask sequence cannot be reordered.
--(void) reattachGamepadsAfterDirtySession
+-(void) reattachGamepadsAfterDirtySessionWithLastAlive:(NSTimeInterval)lastAliveEpochSeconds
 {
     // A repeat call (self-heal reconnect firing a second connectionStarted on
     // the same instance) must orphan the previous round's pending blocks, or
@@ -2631,16 +2657,47 @@ static NSInteger sAliveControllerSupportCount = 0;
     _reattachEpoch++;
 
     // Cycle timing vs the host's zombie window: a session whose client died
-    // without a graceful ENet disconnect lingers on Sunshine for the 10s ping
-    // timeout, holding its pad slot the whole time. Cycles fired inside that
-    // window re-allocate the same wrong slot (harmless churn on a pad the
-    // game can't see anyway); only cycles after the zombie dies can win slot
-    // 0 back. Dense early cycles catch the common case where connecting took
-    // most of the 10s already; the late ones cover slow teardown.
+    // without a graceful ENet disconnect lingers on Sunshine until the ping
+    // timeout ~10s after the connection last breathed, holding its pad slot
+    // the whole time. Cycles fired inside that window re-allocate the same
+    // wrong slot; only a cycle after the zombie dies can win slot 0 back.
+    // The heartbeat timestamp tells us when that is — aim the first cycle
+    // right after it instead of burning blind cycles, so recovery lands as
+    // early as physically possible and churn (which upsets Eden's SDL port
+    // reuse) stays minimal.
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    NSMutableArray<NSNumber*>* delays = [NSMutableArray array];
+    if (lastAliveEpochSeconds > 0 && lastAliveEpochSeconds <= now) {
+        _reattachZombieClearTime = lastAliveEpochSeconds + 12.0;  // 10s ping timeout + teardown margin
+        NSTimeInterval untilClear = _reattachZombieClearTime - now;
+        if (untilClear <= 0) {
+            // Zombie was already gone before this connection's first
+            // arrivals — they got slot 0 directly. Quick verification cycle
+            // plus one safety round in case the timing model was wrong
+            // (forward wall-clock jumps make a recent heartbeat look
+            // ancient); the safety round is auto-cancelled by the confidence
+            // check once the first cycle's arrivals all succeed.
+            [delays addObject:@2.0];
+            [delays addObject:@10.0];
+        } else {
+            NSTimeInterval first = MIN(untilClear + 0.5, 15.0);
+            [delays addObject:@(first)];
+            [delays addObject:@(first + 4.0)];
+            [delays addObject:@(first + 12.0)];
+        }
+    } else {
+        // No heartbeat data (first run after update, defaults wiped) — fall
+        // back to blind dense cycles straddling the 10s window.
+        _reattachZombieClearTime = 0;
+        [delays addObjectsFromArray:@[@3.0, @6.0, @10.0, @15.0, @25.0]];
+    }
+    NSLog(@"[InputDiag] reattach schedule %@ (prev session last alive %.1fs ago)",
+          delays, lastAliveEpochSeconds > 0 ? now - lastAliveEpochSeconds : -1.0);
+
     NSMutableArray<NSDate*>* deadlines = [NSMutableArray array];
-    NSDate* now = [NSDate date];
-    for (NSNumber* delay in @[@3.0, @6.0, @10.0, @15.0, @25.0]) {
-        [deadlines addObject:[now dateByAddingTimeInterval:delay.doubleValue]];
+    NSDate* nowDate = [NSDate date];
+    for (NSNumber* delay in delays) {
+        [deadlines addObject:[nowDate dateByAddingTimeInterval:delay.doubleValue]];
     }
     _pendingReattachDeadlines = deadlines;
     [self scheduleReattachCyclesForPendingDeadlines];
@@ -2680,38 +2737,116 @@ static NSInteger sAliveControllerSupportCount = 0;
         return;
     }
 
-    [_controllerStreamLock lock];
-
-    uint16_t fullMask = [self getActiveGamepadMask];
-    NSMutableArray<VoidController*>* targets = [NSMutableArray array];
-    if (_oscEnabled && _oscController != nil) {
-        [targets addObject:_oscController];
-    }
-    [targets addObjectsFromArray:_voidControllers.allValues];
-
+    // Dedupe targets by slot once, shared by both phases.
+    NSMutableArray<VoidController*>* reattachTargets = [NSMutableArray array];
     NSMutableSet<NSNumber*>* handledPlayerIndexes = [NSMutableSet set];
-    for (VoidController* voidController in targets) {
+    NSMutableArray<VoidController*>* candidates = [NSMutableArray array];
+    if (_oscEnabled && _oscController != nil) {
+        [candidates addObject:_oscController];
+    }
+    [candidates addObjectsFromArray:_voidControllers.allValues];
+    for (VoidController* voidController in candidates) {
         short playerIndex = _multiController ? voidController.playerIndex : 0;
         if ([handledPlayerIndexes containsObject:@(playerIndex)]) {
             continue;  // merged OSC + physical share a slot; reattach it once
         }
         [handledPlayerIndexes addObject:@(playerIndex)];
-
-        @synchronized(voidController) {
-            // Detach: host frees this slot even if its device is already dead.
-            LiSendMultiControllerEvent(playerIndex, fullMask & ~(1 << playerIndex),
-                                       0, 0, 0, 0, 0, 0, 0);
-            // Re-attach: force a fresh arrival so the host allocates a new pad.
-            [self cleanupControllerBattery:voidController];
-            voidController.batteryTimer = nil;
-            voidController.reportedArrival = NO;
-            BOOL reported = [self reportControllerArrival:voidController];
-            NSLog(@"[InputDiag] gamepad reattach player=%d arrival=%@ mask=0x%X",
-                  playerIndex, reported ? @"ok" : @"deferred", fullMask);
-        }
+        [reattachTargets addObject:voidController];
+    }
+    if (reattachTargets.count == 0) {
+        return;
     }
 
+    // Phase 1 — detach every slot (host frees the pad and its global slot
+    // synchronously, even if the device is already dead). Hold all OSC sends
+    // until the re-arrival goes out: a full-mask event in between would make
+    // the host legacy-allocate an empty-metadata pad and reject our arrival.
+    _reattachHoldSends = YES;
+    [_controllerStreamLock lock];
+    // Cumulative mask: each detach must keep the previously-detached slots'
+    // bits CLEARED, or detaching player 1 would re-assert player 0's bit and
+    // the host would legacy-allocate it (metadata-less) before phase 2.
+    uint16_t remainingMask = [self getActiveGamepadMask];
+    for (VoidController* voidController in reattachTargets) {
+        short playerIndex = _multiController ? voidController.playerIndex : 0;
+        remainingMask &= ~(1 << playerIndex);
+        @synchronized(voidController) {
+            LiSendMultiControllerEvent(playerIndex, remainingMask, 0, 0, 0, 0, 0, 0, 0);
+        }
+    }
     [_controllerStreamLock unlock];
+
+    // Phase 2 — re-arrival after 0.4s. The gap lets Windows finish the PnP
+    // removal so emulators observe an ordered REMOVED -> ADDED instead of a
+    // milliseconds overlap. Under overlap, Eden appends the new pad to a
+    // fresh SDL port while the old (bound) slot lingers — stick drift or a
+    // fully dead pad until restart; Ryujinx has the same race on its
+    // index-guid ids.
+    NSUInteger epoch = _reattachEpoch;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        strongSelf->_reattachHoldSends = NO;  // never leave input held
+        if (strongSelf->_reattachEpoch != epoch || sActiveControllerSupport != strongSelf) {
+            // The detach already went out but this cycle was invalidated
+            // (cleanup, reconfig, newer round). If this instance still owns a
+            // live session, don't abandon the host in the detached state:
+            // mark the targets as needing a fresh arrival so the next
+            // updateFinished re-sends a proper metadata-carrying arrival
+            // (its gate enforces arrival-before-full-mask), instead of the
+            // host legacy-allocating an empty-metadata pad.
+            if (sActiveControllerSupport == strongSelf) {
+                for (VoidController* voidController in reattachTargets) {
+                    @synchronized(voidController) {
+                        voidController.reportedArrival = NO;
+                    }
+                }
+            }
+            return;
+        }
+
+        BOOL allArrivalsReported = YES;
+        [strongSelf->_controllerStreamLock lock];
+        uint16_t mask = [strongSelf getActiveGamepadMask];
+        for (VoidController* voidController in reattachTargets) {
+            short playerIndex = strongSelf->_multiController ? voidController.playerIndex : 0;
+            @synchronized(voidController) {
+                [strongSelf cleanupControllerBattery:voidController];
+                voidController.batteryTimer = nil;
+                voidController.reportedArrival = NO;
+                BOOL reported = [strongSelf reportControllerArrival:voidController];
+                allArrivalsReported = allArrivalsReported && reported;
+                NSLog(@"[InputDiag] gamepad reattach player=%d arrival=%@ mask=0x%X",
+                      playerIndex, reported ? @"ok" : @"deferred", mask);
+            }
+        }
+        [strongSelf->_controllerStreamLock unlock];
+
+        // Re-assert current controller state after the replug: input that was
+        // held across the hold window (dropped by the gate) would otherwise
+        // stay invisible until its next change.
+        for (VoidController* voidController in reattachTargets) {
+            [strongSelf updateFinished:voidController];
+        }
+
+        // Confidence: a re-arrival that fully succeeded after the zombie-clear
+        // time necessarily won a fresh slot 0 — remaining cycles would only
+        // churn a healthy pad (and churn is what bites Eden). Cancel them.
+        // Any deferred arrival keeps the remaining cycles as retries.
+        if (allArrivalsReported &&
+            strongSelf->_reattachZombieClearTime > 0 &&
+            [[NSDate date] timeIntervalSince1970] > strongSelf->_reattachZombieClearTime + 1.0 &&
+            strongSelf->_pendingReattachDeadlines.count > 0) {
+            NSLog(@"[InputDiag] reattach confident post-zombie — cancelling %lu remaining cycle(s)",
+                  (unsigned long)strongSelf->_pendingReattachDeadlines.count);
+            strongSelf->_reattachEpoch++;
+            [strongSelf->_pendingReattachDeadlines removeAllObjects];
+        }
+    });
 }
 
 -(void)stopTimerForController:(VoidController* )voidController{

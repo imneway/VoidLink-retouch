@@ -2306,6 +2306,15 @@ static NSMutableSet* hostList;
         return;
     }
 
+    // One-shot launch evaluation, consumed by the FIRST active invocation
+    // regardless of which branch it takes below. The dirty-session fallback
+    // must only ever run on that first invocation: the flag also gets set on
+    // abnormal ends later in this run, and a stale evaluation on a later
+    // viewDidAppear/foreground would yank the user back into the stream.
+    static BOOL sLaunchAutoEnterEvaluated = NO;
+    BOOL isLaunchEvaluation = !sLaunchAutoEnterEvaluated;
+    sLaunchAutoEnterEvaluated = YES;
+
     AppDelegate* delegate = (AppDelegate*)[UIApplication sharedApplication].delegate;
     NSString *pendingHost = nil;
     if (delegate.autoEnterHostName != nil && delegate.autoEnterHostName.length > 0) {
@@ -2333,6 +2342,20 @@ static NSMutableSet* hostList;
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
     else {
+        // Killed/crashed mid-stream last run: the dirty-session flag is only
+        // cleared by a graceful stop, so seeing it at process launch means
+        // the previous run died while streaming. Resume the last-streamed
+        // host automatically instead of making the user re-pick it. Only on
+        // the launch evaluation, and only when no explicit trigger claimed it.
+        if (isLaunchEvaluation) {
+            NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+            NSString* lastHost = [defaults stringForKey:@"AutoEnterLastStreamHostName"];
+            if (lastHost.length > 0 && [defaults boolForKey:@"VoidStreamSessionDirty"]) {
+                NSLog(@"[InputDiag] dirty session flag at launch — auto-resuming stream on %@", lastHost);
+                [self beginAutoEnterForHostName:lastHost];
+                return;
+            }
+        }
         // Nothing to auto-enter after all — drop the preemptive cover so the
         // hosts UI isn't left hidden behind it.
         [self hideAutoEnterCover];

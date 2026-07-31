@@ -161,6 +161,11 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // down gracefully while the background task still grants us CPU.
     UIBackgroundTaskIdentifier _bgGracefulStopTask;
     NSUInteger _bgStopEpoch;
+    // Writes VoidStreamLastAliveAt every 2s while the connection is healthy.
+    // The next session reads it to compute when the host's zombie-session
+    // window (ping timeout) ends, so gamepad reattach can fire at the
+    // earliest moment slot 0 is winnable instead of on a blind schedule.
+    NSTimer *_sessionHeartbeatTimer;
     /*
      * View architecture of this viewController:
      * self.view (named `streamFrameTopLayerView` in StreamView.m, where slide & tap gestures, and onScreenControls & OnScreenWidgetView buttons are registered)
@@ -2451,6 +2456,10 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
             [_inactivityTimer invalidate];
             _inactivityTimer = nil;
         }
+        if (_sessionHeartbeatTimer != nil) {
+            [_sessionHeartbeatTimer invalidate];
+            _sessionHeartbeatTimer = nil;
+        }
         if (_timeBatteryUpdateTimer != nil) {
             [_timeBatteryUpdateTimer invalidate];
             _timeBatteryUpdateTimer = nil;
@@ -2834,6 +2843,9 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     // down gracefully — with time to spare — once suspension looms. PiP and
     // AirPlay legitimately keep running — skip.
     BOOL pipActive = self.pipController && self.pipController.isPictureInPictureActive;
+    NSLog(@"[InputDiag] didEnterBackground pip=%d airplay=%d leftPage=%d remaining=%.0fs",
+          pipActive, [self isAirPlaying], _hasLeftStreamPage,
+          [UIApplication sharedApplication].backgroundTimeRemaining);
     if (!_hasLeftStreamPage && !pipActive && ![self isAirPlaying]) {
         _bgStopEpoch++;
         NSUInteger epoch = _bgStopEpoch;
@@ -2862,7 +2874,10 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
             }
         }];
         _bgGracefulStopTask = bgTask;
-        [self scheduleBackgroundSuspensionWatchdogForEpoch:epoch];
+        if (bgTask == UIBackgroundTaskInvalid) {
+            NSLog(@"[InputDiag] background watchdog: task DENIED by system");
+        }
+        [self scheduleBackgroundSuspensionWatchdogForEpoch:epoch afterDelay:2.0];
     }
 
 #if !TARGET_OS_TV
@@ -2875,9 +2890,9 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 // under the inactivity timer's authority; once the remaining budget starts
 // draining (keep-alive lost, suspension approaching) we still have ~15s — do
 // the graceful stop now and let the disconnect finish comfortably.
-- (void)scheduleBackgroundSuspensionWatchdogForEpoch:(NSUInteger)epoch {
+- (void)scheduleBackgroundSuspensionWatchdogForEpoch:(NSUInteger)epoch afterDelay:(NSTimeInterval)delay {
     __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf || epoch != strongSelf->_bgStopEpoch) {
@@ -2886,10 +2901,12 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         if ([UIApplication sharedApplication].applicationState == UIApplicationStateActive) {
             return;  // becameActive is about to cancel us anyway
         }
-        if ([UIApplication sharedApplication].backgroundTimeRemaining < 15.0) {
+        NSTimeInterval remaining = [UIApplication sharedApplication].backgroundTimeRemaining;
+        NSLog(@"[InputDiag] background watchdog poll: remaining=%.0fs", remaining);
+        if (remaining < 20.0) {
             [strongSelf performBackgroundGracefulStopForEpoch:epoch endTaskAfterDelay:4.0];
         } else {
-            [strongSelf scheduleBackgroundSuspensionWatchdogForEpoch:epoch];
+            [strongSelf scheduleBackgroundSuspensionWatchdogForEpoch:epoch afterDelay:4.0];
         }
     });
 }
@@ -2931,6 +2948,26 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         [[UIApplication sharedApplication] endBackgroundTask:_bgGracefulStopTask];
         _bgGracefulStopTask = UIBackgroundTaskInvalid;
     }
+}
+
+// See the _sessionHeartbeatTimer ivar comment. Stops itself once the page is
+// left or the connection ends abnormally — a heartbeat that kept beating past
+// the connection's death would make the next session underestimate how long
+// the host zombie still holds the pad slot.
+- (void)startSessionHeartbeat {
+    [_sessionHeartbeatTimer invalidate];
+    NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setDouble:[[NSDate date] timeIntervalSince1970] forKey:@"VoidStreamLastAliveAt"];
+    __weak typeof(self) weakSelf = self;
+    _sessionHeartbeatTimer = [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:YES block:^(NSTimer *timer) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || strongSelf->_hasLeftStreamPage || strongSelf->_connectionEndedAbnormally) {
+            [timer invalidate];
+            return;
+        }
+        [[NSUserDefaults standardUserDefaults] setDouble:[[NSDate date] timeIntervalSince1970]
+                                                  forKey:@"VoidStreamLastAliveAt"];
+    }];
 }
 
 - (void)expandSettingsView{
@@ -3145,21 +3182,26 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         // a zombie gamepad slot that eats all OSC/controller input, so schedule
         // a protocol-level reattach. Must run BEFORE connectionEstablished sends
         // the first controller arrivals, so a kill in between still reads dirty.
-        // See -reattachGamepadsAfterDirtySession.
+        // See -reattachGamepadsAfterDirtySessionWithLastAlive:.
         BOOL previousSessionDirty;
+        NSTimeInterval previousSessionLastAlive;
         {
             NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
             previousSessionDirty = [defaults boolForKey:@"VoidStreamSessionDirty"];
+            // Snapshot the PREVIOUS session's heartbeat before this session
+            // starts overwriting it below.
+            previousSessionLastAlive = [defaults doubleForKey:@"VoidStreamLastAliveAt"];
             [defaults setBool:YES forKey:@"VoidStreamSessionDirty"];
             [defaults synchronize];
         }
         self->_connectionEndedAbnormally = NO;
+        [self startSessionHeartbeat];
 
         [self->_controllerSupport connectionEstablished];
 
         if (previousSessionDirty) {
             NSLog(@"[InputDiag] previous session ended dirty — scheduling gamepad reattach");
-            [self->_controllerSupport reattachGamepadsAfterDirtySession];
+            [self->_controllerSupport reattachGamepadsAfterDirtySessionWithLastAlive:previousSessionLastAlive];
         }
 
         if (self->_settings.statsOverlayEnabled) {

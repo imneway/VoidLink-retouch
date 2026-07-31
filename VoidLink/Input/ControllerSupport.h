@@ -58,7 +58,10 @@ extern NSString* const VoidGyroSettingsDidChangeNotification;
 
 -(id) initWithConfig:(StreamConfiguration*)streamConfig delegate:(id<ControllerSupportDelegate>)delegate;
 -(void) connectionEstablished;
--(void) reattachGamepadsAfterDirtySession;
+// lastAliveEpochSeconds: heartbeat timestamp (timeIntervalSince1970) of the
+// previous session's last confirmed-alive moment, or 0 if unknown. Used to
+// aim the reattach cycles right after the host's ~10s zombie-session window.
+-(void) reattachGamepadsAfterDirtySessionWithLastAlive:(NSTimeInterval)lastAliveEpochSeconds;
 
 -(void) initAutoOnScreenControlMode:(OnScreenControls*)osc;
 -(void) cleanup;
