@@ -2270,17 +2270,25 @@ static NSMutableSet* hostList;
     // Check for a pending shortcut action when appearing
     [self handlePendingShortcutAction];
     
+    // viewDidAppear runs once per return to this page but these observers were
+    // never removed — every stream round-trip stacked another registration, so
+    // one foreground event fanned out into N handleReturnToForeground calls
+    // (N auto-enter probes, N discovery restarts). Remove-before-add keeps
+    // exactly one registration alive regardless of how often we appear.
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidBecomeActiveNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver: self
                                              selector: @selector(handleReturnToForeground)
                                                  name: UIApplicationDidBecomeActiveNotification
                                                object: nil];
-    
+
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationWillResignActiveNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver: self
                                              selector: @selector(handleEnterBackground)
                                                  name: UIApplicationWillResignActiveNotification
                                                object: nil];
-    
+
     // Listen for runtime auto-enter requests (URL while running / AppIntent Darwin bridge)
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:@"VoidLinkAutoEnterRequested" object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleRuntimeAutoEnterNotification:) name:@"VoidLinkAutoEnterRequested" object:nil];
     //[self simulateSettingsButtonPress]; //force reload resolution table in the setting
     //[self simulateSettingsButtonPress];

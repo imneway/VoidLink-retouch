@@ -94,6 +94,10 @@ static const uint32_t PHYSICAL_COMBO_TAP_HOLD_MS = 50;
     // closures. NSTimer block reads are best-effort — a missed sample is fine.
     int _motionButtonHoldCount;
     int _motionButtonPauseCount;
+
+    // Set once this instance detects it lost input authority (a newer instance
+    // was created). Makes neutralizeStaleInstance idempotent.
+    bool _staleNeutralized;
 }
 
 // Conversion factor: rotation rate (deg/s) → stick value (-32766..+32766).
@@ -113,11 +117,75 @@ static inline int16_t clamp_int16(CGFloat v) {
     return (int16_t)v;
 }
 
+// MARK: - Input-authority arbitration
+//
+// The Li* send functions feed one process-global connection, but nothing used
+// to stop a leaked previous-session ControllerSupport from still calling them.
+// A leaked instance's device-gyro sampler keeps invoking updateFinished at
+// sensor rate with ITS OWN (stale, all-zero) controller state — interleaving
+// with the live session's real input on player 0. Host-side effect: sticks
+// snap back to center between real updates (walk-stop-walk), held buttons
+// read as rapid press/release trains. Only the newest instance may send;
+// anything older self-silences on first fire.
+//
+// Weak so this never extends an instance's lifetime; identity-compared only.
+// objc weak loads are thread-safe (updateFinished runs on several threads).
+static __weak ControllerSupport* sActiveControllerSupport = nil;
+static NSInteger sAliveControllerSupportCount = 0;
+
 // UPDATE_BUTTON_FLAG(controller, flag, pressed)
 #define UPDATE_BUTTON_FLAG(controller, x, y) \
 ((y) ? [self setButtonFlag:controller flags:x] : [self clearButtonFlag:controller flags:x])
 
 #define MAX_MAGNITUDE(x, y) (abs(x) > abs(y) ? (x) : (y))
+
+// MARK: - Stale-instance neutralization
+
+- (void)removeAllNotificationObservers {
+    [[NSNotificationCenter defaultCenter] removeObserver:_controllerConnectObserver];
+    [[NSNotificationCenter defaultCenter] removeObserver:_controllerDisconnectObserver];
+    [[NSNotificationCenter defaultCenter] removeObserver:_mouseConnectObserver];
+    [[NSNotificationCenter defaultCenter] removeObserver:_mouseDisconnectObserver];
+    [[NSNotificationCenter defaultCenter] removeObserver:_keyboardConnectObserver];
+    [[NSNotificationCenter defaultCenter] removeObserver:_keyboardDisconnectObserver];
+    if (_gyroSettingsObserver) [[NSNotificationCenter defaultCenter] removeObserver:_gyroSettingsObserver];
+    if (_physicalControllerComboSettingsObserver) [[NSNotificationCenter defaultCenter] removeObserver:_physicalControllerComboSettingsObserver];
+
+    _controllerConnectObserver = nil;
+    _controllerDisconnectObserver = nil;
+    _mouseConnectObserver = nil;
+    _mouseDisconnectObserver = nil;
+    _keyboardConnectObserver = nil;
+    _keyboardDisconnectObserver = nil;
+    _gyroSettingsObserver = nil;
+    _physicalControllerComboSettingsObserver = nil;
+}
+
+// Called when any sender of this instance fires while a newer instance owns
+// input authority. Silences every periodic sender this instance owns and
+// drops the observer retain cycles so the leak can actually deallocate.
+// Deliberately sends NOTHING (no zero-sweep, no mask packets — those would
+// hit the live session's connection) and never touches shared GCController
+// handler slots (the active instance owns those now; its registration
+// already replaced ours).
+- (void)neutralizeStaleInstance {
+    // Atomic check-and-set: callers arrive from main-queue Core Motion
+    // callbacks, NSTimer fires, and common-c/GameController threads at once.
+    @synchronized (self) {
+        if (_staleNeutralized) return;
+        _staleNeutralized = true;
+    }
+    NSLog(@"[InputDiag] STALE ControllerSupport %p tried to send (active=%p alive=%ld) — silencing orphan senders",
+          self, sActiveControllerSupport, (long)sAliveControllerSupportCount);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self stopTimerForAllControllers]; // NSTimers + Core Motion updates; its own sends are authority-gated
+        for (VoidController* controller in [self->_voidControllers allValues]) {
+            [controller.batteryTimer invalidate];
+            controller.batteryTimer = nil;
+        }
+        [self removeAllNotificationObservers];
+    });
+}
 
 // MARK: - Motion-button gating
 
@@ -617,6 +685,9 @@ static inline int16_t clamp_int16(CGFloat v) {
                             // accelTimer, a newer setup superseded us (or teardown missed us).
                             // Kill self so a stale timer can't keep flooding input forever.
                             if (timer != voidController.accelTimer) { [timer invalidate]; return; }
+                            // The identity guard above can't catch a fully-leaked instance
+                            // (old controller still owns this timer). Authority check can.
+                            if (sActiveControllerSupport != self) { [timer invalidate]; [self neutralizeStaleInstance]; return; }
                             if (![self motionEmissionAllowed]) return;
                             // Accel only matters for the DS4 motion path. Skip when
                             // gyro is being routed to stick/mouse — sending accel
@@ -681,6 +752,13 @@ static inline int16_t clamp_int16(CGFloat v) {
                             VoidController* voidController = weakGyroController;
                             ControllerSupport* strongSelf = weakSelf;
                             if (!voidController || !strongSelf || !deviceMotion) return;
+                            // Authority gate: a leaked instance's sampler firing here at
+                            // sensor rate IS the input flooder. Stop sampling for good.
+                            if (sActiveControllerSupport != strongSelf) {
+                                [voidController.motionManager stopDeviceMotionUpdates];
+                                [strongSelf neutralizeStaleInstance];
+                                return;
+                            }
                             BOOL emit = [strongSelf motionEmissionAllowed] && strongSelf->_mapGyroTo != MapGyroToOff;
                             // When suppressed, drop any leftover RightStick gyro
                             // contribution to 0 once. Otherwise the last non-zero
@@ -833,6 +911,7 @@ static inline int16_t clamp_int16(CGFloat v) {
                                 voidController.accelTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
                                     // Orphan self-destruct (see device accel timer above).
                                     if (timer != voidController.accelTimer) { [timer invalidate]; return; }
+                                    if (sActiveControllerSupport != self) { [timer invalidate]; [self neutralizeStaleInstance]; return; }
                                     if (![self motionEmissionAllowed]) return;
                                     // Don't send duplicate samples
                                     GCAcceleration lastAccelSample = voidController.lastAccelSample;
@@ -874,6 +953,7 @@ static inline int16_t clamp_int16(CGFloat v) {
                                 voidController.gyroTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / voidController.reportRateHz repeats:YES block:^(NSTimer *timer) {
                                     // Orphan self-destruct (see device accel timer above).
                                     if (timer != voidController.gyroTimer) { [timer invalidate]; return; }
+                                    if (sActiveControllerSupport != self) { [timer invalidate]; [self neutralizeStaleInstance]; return; }
                                     if (![self motionEmissionAllowed]) return;
                                     // Don't send duplicate samples
                                     GCRotationRate lastGyroSample = voidController.lastGyroSample;
@@ -1110,6 +1190,21 @@ static inline int16_t clamp_int16(CGFloat v) {
 
 -(void) updateFinished:(VoidController*)controller
 {
+    // Input-authority gate: only the newest ControllerSupport may feed the
+    // connection. A leaked previous-session instance reaching this point is
+    // the "walk-stop-walk / one-tap-multi-click" flooder — drop the send and
+    // permanently silence that instance.
+    //
+    // Deliberately NOT atomic with the LiSend below: a caller that passed
+    // this check microseconds before a new instance claims authority can
+    // still emit one final stale packet. That lone packet is immediately
+    // overwritten by the live sender and is indistinguishable from normal
+    // session-start noise — not worth a process-wide lock on the input path.
+    if (sActiveControllerSupport != self) {
+        [self neutralizeStaleInstance];
+        return;
+    }
+
     // --- Input-path diagnostic (throttled ≈1/sec) -------------------------------
     // Counts updateFinished calls per second and reports the last sender + payload.
     // A runaway rate (hundreds/sec) with a stale sender pointer fingers an orphan
@@ -2133,8 +2228,14 @@ static inline int16_t clamp_int16(CGFloat v) {
 }
 
 - (void)resetGyroInputForController:(VoidController* )voidController{
-    if(voidController.hasAccelerometer) LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber,LI_MOTION_TYPE_ACCEL,0,0,0);
-    if(voidController.hasGyroscope) LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber,LI_MOTION_TYPE_GYRO,0,0,0);
+    // Authority-gated: this runs on the stale-neutralize path too
+    // (neutralizeStaleInstance → stopTimerForAllControllers → here), where the
+    // zero-motion packets would land on the LIVE session's connection and
+    // flatten its host-side gyro state mid-game.
+    if (sActiveControllerSupport == self) {
+        if(voidController.hasAccelerometer) LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber,LI_MOTION_TYPE_ACCEL,0,0,0);
+        if(voidController.hasGyroscope) LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber,LI_MOTION_TYPE_GYRO,0,0,0);
+    }
     if (@available(iOS 14.0, *)) {
         voidController.gamepad.motion.sensorsActive = false;
     }
@@ -2143,11 +2244,15 @@ static inline int16_t clamp_int16(CGFloat v) {
 - (void)clearGyroOutputForController:(VoidController* )voidController {
     if (!voidController) return;
 
-    if (voidController.hasAccelerometer) {
-        LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber, LI_MOTION_TYPE_ACCEL, 0, 0, 0);
-    }
-    if (voidController.hasGyroscope) {
-        LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber, LI_MOTION_TYPE_GYRO, 0, 0, 0);
+    // Same authority gate as resetGyroInputForController — a stale instance
+    // must never emit packets, even zeroing ones.
+    if (sActiveControllerSupport == self) {
+        if (voidController.hasAccelerometer) {
+            LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber, LI_MOTION_TYPE_ACCEL, 0, 0, 0);
+        }
+        if (voidController.hasGyroscope) {
+            LiSendControllerMotionEvent((uint8_t)voidController.controllerNumber, LI_MOTION_TYPE_GYRO, 0, 0, 0);
+        }
     }
 
     GCAcceleration emptyAccelSample = {};
@@ -2187,6 +2292,16 @@ static inline int16_t clamp_int16(CGFloat v) {
 - (void)updateControllerSupport:(StreamConfiguration*)streamConfig delegate:(id<ControllerSupportDelegate>)delegate {
     NSLog(@"update config call");
 
+    // Authority is claimed at init only and must never be (re)taken here: a
+    // leaked previous VC also observes the settings-closed notification, and
+    // its reconfig running after the live one would otherwise steal authority
+    // back — silencing the live session. Not being the authority means this
+    // whole reconfig belongs to a stale pair; drop it.
+    if (sActiveControllerSupport != self) {
+        [self neutralizeStaleInstance];
+        return;
+    }
+
     _reattachEpoch++;
     _gyroMode = streamConfig.gyroMode;
 
@@ -2211,9 +2326,20 @@ static inline int16_t clamp_int16(CGFloat v) {
 -(id)initWithConfig:(StreamConfiguration*)streamConfig delegate:(id<ControllerSupportDelegate>)delegate
 {
     self = [super init];
-    
+
     NSLog(@"controller support init");
-    
+
+    // Claim input authority FIRST — before any observer or timer of this
+    // instance is armed — so a leaked previous instance is already stale by
+    // the time anything can fire. alive>1 in the log is the leak fingerprint:
+    // it means some exit path skipped cleanup and the guard is now what's
+    // protecting the stream from that instance.
+    sActiveControllerSupport = self;
+    sAliveControllerSupportCount++;
+    NSLog(@"[InputDiag] ControllerSupport init %p alive=%ld%@",
+          self, (long)sAliveControllerSupportCount,
+          sAliveControllerSupportCount > 1 ? @" (LEAKED INSTANCE STILL ALIVE — guard active)" : @"");
+
     _delegate = delegate;
     _controllerStreamLock = [[NSLock alloc] init];
     _voidControllers = [[NSMutableDictionary alloc] init];
@@ -2231,7 +2357,12 @@ static inline int16_t clamp_int16(CGFloat v) {
     
     _controllerConnectObserver = [[NSNotificationCenter defaultCenter] addObserverForName:GCControllerDidConnectNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
     Log(LOG_I, @"Controller connected!");
-    
+
+    // Authority gate: a leaked instance's observer would otherwise overwrite
+    // the live instance's handlers on this shared GCController and report a
+    // bogus arrival on the live connection.
+    if (sActiveControllerSupport != self) { [self neutralizeStaleInstance]; return; }
+
     GCController* controller = note.object;
     
     if (![ControllerSupport isSupportedGamepad:controller]) {
@@ -2262,7 +2393,11 @@ static inline int16_t clamp_int16(CGFloat v) {
     
     _controllerDisconnectObserver = [[NSNotificationCenter defaultCenter] addObserverForName:GCControllerDidDisconnectNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
         Log(LOG_I, @"Controller disconnected!");
-        
+
+        // Authority gate (see connect observer) — a stale instance must not
+        // unregister the live instance's handlers or send removal events.
+        if (sActiveControllerSupport != self) { [self neutralizeStaleInstance]; return; }
+
         GCController* controller = note.object;
         
         if (![ControllerSupport isSupportedGamepad:controller]) {
@@ -2316,7 +2451,10 @@ static inline int16_t clamp_int16(CGFloat v) {
         
         _mouseConnectObserver = [[NSNotificationCenter defaultCenter] addObserverForName:GCMouseDidConnectNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
             Log(LOG_I, @"Mouse connected!");
-            
+
+            // Authority gate — GCMouse handler slots are shared process-wide.
+            if (sActiveControllerSupport != self) { [self neutralizeStaleInstance]; return; }
+
             GCMouse* mouse = note.object;
             
             // Register for mouse events
@@ -2330,7 +2468,10 @@ static inline int16_t clamp_int16(CGFloat v) {
         }];
         _mouseDisconnectObserver = [[NSNotificationCenter defaultCenter] addObserverForName:GCMouseDidDisconnectNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
             Log(LOG_I, @"Mouse disconnected!");
-            
+
+            // Authority gate — must not nil the live instance's mouse handlers.
+            if (sActiveControllerSupport != self) { [self neutralizeStaleInstance]; return; }
+
             GCMouse* mouse = note.object;
             
             // Unregister for mouse events
@@ -2597,29 +2738,21 @@ static inline int16_t clamp_int16(CGFloat v) {
 -(void) cleanup
 {
     _reattachEpoch++;
+    // Whether this instance still owns the connection. Normally yes (pop
+    // happens before the next session's init). In the stacked/leaked case a
+    // newer instance has already claimed authority — then the zero-sweep
+    // below must NOT run, or it would zero the LIVE session's pads.
+    BOOL isAuthority = (sActiveControllerSupport == self);
+    sAliveControllerSupportCount--;
+    NSLog(@"[InputDiag] ControllerSupport cleanup %p alive=%ld authority=%d",
+          self, (long)sAliveControllerSupportCount, isAuthority);
     // Snapshot the mask before _controllerNumbers is cleared below. The
     // zero-sweep at the end must carry the mask the host currently believes
     // in — with a cleared mask the events read as "these pads don't exist"
     // and the host ignores them instead of zeroing the latched sticks.
     uint16_t finalGamepadMask = [self getActiveGamepadMask];
-    [[NSNotificationCenter defaultCenter] removeObserver:_controllerConnectObserver];
-    [[NSNotificationCenter defaultCenter] removeObserver:_controllerDisconnectObserver];
-    [[NSNotificationCenter defaultCenter] removeObserver:_mouseConnectObserver];
-    [[NSNotificationCenter defaultCenter] removeObserver:_mouseDisconnectObserver];
-    [[NSNotificationCenter defaultCenter] removeObserver:_keyboardConnectObserver];
-    [[NSNotificationCenter defaultCenter] removeObserver:_keyboardDisconnectObserver];
-    if (_gyroSettingsObserver) [[NSNotificationCenter defaultCenter] removeObserver:_gyroSettingsObserver];
-    if (_physicalControllerComboSettingsObserver) [[NSNotificationCenter defaultCenter] removeObserver:_physicalControllerComboSettingsObserver];
-    
-    _controllerConnectObserver = nil;
-    _controllerDisconnectObserver = nil;
-    _mouseConnectObserver = nil;
-    _mouseDisconnectObserver = nil;
-    _keyboardConnectObserver = nil;
-    _keyboardDisconnectObserver = nil;
-    _gyroSettingsObserver = nil;
-    _physicalControllerComboSettingsObserver = nil;
-    
+    [self removeAllNotificationObservers];
+
     _controllerNumbers = 0;
     
     [self stopTimerForController:_oscController];
@@ -2636,43 +2769,58 @@ static inline int16_t clamp_int16(CGFloat v) {
     // timers are already stopped so nothing can re-send, and the input stream
     // is still up (stopStream runs after cleanup returns). Harmless if the
     // connection is already gone — common-c drops events when uninitialized.
+    // Authority-gated: a stale instance's zero-sweep would hit the LIVE
+    // session's connection and zero its pads mid-game.
     _oscController.gyroStickX = 0;
     _oscController.gyroStickY = 0;
-    for (VoidController* controller in [_voidControllers allValues]) {
-        LiSendMultiControllerEvent(_multiController ? controller.playerIndex : 0, finalGamepadMask,
-                                   0, 0, 0, 0, 0, 0, 0);
-        // Also flatten any latched DS4 motion state (host-side gyro-to-stick
-        // keeps integrating the last rotation rate it saw). Dropped by the
-        // host if the pad reported no motion support.
-        LiSendControllerMotionEvent((uint8_t)(_multiController ? controller.playerIndex : 0),
-                                    LI_MOTION_TYPE_GYRO, 0, 0, 0);
-    }
-    LiSendMultiControllerEvent(0, finalGamepadMask, 0, 0, 0, 0, 0, 0, 0);
-    LiSendControllerMotionEvent(0, LI_MOTION_TYPE_GYRO, 0, 0, 0);
+    if (isAuthority) {
+        for (VoidController* controller in [_voidControllers allValues]) {
+            LiSendMultiControllerEvent(_multiController ? controller.playerIndex : 0, finalGamepadMask,
+                                       0, 0, 0, 0, 0, 0, 0);
+            // Also flatten any latched DS4 motion state (host-side gyro-to-stick
+            // keeps integrating the last rotation rate it saw). Dropped by the
+            // host if the pad reported no motion support.
+            LiSendControllerMotionEvent((uint8_t)(_multiController ? controller.playerIndex : 0),
+                                        LI_MOTION_TYPE_GYRO, 0, 0, 0);
+        }
+        LiSendMultiControllerEvent(0, finalGamepadMask, 0, 0, 0, 0, 0, 0, 0);
+        LiSendControllerMotionEvent(0, LI_MOTION_TYPE_GYRO, 0, 0, 0);
 
-    // The calls above only ENQUEUE packets; common-c's input send thread
-    // transmits them, and LiStopConnection (stopStream runs right after
-    // cleanup returns) destroys the queue with whatever is still in it.
-    // Give the sender a beat to drain before teardown proceeds.
-    usleep(50 * 1000);
+        // The calls above only ENQUEUE packets; common-c's input send thread
+        // transmits them, and LiStopConnection (stopStream runs right after
+        // cleanup returns) destroys the queue with whatever is still in it.
+        // Give the sender a beat to drain before teardown proceeds.
+        usleep(50 * 1000);
+    }
 
     [_voidControllers removeAllObjects];
-    
+
     #if !TARGET_OS_TV
         [self cleanupControllerMotion:_oscController];
         [_oscController.motionManager stopDeviceMotionUpdates];
     #endif
-    
-    for (GCController* controller in [GCController controllers]) {
-        if ([ControllerSupport isSupportedGamepad:controller]) {
-            [self unregisterControllerCallbacks:controller];
+
+    // Handler slots on GCController/GCMouse are shared, process-wide objects.
+    // If a newer instance already registered its own handlers there,
+    // unregistering now would nil the LIVE session's callbacks — skip.
+    if (isAuthority) {
+        for (GCController* controller in [GCController controllers]) {
+            if ([ControllerSupport isSupportedGamepad:controller]) {
+                [self unregisterControllerCallbacks:controller];
+            }
+        }
+
+        if (@available(iOS 14.0, tvOS 14.0, *)) {
+            for (GCMouse* mouse in [GCMouse mice]) {
+                [self unregisterMouseCallbacks:mouse];
+            }
         }
     }
-    
-    if (@available(iOS 14.0, tvOS 14.0, *)) {
-        for (GCMouse* mouse in [GCMouse mice]) {
-            [self unregisterMouseCallbacks:mouse];
-        }
+
+    // Hand authority back only if we still hold it; never steal it from a
+    // newer instance.
+    if (sActiveControllerSupport == self) {
+        sActiveControllerSupport = nil;
     }
 }
 
