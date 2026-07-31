@@ -153,6 +153,14 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // clearing the dirty-session flag at teardown: after an abnormal end the host
     // may hold a zombie gamepad slot, so the next session must still reattach.
     BOOL _connectionEndedAbnormally;
+    // Background graceful-stop machinery. Once iOS suspends the app, the ENet
+    // disconnect can never be delivered: the host keeps a zombie session (and
+    // its gamepad slot) alive for the full ping timeout, and a quick resume
+    // then streams into the wrong pad slot. So after entering background we
+    // keep the stream alive briefly (seamless quick switch-back), then tear it
+    // down gracefully while the background task still grants us CPU.
+    UIBackgroundTaskIdentifier _bgGracefulStopTask;
+    NSUInteger _bgStopEpoch;
     /*
      * View architecture of this viewController:
      * self.view (named `streamFrameTopLayerView` in StreamView.m, where slide & tap gestures, and onScreenControls & OnScreenWidgetView buttons are registered)
@@ -2012,7 +2020,9 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     _reconnectTimer = nil;
     _reconnectElapsedSeconds = 0;
     _reconnectProbeTick = 0;
-    
+    _bgGracefulStopTask = UIBackgroundTaskInvalid;
+    _bgStopEpoch = 0;
+
     _streamView = [[StreamView alloc] initWithFrame:self.view.frame];
     [self stream_publishOrientationLockAndRefresh];
     
@@ -2399,7 +2409,6 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         [_controllerSupport cleanup];
 
         [UIApplication sharedApplication].idleTimerDisabled = NO;
-        [_streamMan stopStream];
 
         // Deliberate teardown of a healthy connection: the graceful
         // LiStopConnection lets the host tear its session down cleanly, so the
@@ -2407,10 +2416,36 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         // established or ended abnormally (error alert -> return to main), the
         // host may hold zombie state — keep the flag set so the next session
         // still reattaches.
-        if (_hasConnectionStarted && !_connectionEndedAbnormally) {
-            [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"VoidStreamSessionDirty"];
-            [[NSUserDefaults standardUserDefaults] synchronize];
-        }
+        //
+        // The flag is cleared only AFTER LiStopConnection completes: clearing
+        // it before the async stop finishes raced against a late
+        // connectionTerminated (connection already dead when the user exited,
+        // e.g. after iOS suspended the app mid-stream). That race marked dirty
+        // sessions as clean, so the next session skipped the gamepad reattach
+        // and streamed into a host whose zombie session still held the pad
+        // slot — OSC dead until the following reconnect.
+        BOOL hadStarted = _hasConnectionStarted;
+        // Strong capture on purpose: the block must outlive the pop (runs
+        // ~0-2s later) to read the final abnormal-termination verdict. It is
+        // not stored anywhere, so the VC is released right after it runs.
+        [_streamMan stopStreamWithCompletion:^{
+            // Hop to main to serialize with connectionTerminated's
+            // main-queue work before reading the verdict. A detached
+            // termination callback that was spawned but hadn't written the
+            // flag when LiStopConnection returned can in principle still
+            // lose this race, but that window is microseconds against the
+            // seconds-long stop — and the failure mode is self-correcting
+            // (flag wrongly cleared -> one session without reattach -> the
+            // next abnormal end sets it again).
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (hadStarted && !self->_connectionEndedAbnormally) {
+                    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"VoidStreamSessionDirty"];
+                    [[NSUserDefaults standardUserDefaults] synchronize];
+                } else if (hadStarted) {
+                    NSLog(@"[InputDiag] exit with abnormal termination — keeping session dirty flag");
+                }
+            });
+        }];
 
         if (_inactivityTimer != nil) {
             [_inactivityTimer invalidate];
@@ -2726,6 +2761,11 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         _inactivityTimer = nil;
     }
 
+    // Cancel any pending background graceful stop — the user came back while
+    // the stream is still alive, so let it continue seamlessly.
+    _bgStopEpoch++;
+    [self endBackgroundGracefulStopTask];
+
     // Check if we were in PiP
     if (self.pipController && self.pipController.isPictureInPictureActive) {
         [self.pipController stopPictureInPicture];
@@ -2781,9 +2821,116 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
                                 userInfo:nil
                                  repeats:NO];
 
+    // Guard against silent suspension (see the _bgGracefulStopTask ivar
+    // comment). Backgrounded streaming normally survives on the `audio`
+    // background mode (that's what the minutes-scale inactivity timer above
+    // is designed around). But when that keep-alive is NOT holding — audio
+    // route lost, another app took the session, system reclaiming us — iOS
+    // suspends the app with the connection mid-air: no ENet disconnect ever
+    // reaches the host, whose zombie session keeps the gamepad slot for its
+    // full ping timeout, and a quick resume then streams into the wrong pad
+    // slot (OSC dead all session). The background task below buys guaranteed
+    // CPU; a watchdog polls backgroundTimeRemaining and tears the stream
+    // down gracefully — with time to spare — once suspension looms. PiP and
+    // AirPlay legitimately keep running — skip.
+    BOOL pipActive = self.pipController && self.pipController.isPictureInPictureActive;
+    if (!_hasLeftStreamPage && !pipActive && ![self isAirPlaying]) {
+        _bgStopEpoch++;
+        NSUInteger epoch = _bgStopEpoch;
+        [self endBackgroundGracefulStopTask];
+        __weak typeof(self) weakSelf = self;
+        __block UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
+        bgTask = [[UIApplication sharedApplication]
+            beginBackgroundTaskWithName:@"VoidGracefulStreamStop"
+                      expirationHandler:^{
+            // Fallback only — the watchdog below normally acts ~15s earlier.
+            typeof(self) strongSelf = weakSelf;
+            if (strongSelf && epoch == strongSelf->_bgStopEpoch) {
+                // Enqueue the teardown and end the task immediately (no time
+                // budget left to wait on the linger).
+                [strongSelf performBackgroundGracefulStopForEpoch:epoch endTaskAfterDelay:0];
+            } else if (bgTask != UIBackgroundTaskInvalid &&
+                       (!strongSelf || strongSelf->_bgGracefulStopTask == bgTask)) {
+                // Stale/cancelled round whose task nobody else owns anymore
+                // (or the VC is gone): end our own task so iOS doesn't kill
+                // the process over an unfinished background task.
+                [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+                bgTask = UIBackgroundTaskInvalid;
+                if (strongSelf) {
+                    strongSelf->_bgGracefulStopTask = UIBackgroundTaskInvalid;
+                }
+            }
+        }];
+        _bgGracefulStopTask = bgTask;
+        [self scheduleBackgroundSuspensionWatchdogForEpoch:epoch];
+    }
+
 #if !TARGET_OS_TV
 
 #endif
+}
+
+// Polls every 5s while backgrounded. With audio keep-alive holding,
+// backgroundTimeRemaining stays effectively unbounded and streaming continues
+// under the inactivity timer's authority; once the remaining budget starts
+// draining (keep-alive lost, suspension approaching) we still have ~15s — do
+// the graceful stop now and let the disconnect finish comfortably.
+- (void)scheduleBackgroundSuspensionWatchdogForEpoch:(NSUInteger)epoch {
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || epoch != strongSelf->_bgStopEpoch) {
+            return;  // foregrounded (cancel) or superseded by a newer round
+        }
+        if ([UIApplication sharedApplication].applicationState == UIApplicationStateActive) {
+            return;  // becameActive is about to cancel us anyway
+        }
+        if ([UIApplication sharedApplication].backgroundTimeRemaining < 15.0) {
+            [strongSelf performBackgroundGracefulStopForEpoch:epoch endTaskAfterDelay:4.0];
+        } else {
+            [strongSelf scheduleBackgroundSuspensionWatchdogForEpoch:epoch];
+        }
+    });
+}
+
+// One-shot (per _bgStopEpoch) graceful teardown while backgrounded. No-op if
+// the user already returned to foreground or left the stream page. The
+// background task is ended after `endTaskDelay` (bounded, non-blocking) so
+// the async LiStopConnection can finish its ENet linger first; the delayed
+// end captures the task id directly and thus survives the VC being released.
+- (void)performBackgroundGracefulStopForEpoch:(NSUInteger)epoch endTaskAfterDelay:(NSTimeInterval)endTaskDelay {
+    if (epoch != _bgStopEpoch) {
+        return;  // cancelled (foregrounded) or already handled
+    }
+    _bgStopEpoch++;
+
+    if (!_hasLeftStreamPage &&
+        [UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
+        Log(LOG_I, @"Gracefully stopping stream before background suspension");
+        NSLog(@"[InputDiag] background graceful stop: tearing stream down before suspension");
+        [self returnToMainFrameAllowingBackgroundAutoResume:YES];
+    }
+
+    UIBackgroundTaskIdentifier task = _bgGracefulStopTask;
+    _bgGracefulStopTask = UIBackgroundTaskInvalid;
+    if (task != UIBackgroundTaskInvalid) {
+        if (endTaskDelay > 0) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(endTaskDelay * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                [[UIApplication sharedApplication] endBackgroundTask:task];
+            });
+        } else {
+            [[UIApplication sharedApplication] endBackgroundTask:task];
+        }
+    }
+}
+
+- (void)endBackgroundGracefulStopTask {
+    if (_bgGracefulStopTask != UIBackgroundTaskInvalid) {
+        [[UIApplication sharedApplication] endBackgroundTask:_bgGracefulStopTask];
+        _bgGracefulStopTask = UIBackgroundTaskInvalid;
+    }
 }
 
 - (void)expandSettingsView{

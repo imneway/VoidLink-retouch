@@ -80,6 +80,13 @@ static const uint32_t PHYSICAL_COMBO_TAP_HOLD_MS = 50;
     // were scheduled for ends (cleanup) or is replaced (updateControllerSupport),
     // so they can't fire packets into a torn-down or brand-new connection.
     NSUInteger _reattachEpoch;
+    // Absolute fire dates of reattach cycles still pending for this session.
+    // Kept so an in-session reconfig (updateControllerSupport bumps the epoch)
+    // can RE-ARM the remaining cycles instead of silently killing the
+    // self-heal — an early rotation/settings change used to cancel the very
+    // cycles that fire after the host's 10s zombie-session window. Main
+    // thread only.
+    NSMutableArray<NSDate*>* _pendingReattachDeadlines;
     bool _swapABButtons;
     bool _swapXYButtons;
     int _gyroMode;
@@ -2303,6 +2310,16 @@ static NSInteger sAliveControllerSupportCount = 0;
     }
 
     _reattachEpoch++;
+    // The epoch bump above invalidated any pending reattach cycles (they must
+    // not fire mid-reconfig with stale controller state). Re-arm the ones
+    // whose deadline hasn't passed under the new epoch — a rotation or
+    // settings tweak in the first seconds of a dirty session used to cancel
+    // the self-heal outright.
+    if (_pendingReattachDeadlines.count > 0) {
+        NSLog(@"[InputDiag] re-arming %lu pending gamepad reattach cycle(s) after reconfig",
+              (unsigned long)_pendingReattachDeadlines.count);
+        [self scheduleReattachCyclesForPendingDeadlines];
+    }
     _gyroMode = streamConfig.gyroMode;
 
     [self updateCommonConfig:streamConfig];
@@ -2607,18 +2624,46 @@ static NSInteger sAliveControllerSupportCount = 0;
 // free -> arrival -> full-mask sequence cannot be reordered.
 -(void) reattachGamepadsAfterDirtySession
 {
-    // Two cycles: shortly after connect (covers the host tearing the zombie
-    // down at session takeover) and later (covers the zombie only dying by
-    // ENet peer timeout, whose deferred cleanup can strike a second time).
+    // A repeat call (self-heal reconnect firing a second connectionStarted on
+    // the same instance) must orphan the previous round's pending blocks, or
+    // they'd pass the epoch check and fire extra detach/arrival churn into
+    // the new connection.
+    _reattachEpoch++;
+
+    // Cycle timing vs the host's zombie window: a session whose client died
+    // without a graceful ENet disconnect lingers on Sunshine for the 10s ping
+    // timeout, holding its pad slot the whole time. Cycles fired inside that
+    // window re-allocate the same wrong slot (harmless churn on a pad the
+    // game can't see anyway); only cycles after the zombie dies can win slot
+    // 0 back. Dense early cycles catch the common case where connecting took
+    // most of the 10s already; the late ones cover slow teardown.
+    NSMutableArray<NSDate*>* deadlines = [NSMutableArray array];
+    NSDate* now = [NSDate date];
+    for (NSNumber* delay in @[@3.0, @6.0, @10.0, @15.0, @25.0]) {
+        [deadlines addObject:[now dateByAddingTimeInterval:delay.doubleValue]];
+    }
+    _pendingReattachDeadlines = deadlines;
+    [self scheduleReattachCyclesForPendingDeadlines];
+}
+
+// (Re)schedules a dispatch block for every not-yet-fired deadline in
+// _pendingReattachDeadlines against the CURRENT epoch. Called once when the
+// dirty session is detected, and again by updateControllerSupport after it
+// bumps the epoch, so an in-session reconfig postpones nothing and cancels
+// nothing — the remaining cycles simply re-arm.
+-(void) scheduleReattachCyclesForPendingDeadlines
+{
     __weak typeof(self) weakSelf = self;
     NSUInteger epoch = _reattachEpoch;
-    for (NSNumber* delay in @[@3.0, @13.0]) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+    for (NSDate* deadline in _pendingReattachDeadlines) {
+        NSTimeInterval delay = MAX(0.05, deadline.timeIntervalSinceNow);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             typeof(self) strongSelf = weakSelf;
             if (!strongSelf || strongSelf->_reattachEpoch != epoch) {
-                return;  // session ended or was replaced before we fired
+                return;  // session ended, or a reconfig re-armed us under a new epoch
             }
+            [strongSelf->_pendingReattachDeadlines removeObject:deadline];
             [strongSelf performGamepadReattachCycle];
         });
     }
@@ -2626,6 +2671,15 @@ static NSInteger sAliveControllerSupportCount = 0;
 
 -(void) performGamepadReattachCycle
 {
+    // Authority gate (same pattern as updateFinished/cleanup): a leaked
+    // previous-session instance whose cleanup never ran still has live
+    // pending cycles — without this check they would detach/re-arrival the
+    // LIVE session's pads with stale state.
+    if (sActiveControllerSupport != self) {
+        [self neutralizeStaleInstance];
+        return;
+    }
+
     [_controllerStreamLock lock];
 
     uint16_t fullMask = [self getActiveGamepadMask];
@@ -2738,6 +2792,7 @@ static NSInteger sAliveControllerSupportCount = 0;
 -(void) cleanup
 {
     _reattachEpoch++;
+    _pendingReattachDeadlines = nil;  // session over — nothing left to re-arm
     // Whether this instance still owns the connection. Normally yes (pop
     // happens before the next session's init). In the stacked/leaked case a
     // newer instance has already claimed authority — then the zero-sweep
@@ -2785,6 +2840,33 @@ static NSInteger sAliveControllerSupportCount = 0;
         }
         LiSendMultiControllerEvent(0, finalGamepadMask, 0, 0, 0, 0, 0, 0, 0);
         LiSendControllerMotionEvent(0, LI_MOTION_TYPE_GYRO, 0, 0, 0);
+
+        // Detach every pad slot before the connection goes down: an event
+        // whose activeGamepadMask clears the slot's bit makes Sunshine free
+        // the virtual pad and release its process-global slot id SYNCHRONOUSLY
+        // (input.cpp passthrough, mask-bit-cleared branch). Without this the
+        // slot is only released when the host session object dies — and a
+        // session whose ENet disconnect never arrives (app killed/suspended)
+        // lingers for the full 10s ping timeout, so a quick reconnect's pads
+        // land on slot 1 while every game reads slot 0 (OSC dead all session).
+        NSMutableSet<NSNumber*>* detachedPlayerIndexes = [NSMutableSet set];
+        NSMutableArray<VoidController*>* detachTargets = [NSMutableArray array];
+        if (_oscController != nil) {
+            [detachTargets addObject:_oscController];
+        }
+        [detachTargets addObjectsFromArray:_voidControllers.allValues];
+        uint16_t remainingMask = finalGamepadMask;
+        for (VoidController* controller in detachTargets) {
+            short playerIndex = _multiController ? controller.playerIndex : 0;
+            if ([detachedPlayerIndexes containsObject:@(playerIndex)]) {
+                continue;  // merged OSC + physical share a slot; detach it once
+            }
+            [detachedPlayerIndexes addObject:@(playerIndex)];
+            remainingMask &= ~(1 << playerIndex);
+            LiSendMultiControllerEvent(playerIndex, remainingMask, 0, 0, 0, 0, 0, 0, 0);
+        }
+        NSLog(@"[InputDiag] cleanup detached pad slots mask 0x%X -> 0x%X",
+              finalGamepadMask, remainingMask);
 
         // The calls above only ENQUEUE packets; common-c's input send thread
         // transmits them, and LiStopConnection (stopStream runs right after

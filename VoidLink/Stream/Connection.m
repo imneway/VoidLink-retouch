@@ -402,12 +402,17 @@ void ClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t
 
 -(void) terminate
 {
+    [self terminateWithCompletion:nil];
+}
+
+-(void) terminateWithCompletion:(void (^)(void))completion
+{
     // Interrupt any action blocking LiStartConnection(). This is
     // thread-safe and done outside initLock on purpose, since we
     // won't be able to acquire it if LiStartConnection is in
     // progress.
     LiInterruptConnection();
-    
+
     // We dispatch this async to get out because this can be invoked
     // on a thread inside common and we don't want to deadlock. It also avoids
     // blocking on the caller's thread waiting to acquire initLock.
@@ -415,6 +420,12 @@ void ClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t
         [initLock lock];
         LiStopConnection();
         [initLock unlock];
+        // LiStopConnection has completed the graceful ENet disconnect (or
+        // timed out trying) and termination callbacks are disabled, so any
+        // abnormal-termination state observed by the caller is final now.
+        if (completion) {
+            completion();
+        }
     });
 }
 
