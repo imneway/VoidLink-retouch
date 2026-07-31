@@ -1371,7 +1371,6 @@ static NSMutableSet* hostList;
     _autoEnterLastProbeTimestamp = 0;
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterDesktopHostName"];
     [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"AutoEnterTriggered"];
-    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterPreparedAt"];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
@@ -1400,7 +1399,6 @@ static NSMutableSet* hostList;
     _autoEnterLaunchInProgress = NO;
     _autoEnterLastProbeTimestamp = 0;
     [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"AutoEnterTriggered"];
-    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterPreparedAt"];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
@@ -2302,18 +2300,20 @@ static NSMutableSet* hostList;
     [self performSelector:@selector(consumePendingAutoEnter) withObject:nil afterDelay:0.0];
 }
 
+// One-shot launch evaluation, consumed by the FIRST active invocation of
+// consumePendingAutoEnter regardless of which branch it takes. The
+// open-and-play launch fallback must only ever run on that first invocation —
+// a later viewDidAppear/foreground evaluation would yank the user back into
+// the stream after a deliberate exit. File-scope so viewWillAppear can
+// predict whether the fallback is still pending and pre-show the cover.
+static BOOL sLaunchAutoEnterEvaluated = NO;
+
 - (void)consumePendingAutoEnter
 {
     if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
         return;
     }
 
-    // One-shot launch evaluation, consumed by the FIRST active invocation
-    // regardless of which branch it takes below. The dirty-session fallback
-    // must only ever run on that first invocation: the flag also gets set on
-    // abnormal ends later in this run, and a stale evaluation on a later
-    // viewDidAppear/foreground would yank the user back into the stream.
-    static BOOL sLaunchAutoEnterEvaluated = NO;
     BOOL isLaunchEvaluation = !sLaunchAutoEnterEvaluated;
     sLaunchAutoEnterEvaluated = YES;
 
@@ -2338,50 +2338,22 @@ static NSMutableSet* hostList;
         pendingHost = [[NSUserDefaults standardUserDefaults] stringForKey:@"AutoEnterDesktopHostName"];
     }
     if (triggered && pendingHost.length > 0) {
-        // A trigger persisted by a background stop whose process was then
-        // killed can be arbitrarily old at the next cold launch. Only honor
-        // it while fresh; external triggers (URL/AppIntent) don't write
-        // AutoEnterPreparedAt (it is cleared on every consumption), so they
-        // are never mistaken for stale.
-        double preparedAt = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AutoEnterPreparedAt"];
-        // Age bounds both ways: far-future stamps (backward clock correction
-        // after the stamp was written) are just as untrustworthy as old ones.
-        double preparedAge = [[NSDate date] timeIntervalSince1970] - preparedAt;
-        if (isLaunchEvaluation && preparedAt > 0 &&
-            (preparedAge > 600.0 || preparedAge < -60.0)) {
-            NSLog(@"[InputDiag] stale auto-enter trigger at launch (%.0fs old) — ignoring", preparedAge);
-            [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"AutoEnterTriggered"];
-            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterDesktopHostName"];
-            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterPreparedAt"];
-            [[NSUserDefaults standardUserDefaults] synchronize];
-            [self hideAutoEnterCover];
-            return;
-        }
         [self beginAutoEnterForHostName:pendingHost];
         // consume trigger flag for this session
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"AutoEnterTriggered"];
-        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterPreparedAt"];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
     else {
-        // Killed/crashed mid-stream last run: the dirty-session flag is only
-        // cleared by a graceful stop, so seeing it at process launch means
-        // the previous run died while streaming. Resume the last-streamed
-        // host automatically instead of making the user re-pick it. Only on
-        // the launch evaluation, and only when no explicit trigger claimed it.
+        // Open-and-play: every cold launch goes straight into the last
+        // streamed host — no dirty-flag or freshness conditions. The user's
+        // workflow is "open VoidLink = play"; the rare settings visit has two
+        // exits (the toast's cancel button, and the one-shot suppression a
+        // deliberate in-app exit sets). Explicit URL/AppIntent triggers take
+        // the branch above with their own host.
         if (isLaunchEvaluation) {
-            NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
-            NSString* lastHost = [defaults stringForKey:@"AutoEnterLastStreamHostName"];
-            // Same freshness rule as the trigger path: the heartbeat says when
-            // the dead run last streamed — a crash from hours ago shouldn't
-            // auto-resume at today's launch.
-            double lastAlive = [defaults doubleForKey:@"VoidStreamLastAliveAt"];
-            double aliveAge = [[NSDate date] timeIntervalSince1970] - lastAlive;
-            // Bounded both ways — a future heartbeat (backward clock
-            // correction) must not count as fresh forever.
-            BOOL fresh = lastAlive > 0 && aliveAge < 600.0 && aliveAge > -60.0;
-            if (lastHost.length > 0 && [defaults boolForKey:@"VoidStreamSessionDirty"] && fresh) {
-                NSLog(@"[InputDiag] dirty session flag at launch — auto-resuming stream on %@", lastHost);
+            NSString* lastHost = [[NSUserDefaults standardUserDefaults] stringForKey:@"AutoEnterLastStreamHostName"];
+            if (lastHost.length > 0) {
+                NSLog(@"[InputDiag] launch auto-enter — resuming last host %@", lastHost);
                 [self beginAutoEnterForHostName:lastHost];
                 return;
             }
@@ -2404,12 +2376,19 @@ static NSMutableSet* hostList;
 {
     [super viewWillAppear:NO];
 
-    // A pending auto-enter (Shortcut/URL cold launch, or background stream
-    // resume) will kick off shortly after this view settles. Cover the hosts
-    // UI before the first frame renders so the user goes launch screen →
-    // loading → stream with no flash of this page. consumePendingAutoEnter
-    // removes the cover if it decides nothing should launch.
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"AutoEnterTriggered"]) {
+    // A pending auto-enter (Shortcut/URL cold launch, background stream
+    // resume, or the open-and-play launch fallback) will kick off shortly
+    // after this view settles. Cover the hosts UI before the first frame
+    // renders so the user goes launch screen → loading → stream with no flash
+    // of this page. consumePendingAutoEnter removes the cover if it decides
+    // nothing should launch. Mirrors that method's decision inputs: explicit
+    // trigger, or a still-pending launch evaluation that will auto-enter the
+    // last host (unless one-shot suppression will stop it).
+    NSUserDefaults* coverDefaults = [NSUserDefaults standardUserDefaults];
+    BOOL launchFallbackPending = !sLaunchAutoEnterEvaluated &&
+        ![coverDefaults boolForKey:@"AutoEnterSuppressOnce"] &&
+        [coverDefaults stringForKey:@"AutoEnterLastStreamHostName"].length > 0;
+    if ([coverDefaults boolForKey:@"AutoEnterTriggered"] || launchFallbackPending) {
         [self showAutoEnterCover];
     }
 

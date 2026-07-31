@@ -2592,22 +2592,16 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         if (lastHostName.length > 0) {
             [defaults setObject:lastHostName forKey:@"AutoEnterDesktopHostName"];
             [defaults setBool:YES forKey:@"AutoEnterTriggered"];
-            // Freshness stamp: if the process is killed before this trigger is
-            // consumed, a cold launch hours later must not yank the user back
-            // into a long-abandoned stream (consumePendingAutoEnter checks it).
-            [defaults setDouble:[[NSDate date] timeIntervalSince1970] forKey:@"AutoEnterPreparedAt"];
             [defaults removeObjectForKey:@"AutoEnterSuppressOnce"];
         }
         else {
             [defaults setBool:YES forKey:@"AutoEnterSuppressOnce"];
             [defaults setBool:NO forKey:@"AutoEnterTriggered"];
-            [defaults removeObjectForKey:@"AutoEnterPreparedAt"];
         }
     }
     else {
         [defaults setBool:YES forKey:@"AutoEnterSuppressOnce"];
         [defaults setBool:NO forKey:@"AutoEnterTriggered"];
-        [defaults removeObjectForKey:@"AutoEnterPreparedAt"];
     }
     [defaults synchronize];
 }

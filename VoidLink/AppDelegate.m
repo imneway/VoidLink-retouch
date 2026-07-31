@@ -17,10 +17,6 @@
 static void AutoEnterDarwinCallback(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     dispatch_async(dispatch_get_main_queue(), ^{
         [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"AutoEnterTriggered"];
-        // Freshness stamp: every AutoEnterTriggered=YES writer must refresh it,
-        // or a lingering old stamp makes launch-time consumption reject this
-        // trigger as stale (MainFrameViewController consumePendingAutoEnter).
-        [[NSUserDefaults standardUserDefaults] setDouble:[[NSDate date] timeIntervalSince1970] forKey:@"AutoEnterPreparedAt"];
         [[NSUserDefaults standardUserDefaults] synchronize];
         NSString *host = [[NSUserDefaults standardUserDefaults] stringForKey:@"AutoEnterDesktopHostName"];
         if (host.length > 0) {
@@ -124,7 +120,6 @@ static NSString* DB_NAME = @"Limelight_iOS.sqlite";
             self.autoEnterHostName = hostParam;
             [[NSUserDefaults standardUserDefaults] setObject:hostParam forKey:@"AutoEnterDesktopHostName"];
             [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"AutoEnterTriggered"];
-            [[NSUserDefaults standardUserDefaults] setDouble:[[NSDate date] timeIntervalSince1970] forKey:@"AutoEnterPreparedAt"];
             [[NSUserDefaults standardUserDefaults] synchronize];
             // Notify running app instance if present
             [[NSNotificationCenter defaultCenter] postNotificationName:@"VoidLinkAutoEnterRequested" object:nil userInfo:@{ @"host": hostParam }];
