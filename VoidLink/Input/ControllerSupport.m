@@ -2670,13 +2670,25 @@ static NSInteger sAliveControllerSupportCount = 0;
     if (lastAliveEpochSeconds > 0 && lastAliveEpochSeconds <= now) {
         _reattachZombieClearTime = lastAliveEpochSeconds + 12.0;  // 10s ping timeout + teardown margin
         NSTimeInterval untilClear = _reattachZombieClearTime - now;
-        if (untilClear <= 0) {
-            // Zombie was already gone before this connection's first
-            // arrivals — they got slot 0 directly. Quick verification cycle
-            // plus one safety round in case the timing model was wrong
-            // (forward wall-clock jumps make a recent heartbeat look
-            // ancient); the safety round is auto-cancelled by the confidence
-            // check once the first cycle's arrivals all succeed.
+        if (untilClear <= -2.0) {
+            // Zombie died comfortably before this connection even started —
+            // its slots were free when our first arrivals went out, so they
+            // bound the right pads. Any replug cycle here would yank a
+            // healthy, game-bound pad for no reason (a 0.4s dead window plus
+            // an emulator rebind that some games answer by switching input
+            // modes). Do nothing. Accepted residual risk: a forward wall-clock
+            // jump between the heartbeat write and this reconnect can make a
+            // live zombie look long-dead and skip recovery — rare, and the
+            // user's existing remedy (disconnect/reconnect) still applies.
+            NSLog(@"[InputDiag] zombie window already clear before connect — no reattach cycles");
+            _pendingReattachDeadlines = nil;
+            return;
+        } else if (untilClear <= 0) {
+            // Borderline: the model says just-cleared, but the margin is thin
+            // (heartbeat granularity, clock skew). One quick verification
+            // cycle plus one safety round; the safety round is auto-cancelled
+            // by the confidence check once the first cycle's arrivals all
+            // succeed.
             [delays addObject:@2.0];
             [delays addObject:@10.0];
         } else {
@@ -2835,11 +2847,16 @@ static NSInteger sAliveControllerSupportCount = 0;
 
         // Confidence: a re-arrival that fully succeeded after the zombie-clear
         // time necessarily won a fresh slot 0 — remaining cycles would only
-        // churn a healthy pad (and churn is what bites Eden). Cancel them.
-        // Any deferred arrival keeps the remaining cycles as retries.
+        // churn a healthy pad (and churn is what bites Eden, and what some
+        // games answer by switching input modes). Cancel them. The clear time
+        // already carries a 2s margin over the host's ping timeout, so the
+        // aimed first cycle (clear+0.5, phase 2 at +0.9) must qualify — with
+        // the old "+1.0" slack it missed by a hair and a pointless second
+        // replug always followed. Any deferred arrival keeps the remaining
+        // cycles as retries.
         if (allArrivalsReported &&
             strongSelf->_reattachZombieClearTime > 0 &&
-            [[NSDate date] timeIntervalSince1970] > strongSelf->_reattachZombieClearTime + 1.0 &&
+            [[NSDate date] timeIntervalSince1970] > strongSelf->_reattachZombieClearTime &&
             strongSelf->_pendingReattachDeadlines.count > 0) {
             NSLog(@"[InputDiag] reattach confident post-zombie — cancelling %lu remaining cycle(s)",
                   (unsigned long)strongSelf->_pendingReattachDeadlines.count);

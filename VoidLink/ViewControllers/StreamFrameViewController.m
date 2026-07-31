@@ -2592,16 +2592,22 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         if (lastHostName.length > 0) {
             [defaults setObject:lastHostName forKey:@"AutoEnterDesktopHostName"];
             [defaults setBool:YES forKey:@"AutoEnterTriggered"];
+            // Freshness stamp: if the process is killed before this trigger is
+            // consumed, a cold launch hours later must not yank the user back
+            // into a long-abandoned stream (consumePendingAutoEnter checks it).
+            [defaults setDouble:[[NSDate date] timeIntervalSince1970] forKey:@"AutoEnterPreparedAt"];
             [defaults removeObjectForKey:@"AutoEnterSuppressOnce"];
         }
         else {
             [defaults setBool:YES forKey:@"AutoEnterSuppressOnce"];
             [defaults setBool:NO forKey:@"AutoEnterTriggered"];
+            [defaults removeObjectForKey:@"AutoEnterPreparedAt"];
         }
     }
     else {
         [defaults setBool:YES forKey:@"AutoEnterSuppressOnce"];
         [defaults setBool:NO forKey:@"AutoEnterTriggered"];
+        [defaults removeObjectForKey:@"AutoEnterPreparedAt"];
     }
     [defaults synchronize];
 }
@@ -2822,13 +2828,20 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         _inactivityTimer = nil;
     }
 
-    // Terminate the stream if the app is inactive for ...
-    Log(LOG_I, @"Starting inactivity termination timer with %d min", _settings.backgroundSessionTimer.intValue);
-    _inactivityTimer = [NSTimer scheduledTimerWithTimeInterval:60*(double)_settings.backgroundSessionTimer.intValue
-                                  target:self
-                                selector:@selector(inactiveTimerExpired:)
-                                userInfo:nil
-                                 repeats:NO];
+    // Terminate the stream if the app is inactive for ... The 0-minute
+    // ("disconnect") setting is handled synchronously below instead: a
+    // 0-interval timer needs a runloop pass to fire, and iOS can freeze the
+    // process before that happens (then applicationDidBecomeActive
+    // invalidates it on thaw) — the stream then dies without a graceful
+    // disconnect and the host keeps a zombie pad slot for its ping timeout.
+    if (_settings.backgroundSessionTimer.intValue > 0) {
+        Log(LOG_I, @"Starting inactivity termination timer with %d min", _settings.backgroundSessionTimer.intValue);
+        _inactivityTimer = [NSTimer scheduledTimerWithTimeInterval:60*(double)_settings.backgroundSessionTimer.intValue
+                                      target:self
+                                    selector:@selector(inactiveTimerExpired:)
+                                    userInfo:nil
+                                     repeats:NO];
+    }
 
     // Guard against silent suspension (see the _bgGracefulStopTask ivar
     // comment). Backgrounded streaming normally survives on the `audio`
@@ -2841,7 +2854,11 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     // slot (OSC dead all session). The background task below buys guaranteed
     // CPU; a watchdog polls backgroundTimeRemaining and tears the stream
     // down gracefully — with time to spare — once suspension looms. PiP and
-    // AirPlay legitimately keep running — skip.
+    // AirPlay legitimately keep running — skip. Deliberate semantic choice:
+    // that exemption also covers the 0-minute ("disconnect") immediate stop
+    // below — PiP/AirPlay count as the user still watching, not as
+    // backgrounding. (The legacy 0-interval inactivity timer used to kill
+    // even an active PiP; nothing sane wants that.)
     BOOL pipActive = self.pipController && self.pipController.isPictureInPictureActive;
     NSLog(@"[InputDiag] didEnterBackground pip=%d airplay=%d leftPage=%d remaining=%.0fs",
           pipActive, [self isAirPlaying], _hasLeftStreamPage,
@@ -2877,7 +2894,17 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         if (bgTask == UIBackgroundTaskInvalid) {
             NSLog(@"[InputDiag] background watchdog: task DENIED by system");
         }
-        [self scheduleBackgroundSuspensionWatchdogForEpoch:epoch afterDelay:2.0];
+        if (_settings.backgroundSessionTimer.intValue == 0) {
+            // "disconnect" keep-alive setting: stop synchronously while this
+            // handler still has guaranteed CPU. The cleanup detach frees the
+            // host's pad slots before the process can be frozen, so even a
+            // swipe-kill right after this leaves no zombie holding slot 0 —
+            // the next session's arrival binds the right pad immediately.
+            NSLog(@"[InputDiag] background disconnect setting — stopping stream now");
+            [self performBackgroundGracefulStopForEpoch:epoch endTaskAfterDelay:4.0];
+        } else {
+            [self scheduleBackgroundSuspensionWatchdogForEpoch:epoch afterDelay:2.0];
+        }
     }
 
 #if !TARGET_OS_TV

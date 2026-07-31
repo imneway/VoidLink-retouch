@@ -1371,6 +1371,7 @@ static NSMutableSet* hostList;
     _autoEnterLastProbeTimestamp = 0;
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterDesktopHostName"];
     [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"AutoEnterTriggered"];
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterPreparedAt"];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
@@ -1399,6 +1400,7 @@ static NSMutableSet* hostList;
     _autoEnterLaunchInProgress = NO;
     _autoEnterLastProbeTimestamp = 0;
     [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"AutoEnterTriggered"];
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterPreparedAt"];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
@@ -2336,9 +2338,29 @@ static NSMutableSet* hostList;
         pendingHost = [[NSUserDefaults standardUserDefaults] stringForKey:@"AutoEnterDesktopHostName"];
     }
     if (triggered && pendingHost.length > 0) {
+        // A trigger persisted by a background stop whose process was then
+        // killed can be arbitrarily old at the next cold launch. Only honor
+        // it while fresh; external triggers (URL/AppIntent) don't write
+        // AutoEnterPreparedAt (it is cleared on every consumption), so they
+        // are never mistaken for stale.
+        double preparedAt = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AutoEnterPreparedAt"];
+        // Age bounds both ways: far-future stamps (backward clock correction
+        // after the stamp was written) are just as untrustworthy as old ones.
+        double preparedAge = [[NSDate date] timeIntervalSince1970] - preparedAt;
+        if (isLaunchEvaluation && preparedAt > 0 &&
+            (preparedAge > 600.0 || preparedAge < -60.0)) {
+            NSLog(@"[InputDiag] stale auto-enter trigger at launch (%.0fs old) — ignoring", preparedAge);
+            [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"AutoEnterTriggered"];
+            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterDesktopHostName"];
+            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterPreparedAt"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+            [self hideAutoEnterCover];
+            return;
+        }
         [self beginAutoEnterForHostName:pendingHost];
         // consume trigger flag for this session
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"AutoEnterTriggered"];
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AutoEnterPreparedAt"];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
     else {
@@ -2350,7 +2372,15 @@ static NSMutableSet* hostList;
         if (isLaunchEvaluation) {
             NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
             NSString* lastHost = [defaults stringForKey:@"AutoEnterLastStreamHostName"];
-            if (lastHost.length > 0 && [defaults boolForKey:@"VoidStreamSessionDirty"]) {
+            // Same freshness rule as the trigger path: the heartbeat says when
+            // the dead run last streamed — a crash from hours ago shouldn't
+            // auto-resume at today's launch.
+            double lastAlive = [defaults doubleForKey:@"VoidStreamLastAliveAt"];
+            double aliveAge = [[NSDate date] timeIntervalSince1970] - lastAlive;
+            // Bounded both ways — a future heartbeat (backward clock
+            // correction) must not count as fresh forever.
+            BOOL fresh = lastAlive > 0 && aliveAge < 600.0 && aliveAge > -60.0;
+            if (lastHost.length > 0 && [defaults boolForKey:@"VoidStreamSessionDirty"] && fresh) {
                 NSLog(@"[InputDiag] dirty session flag at launch — auto-resuming stream on %@", lastHost);
                 [self beginAutoEnterForHostName:lastHost];
                 return;

@@ -24,6 +24,8 @@ struct AutoEnterDesktopIntent: AppIntent {
         // Persist the target host for the app to consume on launch
         UserDefaults.standard.set(host, forKey: "AutoEnterDesktopHostName")
         UserDefaults.standard.set(true, forKey: "AutoEnterTriggered")
+        // Freshness stamp — see consumePendingAutoEnter's staleness check.
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "AutoEnterPreparedAt")
         _ = UserDefaults.standard.synchronize()
         // Notify running app (if any) using Darwin notification
         #if canImport(CoreFoundation)

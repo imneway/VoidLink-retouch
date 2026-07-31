@@ -58,6 +58,8 @@ static UIWindow *_externalSceneWindow = nil;
                 AppDelegate *delegate = (AppDelegate *)[UIApplication sharedApplication].delegate;
                 [[NSUserDefaults standardUserDefaults] setObject:hostParam forKey:@"AutoEnterDesktopHostName"];
                 [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"AutoEnterTriggered"];
+                // Freshness stamp — see consumePendingAutoEnter's staleness check.
+                [[NSUserDefaults standardUserDefaults] setDouble:[[NSDate date] timeIntervalSince1970] forKey:@"AutoEnterPreparedAt"];
                 if (@available(iOS 13.0, *)) {
                     delegate.autoEnterHostName = hostParam; // foreground delivery
                 }
@@ -87,6 +89,8 @@ static UIWindow *_externalSceneWindow = nil;
             delegate.autoEnterHostName = hostParam;
             [[NSUserDefaults standardUserDefaults] setObject:hostParam forKey:@"AutoEnterDesktopHostName"];
             [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"AutoEnterTriggered"];
+            // Freshness stamp — see consumePendingAutoEnter's staleness check.
+            [[NSUserDefaults standardUserDefaults] setDouble:[[NSDate date] timeIntervalSince1970] forKey:@"AutoEnterPreparedAt"];
             [[NSUserDefaults standardUserDefaults] synchronize];
             [[NSNotificationCenter defaultCenter] postNotificationName:@"VoidLinkAutoEnterRequested" object:nil userInfo:@{ @"host": hostParam }];
         }
