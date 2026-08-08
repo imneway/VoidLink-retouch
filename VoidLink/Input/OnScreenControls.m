@@ -98,6 +98,11 @@ static NSSet *validPositionButtonNames;
     BOOL _dpadDownActive;
     BOOL _dpadLeftActive;
     BOOL _dpadRightActive;
+    // Diagonal tap gate (see dpadSectorForLocation:allowDiagonal:): where the
+    // current d-pad touch landed, and whether it has dragged far enough from
+    // there to unlock full 8-way steering.
+    CGPoint _dpadTouchDownLocation;
+    BOOL _dpadDragExempt;
     // 8-way sector the sticky d-pad touch currently holds (0 = right, going
     // clockwise in 45° steps; -1 = none). Direction is derived from the angle
     // around the d-pad hub, so the finger keeps steering the d-pad even after
@@ -1342,6 +1347,34 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
     }
 }
 
+// Diagonal tap gate: an un-dragged touch must land OUTSIDE this ring (fraction
+// of the d-pad's circumscribed circle) for a diagonal sector to engage — taps
+// on the pad body always resolve to the nearest cardinal, because a tap aimed
+// at an arrow easily lands angularly inside a diagonal sector (points near the
+// hub subtend huge angles; thumb rolls add more). Dragging expresses intent:
+// once the touch travels DPAD_DIAGONAL_DRAG_SLOP from its landing point, full
+// 8-way steering unlocks for the rest of the touch.
+#define DPAD_DIAGONAL_TAP_RING_FACTOR 0.80f
+#define DPAD_DIAGONAL_DRAG_SLOP 12.0f
+
+// The d-pad's circumscribed-circle radius (arrow tips), shared by the capture
+// test and the diagonal tap gate.
+- (CGFloat) dpadOuterRadius {
+    return D_PAD_CENTER_Y - CGRectGetMinY(_upButton.frame);
+}
+
+// The ring is judged against the touch's LANDING point, never its current
+// location — otherwise a sub-slop wobble across the ring edge would unlock a
+// diagonal that neither the landing position nor a real drag earned.
+- (BOOL) dpadDiagonalAllowed {
+    if (_dpadDragExempt) {
+        return YES;
+    }
+    CGFloat r = hypot(_dpadTouchDownLocation.x - D_PAD_CENTER_X,
+                      _dpadTouchDownLocation.y - D_PAD_CENTER_Y);
+    return r > [self dpadOuterRadius] * DPAD_DIAGONAL_TAP_RING_FACTOR;
+}
+
 // Sticky 8-way sector for the d-pad touch at `loc` (in _view coords). Purely
 // angle-based around the d-pad hub, so radius doesn't matter: the finger keeps
 // driving the d-pad after sliding off the buttons. Two stability rules:
@@ -1351,7 +1384,10 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
 //   - A small angular hysteresis past the 22.5° sector edge is required before
 //     switching sectors, so a finger resting on a boundary doesn't rapidly
 //     toggle a diagonal's second flag.
-- (int) dpadSectorForLocation:(CGPoint)loc {
+// With allowDiagonal == NO a fresh resolution snaps to the nearest CARDINAL
+// (4-way). A diagonal already held via stickiness is deliberately kept — it
+// was legitimately acquired when it engaged.
+- (int) dpadSectorForLocation:(CGPoint)loc allowDiagonal:(BOOL)allowDiagonal {
     CGFloat dx = loc.x - D_PAD_CENTER_X;
     CGFloat dy = loc.y - D_PAD_CENTER_Y;
     CGFloat deadZoneRadius = MAX(10.0f, D_PAD_CENTER_Y - CGRectGetMaxY(_upButton.frame));
@@ -1369,7 +1405,12 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
         }
     }
     int sector = (int)floorf((angleDeg + 22.5f) / 45.0f);
-    return ((sector % 8) + 8) % 8;
+    sector = ((sector % 8) + 8) % 8;
+    if (!allowDiagonal && (sector % 2) != 0) {
+        int cardinal = (int)floorf((angleDeg + 45.0f) / 90.0f) * 2;
+        sector = ((cardinal % 8) + 8) % 8;
+    }
+    return sector;
 }
 
 // Whether a fresh touch-down at `loc` should be captured by the d-pad. Beyond
@@ -1388,8 +1429,7 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
     if (_upButton.hidden || _upButton.superlayer == nil) {
         return NO;
     }
-    CGFloat outerRadius = D_PAD_CENTER_Y - CGRectGetMinY(_upButton.frame);
-    return hypot(loc.x - D_PAD_CENTER_X, loc.y - D_PAD_CENTER_Y) <= outerRadius;
+    return hypot(loc.x - D_PAD_CENTER_X, loc.y - D_PAD_CENTER_Y) <= [self dpadOuterRadius];
 }
 
 - (BOOL) handleTouchMovedEvent:touches {
@@ -1453,7 +1493,7 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
                                           flags:UP_FLAG | DOWN_FLAG | LEFT_FLAG | RIGHT_FLAG];
 
             // Sticky 8-way steering: the held directions come from the angle
-            // around the d-pad hub (see dpadSectorForLocation:), not from
+            // around the d-pad hub (see dpadSectorForLocation:allowDiagonal:), not from
             // hit-testing the arrow layers. So the finger keeps driving the
             // d-pad after sliding outside the button band, and diagonals
             // (two flags at once) work — the old per-layer hit test could
@@ -1465,8 +1505,14 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
             // button, stalling the main thread during play. The button flags are
             // still recomputed every event (cheap), and any transition marks the
             // event as updated so the cleared/set flags are actually flushed.
+            if (!_dpadDragExempt &&
+                hypot(touchLocation.x - _dpadTouchDownLocation.x,
+                      touchLocation.y - _dpadTouchDownLocation.y) >= DPAD_DIAGONAL_DRAG_SLOP) {
+                _dpadDragExempt = YES;
+            }
             int prevSector = _dpadSector;
-            _dpadSector = [self dpadSectorForLocation:touchLocation];
+            _dpadSector = [self dpadSectorForLocation:touchLocation
+                                        allowDiagonal:[self dpadDiagonalAllowed]];
             BOOL nowUp, nowDown, nowLeft, nowRight;
             dpadSectorToDirections(_dpadSector, &nowUp, &nowDown, &nowLeft, &nowRight);
             if (nowUp) {
@@ -1775,7 +1821,10 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
         } else if (_dpadTouch == nil && [self dpadCapturesTouchAtLocation:touchLocation]) {
             _dpadTouch = touch;
             _dpadSector = -1;
-            _dpadSector = [self dpadSectorForLocation:touchLocation];
+            _dpadTouchDownLocation = touchLocation;
+            _dpadDragExempt = NO;
+            _dpadSector = [self dpadSectorForLocation:touchLocation
+                                        allowDiagonal:[self dpadDiagonalAllowed]];
             BOOL nowUp, nowDown, nowLeft, nowRight;
             dpadSectorToDirections(_dpadSector, &nowUp, &nowDown, &nowLeft, &nowRight);
             if (nowUp) {
@@ -1990,6 +2039,7 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
                                           flags:UP_FLAG | DOWN_FLAG | LEFT_FLAG | RIGHT_FLAG];
             _dpadTouch = nil;
             _dpadSector = -1;
+            _dpadDragExempt = NO;
             _dpadUpActive = _dpadDownActive = _dpadLeftActive = _dpadRightActive = NO;
             _upButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_upButton.name] floatValue];
             _upButton.shadowOpacity = 0.0;
