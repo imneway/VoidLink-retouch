@@ -30,6 +30,15 @@
 
 static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 
+// Apple Pencil client-side long press → real mouse right click.
+// How long the pencil must stay stationary to trigger it (matches the finger
+// long-press delay in AbsoluteTouchHandler), and how far (normalized) it may
+// drift before the long press is abandoned. The delay must stay comfortably
+// below Windows' own pen press-and-hold commit (~1s) so the pen contact can be
+// cancelled before Windows Ink fires its unreliable right-click gesture.
+#define PENCIL_LONG_PRESS_ACTIVATION_DELAY 0.650f
+#define PENCIL_LONG_PRESS_ACTIVATION_DELTA 0.01f
+
 static BOOL RSPADALT2ValueNear(CGFloat value, CGFloat target, CGFloat tolerance) {
     return fabs(value - target) < tolerance;
 }
@@ -86,6 +95,11 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     KeyboardInputField* keyInputField;
     BOOL isInputingText;
     BOOL isPencilHovering;
+
+    // Apple Pencil client-side long-press → right click state
+    NSTimer* pencilLongPressTimer;
+    CGPoint pencilTouchDownLocation;
+    BOOL pencilRightClickActive;
     NSMutableSet* keysDown;
     float streamAspectRatio;
 
@@ -949,14 +963,98 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
             return YES;
     }
 
-    CGPoint location = [self adjustCoordinatesForVideoArea:[event locationInView:self]];
+    CGPoint viewLocation = [event locationInView:self];
+
+    // Client-side long press → real mouse right click. Windows' own pen
+    // press-and-hold (the spinning-ring Ink gesture) is unreliable in many
+    // third-party apps, so a stationary pencil press is converted here instead:
+    // cancel the pen contact before Windows commits its gesture, then hold the
+    // right mouse button until the pencil lifts — the same semantics a finger
+    // long press gets.
+    switch (type) {
+        case LI_TOUCH_EVENT_DOWN:
+            // Clear any stale timer; the new one is armed only after the pen
+            // DOWN was actually accepted by the host (below).
+            [pencilLongPressTimer invalidate];
+            pencilLongPressTimer = nil;
+            break;
+        case LI_TOUCH_EVENT_MOVE:
+            if (pencilRightClickActive) {
+                // The pen contact was already cancelled on the host; drag the
+                // cursor with the right button held instead of sending pen moves.
+                [self updateCursorLocation:viewLocation isMouse:NO];
+                return YES;
+            }
+            if (sqrt(pow((viewLocation.x - pencilTouchDownLocation.x) / self.bounds.size.width, 2) +
+                     pow((viewLocation.y - pencilTouchDownLocation.y) / self.bounds.size.height, 2)) > PENCIL_LONG_PRESS_ACTIVATION_DELTA) {
+                [pencilLongPressTimer invalidate];
+                pencilLongPressTimer = nil;
+            }
+            break;
+        case LI_TOUCH_EVENT_UP:
+        case LI_TOUCH_EVENT_CANCEL:
+            [pencilLongPressTimer invalidate];
+            pencilLongPressTimer = nil;
+            if (pencilRightClickActive) {
+                pencilRightClickActive = NO;
+                // Menu pops on release, matching finger long-press behavior.
+                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+                return YES;
+            }
+            break;
+    }
+
+    CGPoint location = [self adjustCoordinatesForVideoArea:viewLocation];
     CGSize videoSize = [self getVideoAreaSize];
-    
-    return LiSendPenEvent(type, LI_TOOL_TYPE_PEN, 0, location.x / videoSize.width, location.y / videoSize.height,
-                          (event.force / event.maximumPossibleForce) / sin(event.altitudeAngle),
-                          0.0f, 0.0f,
-                          [self getRotationFromAzimuthAngle:[event azimuthAngleInView:self]],
-                          [self getTiltFromAltitudeAngle:event.altitudeAngle]) != LI_ERR_UNSUPPORTED;
+
+    int err = LiSendPenEvent(type, LI_TOOL_TYPE_PEN, 0, location.x / videoSize.width, location.y / videoSize.height,
+                             (event.force / event.maximumPossibleForce) / sin(event.altitudeAngle),
+                             0.0f, 0.0f,
+                             [self getRotationFromAzimuthAngle:[event azimuthAngleInView:self]],
+                             [self getTiltFromAltitudeAngle:event.altitudeAngle]);
+
+    // Arm the long-press timer only for a pen contact the host actually
+    // accepted — otherwise a failed DOWN could still spawn a synthetic right
+    // click later. Common run-loop modes so a concurrent tracking interaction
+    // can't delay the 650ms deadline past Windows' own press-and-hold commit.
+    if (type == LI_TOUCH_EVENT_DOWN && err == 0) {
+        pencilTouchDownLocation = viewLocation;
+        pencilLongPressTimer = [NSTimer timerWithTimeInterval:PENCIL_LONG_PRESS_ACTIVATION_DELAY
+                                                       target:self
+                                                     selector:@selector(onPencilLongPress:)
+                                                     userInfo:nil
+                                                      repeats:NO];
+        [[NSRunLoop mainRunLoop] addTimer:pencilLongPressTimer forMode:NSRunLoopCommonModes];
+    }
+
+    return err != LI_ERR_UNSUPPORTED;
+}
+
+- (void)onPencilLongPress:(NSTimer*)timer {
+    if (timer != pencilLongPressTimer) {
+        return; // stale timer that lost an invalidation race — never act on it
+    }
+    pencilLongPressTimer = nil;
+
+    // Cancel the pen contact on the host FIRST: this aborts Windows' own
+    // press-and-hold gesture (spinning ring) before it commits, so the Ink
+    // right-click can never fire alongside ours. If the cancel was not
+    // accepted, abort the conversion entirely — pressing the right button
+    // while the pen contact lingers would create the exact duplicate-input
+    // state this feature exists to prevent.
+    CGPoint location = [self adjustCoordinatesForVideoArea:pencilTouchDownLocation];
+    CGSize videoSize = [self getVideoAreaSize];
+    if (LiSendPenEvent(LI_TOUCH_EVENT_CANCEL, LI_TOOL_TYPE_PEN, 0,
+                       location.x / videoSize.width, location.y / videoSize.height,
+                       0.0f, 0.0f, 0.0f, LI_ROT_UNKNOWN, LI_TILT_UNKNOWN) != 0) {
+        return;
+    }
+
+    // Pin the host cursor to the pen tip, then press and hold the right mouse
+    // button — released when the pencil lifts (see sendStylusEvent UP/CANCEL).
+    [self updateCursorLocation:pencilTouchDownLocation isMouse:NO];
+    LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
+    pencilRightClickActive = YES;
 }
 
 - (void)sendStylusHoverEvent:(UIHoverGestureRecognizer*)gesture API_AVAILABLE(ios(13.0)) {
@@ -1248,7 +1346,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
                 // don't require this, but we do it anyway for them too.
                 // Cursor movement without a button held down is handled
                 // in pointerInteraction:regionForRequest:defaultRegion.
-                if (!isPencilHovering) [self updateCursorLocation:[touch locationInView:self] isMouse:YES];
+                if (!isPencilHovering && !pencilRightClickActive) [self updateCursorLocation:[touch locationInView:self] isMouse:YES];
                 return;
             }
         }
@@ -1484,6 +1582,16 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     [super willMoveToWindow:newWindow];
     if (newWindow == nil) {
         [self endRightEdgeGestureSuppression];
+        // Teardown backstop for the pencil long-press conversion: if the view
+        // leaves the window without a terminal touch callback, a pending timer
+        // would retain self and fire into a dead view, and an active synthetic
+        // right button would stay pressed on the host forever.
+        [pencilLongPressTimer invalidate];
+        pencilLongPressTimer = nil;
+        if (pencilRightClickActive) {
+            pencilRightClickActive = NO;
+            LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+        }
     }
 }
 
@@ -1545,7 +1653,9 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     
     // Move the cursor on the host if no buttons are pressed.
     // Motion with buttons pressed in handled in touchesMoved:
-    if (lastMouseButtonMask == 0 && !isPencilHovering) {
+    // pencilRightClickActive: while a pencil long-press right-drag is in
+    // flight, an indirect pointer must not yank the host cursor off the pen tip.
+    if (lastMouseButtonMask == 0 && !isPencilHovering && !pencilRightClickActive) {
         [self updateCursorLocation:request.location isMouse:YES];
     }
     
