@@ -33,9 +33,9 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 // Apple Pencil client-side long press → real mouse right click.
 // How long the pencil must stay stationary to trigger it (matches the finger
 // long-press delay in AbsoluteTouchHandler), and how far (normalized) it may
-// drift before the long press is abandoned. The delay must stay comfortably
-// below Windows' own pen press-and-hold commit (~1s) so the pen contact can be
-// cancelled before Windows Ink fires its unreliable right-click gesture.
+// drift before the long press is abandoned. The pen DOWN is withheld from the
+// host during this window (see sendStylusEvent), so it also bounds the extra
+// latency a stationary tap pays before it is delivered as DOWN+UP.
 #define PENCIL_LONG_PRESS_ACTIVATION_DELAY 0.650f
 #define PENCIL_LONG_PRESS_ACTIVATION_DELTA 0.01f
 
@@ -99,6 +99,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     // Apple Pencil client-side long-press → right click state
     NSTimer* pencilLongPressTimer;
     CGPoint pencilTouchDownLocation;
+    BOOL pencilPenDownDeferred;
     BOOL pencilRightClickActive;
     NSMutableSet* keysDown;
     float streamAspectRatio;
@@ -943,6 +944,10 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     // Don't touch stylus events if the host doesn't support them. We want to pass
     // them as normal touches for legacy hosts that don't understand pen events.
     if (!(LiGetHostFeatureFlags() & LI_FF_PEN_TOUCH_EVENTS)) {
+        // The pen path can vanish mid-contact (reconnect renegotiates host
+        // features) — never strand a pending conversion behind this early
+        // return, or a held right button / stale timer would leak.
+        [self resetPencilLongPressState];
         return NO;
     }
     
@@ -967,28 +972,58 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 
     // Client-side long press → real mouse right click. Windows' own pen
     // press-and-hold (the spinning-ring Ink gesture) is unreliable in many
-    // third-party apps, so a stationary pencil press is converted here instead:
-    // cancel the pen contact before Windows commits its gesture, then hold the
-    // right mouse button until the pencil lifts — the same semantics a finger
-    // long press gets.
+    // third-party apps, so a stationary pencil press is converted here instead.
+    //
+    // Crucially, the pen DOWN is DEFERRED while the pencil is stationary: the
+    // host is a virtual HID pen device, which has no "cancel" concept — any
+    // contact the host has seen can be turned into a click by Windows Ink when
+    // it ends (Ink replays the buffered tap when its press-and-hold aborts,
+    // which showed up as phantom double clicks). So nothing is sent until the
+    // contact declares itself: movement past the slop → commit DOWN and stream
+    // pen events as usual; lift before the delay → commit DOWN+UP as one clean
+    // tap; stationary past the delay → press the right mouse button and the
+    // host never sees a pen contact at all (no spinning ring, nothing for Ink
+    // to replay).
     switch (type) {
         case LI_TOUCH_EVENT_DOWN:
-            // Clear any stale timer; the new one is armed only after the pen
-            // DOWN was actually accepted by the host (below).
+            if (pencilRightClickActive) {
+                // Stale right button from a contact whose terminal event never
+                // arrived — release it before starting a fresh contact, or the
+                // two state machines would overlap.
+                pencilRightClickActive = NO;
+                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+            }
             [pencilLongPressTimer invalidate];
-            pencilLongPressTimer = nil;
-            break;
+            pencilTouchDownLocation = viewLocation;
+            pencilPenDownDeferred = YES;
+            // Common run-loop modes so a concurrent tracking interaction can't
+            // delay the 650ms deadline.
+            pencilLongPressTimer = [NSTimer timerWithTimeInterval:PENCIL_LONG_PRESS_ACTIVATION_DELAY
+                                                           target:self
+                                                         selector:@selector(onPencilLongPress:)
+                                                         userInfo:nil
+                                                          repeats:NO];
+            [[NSRunLoop mainRunLoop] addTimer:pencilLongPressTimer forMode:NSRunLoopCommonModes];
+            return YES; // nothing sent to the host yet
         case LI_TOUCH_EVENT_MOVE:
             if (pencilRightClickActive) {
-                // The pen contact was already cancelled on the host; drag the
-                // cursor with the right button held instead of sending pen moves.
+                // Long press already converted: drag the cursor with the right
+                // button held instead of sending pen moves.
                 [self updateCursorLocation:viewLocation isMouse:NO];
                 return YES;
             }
-            if (sqrt(pow((viewLocation.x - pencilTouchDownLocation.x) / self.bounds.size.width, 2) +
-                     pow((viewLocation.y - pencilTouchDownLocation.y) / self.bounds.size.height, 2)) > PENCIL_LONG_PRESS_ACTIVATION_DELTA) {
+            if (pencilPenDownDeferred) {
+                if (hypot((viewLocation.x - pencilTouchDownLocation.x) / self.bounds.size.width,
+                          (viewLocation.y - pencilTouchDownLocation.y) / self.bounds.size.height) <= PENCIL_LONG_PRESS_ACTIVATION_DELTA) {
+                    return YES; // still stationary — keep waiting
+                }
+                // Moved past the slop: this is a stroke/drag, not a long press.
+                // Commit the deferred DOWN at the original contact point, then
+                // fall through to send this MOVE normally.
                 [pencilLongPressTimer invalidate];
                 pencilLongPressTimer = nil;
+                pencilPenDownDeferred = NO;
+                [self sendCommittedPenEvent:LI_TOUCH_EVENT_DOWN atViewLocation:pencilTouchDownLocation withTouch:event];
             }
             break;
         case LI_TOUCH_EVENT_UP:
@@ -1001,33 +1036,55 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
                 LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
                 return YES;
             }
+            if (pencilPenDownDeferred) {
+                pencilPenDownDeferred = NO;
+                if (type == LI_TOUCH_EVENT_CANCEL) {
+                    return YES; // host never saw this contact — nothing to cancel
+                }
+                // Short stationary press: commit DOWN+UP together as one clean
+                // tap (DOWN here, UP through the normal send below).
+                [self sendCommittedPenEvent:LI_TOUCH_EVENT_DOWN atViewLocation:pencilTouchDownLocation withTouch:event];
+            }
             break;
     }
 
+    return [self sendCommittedPenEvent:type atViewLocation:viewLocation withTouch:event] != LI_ERR_UNSUPPORTED;
+}
+
+- (int)sendCommittedPenEvent:(uint8_t)type atViewLocation:(CGPoint)viewLocation withTouch:(UITouch*)event {
     CGPoint location = [self adjustCoordinatesForVideoArea:viewLocation];
     CGSize videoSize = [self getVideoAreaSize];
 
-    int err = LiSendPenEvent(type, LI_TOOL_TYPE_PEN, 0, location.x / videoSize.width, location.y / videoSize.height,
-                             (event.force / event.maximumPossibleForce) / sin(event.altitudeAngle),
-                             0.0f, 0.0f,
-                             [self getRotationFromAzimuthAngle:[event azimuthAngleInView:self]],
-                             [self getTiltFromAltitudeAngle:event.altitudeAngle]);
-
-    // Arm the long-press timer only for a pen contact the host actually
-    // accepted — otherwise a failed DOWN could still spawn a synthetic right
-    // click later. Common run-loop modes so a concurrent tracking interaction
-    // can't delay the 650ms deadline past Windows' own press-and-hold commit.
-    if (type == LI_TOUCH_EVENT_DOWN && err == 0) {
-        pencilTouchDownLocation = viewLocation;
-        pencilLongPressTimer = [NSTimer timerWithTimeInterval:PENCIL_LONG_PRESS_ACTIVATION_DELAY
-                                                       target:self
-                                                     selector:@selector(onPencilLongPress:)
-                                                     userInfo:nil
-                                                      repeats:NO];
-        [[NSRunLoop mainRunLoop] addTimer:pencilLongPressTimer forMode:NSRunLoopCommonModes];
+    // The tap path synthesizes a DOWN from a lifting touch, where force can be
+    // 0 with altitudeAngle 0 — guard the 0/0 (NaN) and clamp to [0, 1].
+    float pressure = 0.0f;
+    if (event.maximumPossibleForce > 0) {
+        pressure = event.force / event.maximumPossibleForce;
+        float sinAltitude = sin(event.altitudeAngle);
+        if (sinAltitude > 0.01f) {
+            pressure /= sinAltitude;
+        }
+        if (!(pressure > 0.0f)) pressure = 0.0f;
+        if (pressure > 1.0f) pressure = 1.0f;
     }
 
-    return err != LI_ERR_UNSUPPORTED;
+    return LiSendPenEvent(type, LI_TOOL_TYPE_PEN, 0, location.x / videoSize.width, location.y / videoSize.height,
+                          pressure,
+                          0.0f, 0.0f,
+                          [self getRotationFromAzimuthAngle:[event azimuthAngleInView:self]],
+                          [self getTiltFromAltitudeAngle:event.altitudeAngle]);
+}
+
+// Releases every piece of in-flight pencil long-press state: pending timer,
+// deferred contact, and (if held) the synthetic right mouse button.
+- (void)resetPencilLongPressState {
+    [pencilLongPressTimer invalidate];
+    pencilLongPressTimer = nil;
+    pencilPenDownDeferred = NO;
+    if (pencilRightClickActive) {
+        pencilRightClickActive = NO;
+        LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+    }
 }
 
 - (void)onPencilLongPress:(NSTimer*)timer {
@@ -1036,22 +1093,15 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     }
     pencilLongPressTimer = nil;
 
-    // Cancel the pen contact on the host FIRST: this aborts Windows' own
-    // press-and-hold gesture (spinning ring) before it commits, so the Ink
-    // right-click can never fire alongside ours. If the cancel was not
-    // accepted, abort the conversion entirely — pressing the right button
-    // while the pen contact lingers would create the exact duplicate-input
-    // state this feature exists to prevent.
-    CGPoint location = [self adjustCoordinatesForVideoArea:pencilTouchDownLocation];
-    CGSize videoSize = [self getVideoAreaSize];
-    if (LiSendPenEvent(LI_TOUCH_EVENT_CANCEL, LI_TOOL_TYPE_PEN, 0,
-                       location.x / videoSize.width, location.y / videoSize.height,
-                       0.0f, 0.0f, 0.0f, LI_ROT_UNKNOWN, LI_TILT_UNKNOWN) != 0) {
-        return;
+    if (!pencilPenDownDeferred) {
+        return; // contact already committed or gone — never convert it
     }
+    pencilPenDownDeferred = NO;
 
-    // Pin the host cursor to the pen tip, then press and hold the right mouse
-    // button — released when the pencil lifts (see sendStylusEvent UP/CANCEL).
+    // The host never saw this pen contact, so there is nothing to cancel and
+    // nothing Windows Ink could replay. Pin the host cursor to the pen tip,
+    // then press and hold the right mouse button — released when the pencil
+    // lifts (see sendStylusEvent UP/CANCEL).
     [self updateCursorLocation:pencilTouchDownLocation isMouse:NO];
     LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
     pencilRightClickActive = YES;
@@ -1059,7 +1109,14 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 
 - (void)sendStylusHoverEvent:(UIHoverGestureRecognizer*)gesture API_AVAILABLE(ios(13.0)) {
     uint8_t type;
-    
+
+    // While a contact is deferred or converted to a right-drag, the host must
+    // see no pen traffic at all — a stray hover would move the cursor off the
+    // pinned right-click location.
+    if (pencilPenDownDeferred || pencilRightClickActive) {
+        return;
+    }
+
     switch (gesture.state) {
         case UIGestureRecognizerStateBegan:
         case UIGestureRecognizerStateChanged:
@@ -1586,12 +1643,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
         // leaves the window without a terminal touch callback, a pending timer
         // would retain self and fire into a dead view, and an active synthetic
         // right button would stay pressed on the host forever.
-        [pencilLongPressTimer invalidate];
-        pencilLongPressTimer = nil;
-        if (pencilRightClickActive) {
-            pencilRightClickActive = NO;
-            LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
-        }
+        [self resetPencilLongPressState];
     }
 }
 
