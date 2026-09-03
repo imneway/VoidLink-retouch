@@ -71,6 +71,11 @@ static NSSet *validPositionButtonNames;
     ControllerSupport *_controllerSupport;
     VoidController *_controller;
     NSMutableArray* _deadTouches;
+    // Minimum host-press floor for the tap-style legacy buttons (see
+    // noteHostDownForTapSlot:). slot → CACurrentMediaTime() of the host DOWN,
+    // and slot → host release still waiting on the floor.
+    NSMutableDictionary<NSNumber*, NSNumber*>* _tapSlotDownTimes;
+    NSMutableDictionary<NSNumber*, dispatch_block_t>* _pendingHostReleases;
     // Hold counts per controller-button flag for the widget-side press/release
     // wrappers — see pressDownControllerButton. Guarded by @synchronized(self).
     NSMutableDictionary<NSNumber*, NSNumber*>* _oscButtonHoldCounts;
@@ -435,9 +440,28 @@ static float L3_Y;
 - (BOOL) pointHitsAnyVisibleLegacyOscButton:(CGPoint)point {
     if (self._level == OnScreenControlsLevelOff) return NO;
     if (!self.OSCButtonLayers.count) return NO;
+    return [self point:point hitsVisibleLayerAmong:self.OSCButtonLayers];
+}
+
+- (BOOL) pointHitsVisibleLegacyTapButton:(CGPoint)point {
+    if (self._level == OnScreenControlsLevelOff) return NO;
+    if (!self.OSCButtonLayers.count) return NO;
+    NSMutableArray<CALayer*> *tapLayers = [NSMutableArray arrayWithCapacity:self.OSCButtonLayers.count];
+    for (CALayer *layer in self.OSCButtonLayers) {
+        if (layer == _upButton || layer == _downButton || layer == _leftButton || layer == _rightButton
+            || layer == _leftStickBackground || layer == _rightStickBackground
+            || layer == _leftStick || layer == _rightStick) {
+            continue;
+        }
+        [tapLayers addObject:layer];
+    }
+    return [self point:point hitsVisibleLayerAmong:tapLayers];
+}
+
+- (BOOL) point:(CGPoint)point hitsVisibleLayerAmong:(NSArray<CALayer*> *)layers {
     CALayer *hostLayer = _view.layer;
     if (!hostLayer) return NO;
-    for (CALayer *layer in self.OSCButtonLayers) {
+    for (CALayer *layer in layers) {
         if (!layer) continue;
         if (layer.hidden) continue;
         if (layer.opacity <= 0.0f) continue;
@@ -488,6 +512,8 @@ static float L3_Y;
     }
     _controller = [controllerSupport getOscController];
     _deadTouches = [[NSMutableArray alloc] init];
+    _tapSlotDownTimes = [[NSMutableDictionary alloc] init];
+    _pendingHostReleases = [[NSMutableDictionary alloc] init];
     _dpadSector = -1;
     // Face-button swap settings are intentionally physical-controller-only.
     // Keep the virtual OSC button layout canonical even when swap is enabled.
@@ -1768,6 +1794,73 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
     return nil;
 }
 
+// Minimum host-side press duration for the tap-style legacy buttons. The
+// right-edge over-control recognizer withholds a touch's Began until it decides
+// (≤ ~70ms for a resting finger); a quick tap that lifts before that gets its
+// Began and Ended delivered back-to-back, which the host would see as a ~0ms
+// press and most games would drop. The floor is enforced per BUTTON SLOT, not
+// per touch: the touch slot (_aTouch …) and visuals are released immediately as
+// before, only the host state change is held back. Sticks / d-pad are exempt
+// (their release zeroes an axis, not a tap).
+static const CFTimeInterval kOscMinButtonPressDuration = 0.04;
+
+typedef NS_ENUM(NSInteger, OscTapSlot) {
+    OscTapSlotA = 0, OscTapSlotB, OscTapSlotX, OscTapSlotY,
+    OscTapSlotStart, OscTapSlotSelect, OscTapSlotL1, OscTapSlotR1, OscTapSlotL2, OscTapSlotR2,
+};
+
+// Call right before the host DOWN of a tap slot: a release of the previous press
+// still waiting on the floor goes out first (host sees UP then DOWN, never one
+// merged press), then the new press is stamped.
+- (void)noteHostDownForTapSlot:(OscTapSlot)slot {
+    NSNumber *key = @(slot);
+    dispatch_block_t pending = _pendingHostReleases[key];
+    if (pending) {
+        [_pendingHostReleases removeObjectForKey:key];
+        pending();
+        [_controllerSupport updateFinished:_controller];
+    }
+    _tapSlotDownTimes[key] = @(CACurrentMediaTime());
+}
+
+// Host-side release of a tap slot honoring the floor. `release` performs only the
+// state change (flag clear / trigger zero). Immediate case: the caller's usual
+// updateFinished sends it. Deferred case: this sends its own updateFinished.
+// `flag` is the controller button flag the slot drives (0 for the triggers).
+// A widget-side counted hold (pressDownControllerButton) on the same flag owns
+// the host state: the legacy release must not clear it — neither immediately
+// (a legacy tap while a widget holds A used to cut the widget's hold short) nor
+// from the deferred timer (a widget press that started inside the 40ms window
+// would otherwise be released underneath the finger). The widget's own release
+// (count → 0) clears the flag when it's done.
+- (BOOL)hasCountedHoldForFlag:(int)flag {
+    if (flag == 0) return NO;
+    @synchronized (self) {
+        return [_oscButtonHoldCounts[@(flag)] intValue] > 0;
+    }
+}
+
+- (void)releaseHostForTapSlot:(OscTapSlot)slot flag:(int)flag release:(dispatch_block_t)release {
+    NSNumber *key = @(slot);
+    NSNumber *downTime = _tapSlotDownTimes[key];
+    [_tapSlotDownTimes removeObjectForKey:key];
+    CFTimeInterval remaining = downTime ? kOscMinButtonPressDuration - (CACurrentMediaTime() - downTime.doubleValue) : 0;
+    if (remaining <= 0.001) {
+        if (![self hasCountedHoldForFlag:flag]) release();
+        return;
+    }
+    dispatch_block_t heapRelease = [release copy];
+    _pendingHostReleases[key] = heapRelease;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(remaining * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        // Identity check: a newer press on this slot already flushed us.
+        if (self->_pendingHostReleases[key] != heapRelease) return;
+        [self->_pendingHostReleases removeObjectForKey:key];
+        if ([self hasCountedHoldForFlag:flag]) return;
+        heapRelease();
+        [self->_controllerSupport updateFinished:self->_controller];
+    });
+}
+
 - (BOOL)handleTouchDownEvent:touches {
     BOOL updated = false;
     BOOL stickTouch = false;
@@ -1791,6 +1884,7 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
         // The un-captured second touch falls through to the dead-zone check below and
         // is swallowed there instead of leaking to the mouse/native touch handlers.
         if (_aTouch == nil && [_aButton.presentationLayer hitTest:touchLocation]) {
+            [self noteHostDownForTapSlot:OscTapSlotA];
             [_controllerSupport setButtonFlag:_controller flags:A_FLAG];
             _aTouch = touch;
             [self oscButtonTouchDownFeedback:_aButton];
@@ -1798,6 +1892,7 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
             updated = true;
             touchEventCapturedByOsc = true;
         } else if (_bTouch == nil && [_bButton.presentationLayer hitTest:touchLocation]) {
+            [self noteHostDownForTapSlot:OscTapSlotB];
             [_controllerSupport setButtonFlag:_controller flags:B_FLAG];
             _bTouch = touch;
             [self oscButtonTouchDownFeedback:_bButton];
@@ -1805,6 +1900,7 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
             updated = true;
             touchEventCapturedByOsc = true;
         } else if (_xTouch == nil && [_xButton.presentationLayer hitTest:touchLocation]) {
+            [self noteHostDownForTapSlot:OscTapSlotX];
             [_controllerSupport setButtonFlag:_controller flags:X_FLAG];
             _xTouch = touch;
             [self oscButtonTouchDownFeedback:_xButton];
@@ -1812,6 +1908,7 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
             updated = true;
             touchEventCapturedByOsc = true;
         } else if (_yTouch == nil && [_yButton.presentationLayer hitTest:touchLocation]) {
+            [self noteHostDownForTapSlot:OscTapSlotY];
             [_controllerSupport setButtonFlag:_controller flags:Y_FLAG];
             _yTouch = touch;
             [self oscButtonTouchDownFeedback:_yButton];
@@ -1861,6 +1958,7 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
             updated = true;
             touchEventCapturedByOsc = true;
         } else if (_startTouch == nil && [_startButton.presentationLayer hitTest:touchLocation]) {
+            [self noteHostDownForTapSlot:OscTapSlotStart];
             [_controllerSupport setButtonFlag:_controller flags:PLAY_FLAG];
             _startTouch = touch;
             [self oscButtonTouchDownFeedback:_startButton];
@@ -1868,6 +1966,7 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
             updated = true;
             touchEventCapturedByOsc = true;
         } else if (_selectTouch == nil && [_selectButton.presentationLayer hitTest:touchLocation]) {
+            [self noteHostDownForTapSlot:OscTapSlotSelect];
             [_controllerSupport setButtonFlag:_controller flags:BACK_FLAG];
             _selectTouch = touch;
             [self oscButtonTouchDownFeedback:_selectButton];
@@ -1875,6 +1974,7 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
             updated = true;
             touchEventCapturedByOsc = true;
         } else if (_l1Touch == nil && [_l1Button.presentationLayer hitTest:touchLocation]) {
+            [self noteHostDownForTapSlot:OscTapSlotL1];
             [_controllerSupport setButtonFlag:_controller flags:LB_FLAG];
             _l1Touch = touch;
             [self oscButtonTouchDownFeedback:_l1Button];
@@ -1882,6 +1982,7 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
             updated = true;
             touchEventCapturedByOsc = true;
         } else if (_r1Touch == nil && [_r1Button.presentationLayer hitTest:touchLocation]) {
+            [self noteHostDownForTapSlot:OscTapSlotR1];
             [_controllerSupport setButtonFlag:_controller flags:RB_FLAG];
             _r1Touch = touch;
             [self oscButtonTouchDownFeedback:_r1Button];
@@ -1889,6 +1990,7 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
             updated = true;
             touchEventCapturedByOsc = true;
         } else if (_l2Touch == nil && [_l2Button.presentationLayer hitTest:touchLocation]) {
+            [self noteHostDownForTapSlot:OscTapSlotL2];
             [_controllerSupport updateLeftTrigger:_controller left:0xFF];
             _l2Touch = touch;
             [self oscButtonTouchDownFeedback:_l2Button];
@@ -1896,6 +1998,7 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
             updated = true;
             touchEventCapturedByOsc = true;
         } else if (_r2Touch == nil && [_r2Button.presentationLayer hitTest:touchLocation]) {
+            [self noteHostDownForTapSlot:OscTapSlotR2];
             [_controllerSupport updateRightTrigger:_controller right:0xFF];
             _r2Touch = touch;
             [self oscButtonTouchDownFeedback:_r2Button];
@@ -2011,25 +2114,25 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
         if([touchAddrsCapturedByOnScreenControls containsObject:@((uintptr_t)touch)]) [touchAddrsCapturedByOnScreenControls removeObject:@((uintptr_t)touch)];
         
         if (touch == _aTouch) {
-            [_controllerSupport clearButtonFlag:_controller flags:A_FLAG];
+            [self releaseHostForTapSlot:OscTapSlotA flag:A_FLAG release:^{ [self->_controllerSupport clearButtonFlag:self->_controller flags:A_FLAG]; }];
             _aTouch = nil;
             _aButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_aButton.name] floatValue];
             _aButton.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _bTouch) {
-            [_controllerSupport clearButtonFlag:_controller flags:B_FLAG];
+            [self releaseHostForTapSlot:OscTapSlotB flag:B_FLAG release:^{ [self->_controllerSupport clearButtonFlag:self->_controller flags:B_FLAG]; }];
             _bTouch = nil;
             _bButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_bButton.name] floatValue];
             _bButton.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _xTouch) {
-            [_controllerSupport clearButtonFlag:_controller flags:X_FLAG];
+            [self releaseHostForTapSlot:OscTapSlotX flag:X_FLAG release:^{ [self->_controllerSupport clearButtonFlag:self->_controller flags:X_FLAG]; }];
             _xTouch = nil;
             _xButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_xButton.name] floatValue];
             _xButton.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _yTouch) {
-            [_controllerSupport clearButtonFlag:_controller flags:Y_FLAG];
+            [self releaseHostForTapSlot:OscTapSlotY flag:Y_FLAG release:^{ [self->_controllerSupport clearButtonFlag:self->_controller flags:Y_FLAG]; }];
             _yTouch = nil;
             _yButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_yButton.name] floatValue];
             _yButton.shadowOpacity = 0.0;
@@ -2051,37 +2154,37 @@ static void dpadSectorToDirections(int sector, BOOL *up, BOOL *down, BOOL *left,
             _downButton.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _startTouch) {
-            [_controllerSupport clearButtonFlag:_controller flags:PLAY_FLAG];
+            [self releaseHostForTapSlot:OscTapSlotStart flag:PLAY_FLAG release:^{ [self->_controllerSupport clearButtonFlag:self->_controller flags:PLAY_FLAG]; }];
             _startTouch = nil;
             _startButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_startButton.name] floatValue];
             _startButton.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _selectTouch) {
-            [_controllerSupport clearButtonFlag:_controller flags:BACK_FLAG];
+            [self releaseHostForTapSlot:OscTapSlotSelect flag:BACK_FLAG release:^{ [self->_controllerSupport clearButtonFlag:self->_controller flags:BACK_FLAG]; }];
             _selectTouch = nil;
             _selectButton.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_selectButton.name] floatValue];
             _selectButton.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _l1Touch) {
-            [_controllerSupport clearButtonFlag:_controller flags:LB_FLAG];
+            [self releaseHostForTapSlot:OscTapSlotL1 flag:LB_FLAG release:^{ [self->_controllerSupport clearButtonFlag:self->_controller flags:LB_FLAG]; }];
             _l1Touch = nil;
             _l1Button.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_l1Button.name] floatValue];
             _l1Button.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _r1Touch) {
-            [_controllerSupport clearButtonFlag:_controller flags:RB_FLAG];
+            [self releaseHostForTapSlot:OscTapSlotR1 flag:RB_FLAG release:^{ [self->_controllerSupport clearButtonFlag:self->_controller flags:RB_FLAG]; }];
             _r1Touch = nil;
             _r1Button.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_r1Button.name] floatValue];
             _r1Button.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _l2Touch) {
-            [_controllerSupport updateLeftTrigger:_controller left:0];
+            [self releaseHostForTapSlot:OscTapSlotL2 flag:0 release:^{ [self->_controllerSupport updateLeftTrigger:self->_controller left:0]; }];
             _l2Button.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_l2Button.name] floatValue];
             _l2Touch = nil;
             _l2Button.shadowOpacity = 0.0;
             updated = true;
         } else if (touch == _r2Touch) {
-            [_controllerSupport updateRightTrigger:_controller right:0];
+            [self releaseHostForTapSlot:OscTapSlotR2 flag:0 release:^{ [self->_controllerSupport updateRightTrigger:self->_controller right:0]; }];
             _r2Button.opacity = _obscuredByAlpha ? OBSCURED_ALPHA : [_originalControllerLayerOpacityDict[_r2Button.name] floatValue];
             _r2Touch = nil;
             _r2Button.shadowOpacity = 0.0;

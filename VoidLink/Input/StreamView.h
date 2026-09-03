@@ -64,6 +64,8 @@
 // legacy OSC CALayer button. Forwarded to OnScreenControls for callers (the host
 // VC's gesture delegate) that don't hold the OnScreenControls instance.
 - (BOOL)pointHitsAnyVisibleLegacyOscButton:(CGPoint)point;
+// Tap-style legacy layers only (no sticks / d-pad). See OnScreenControls.
+- (BOOL)pointHitsVisibleLegacyTapButton:(CGPoint)point;
 
 // Obscure OSC layers by alpha while keeping them interactive
 - (void)setOscObscuredByAlpha:(BOOL)enabled;

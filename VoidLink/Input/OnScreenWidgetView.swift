@@ -173,6 +173,16 @@ import UIKit
     // even if the arming state changed while the button was held.
     private var heldDispatchStrings: [String]? = nil
     private var heldDispatchIntervalMs: UInt32 = 0
+    // Minimum host-side press duration, enforced ON the send queue so it measures
+    // the gap between the DOWN actually leaving and the UP leaving (queue
+    // contention can't squeeze them together). Needed because the right-edge
+    // over-control gesture withholds a touch's Began until it decides (≤ ~70ms
+    // for a resting finger): a tap that lifts before that gets Began and Ended
+    // back-to-back, which the host would otherwise see as a ~0ms press and most
+    // games would drop. Naturally short taps get the same floor, harmless.
+    private static let minHostPressDuration: CFTimeInterval = 0.04
+    // Touched only from comboSendQueue blocks.
+    private var lastHostDownTimeOnQueue: CFTimeInterval = 0
     // Motion string actually activated at button-down, so button-up deactivates the same one.
     private var heldMotionString: String = ""
 
@@ -3026,25 +3036,38 @@ import UIKit
 
     // tapFlags empty (or shorter than comboStrings) ⇒ those tokens are held to release =
     // exactly the legacy all-hold behavior. intervalMs nil ⇒ use this widget's own interval.
+    // Queue-side: block until `minHostPressDuration` has passed since `pressTime`.
+    private func sleepForHostPressFloor(since pressTime: CFTimeInterval) {
+        let shortfall = OnScreenWidgetView.minHostPressDuration - (CACurrentMediaTime() - pressTime)
+        if shortfall > 0 {
+            usleep(UInt32(shortfall * 1_000_000))
+        }
+    }
+
     private func sendComboButtonsDownEvent(comboStrings: [String], tapFlags: [Bool] = [], intervalMs: UInt32? = nil) {
         let gap = intervalMs ?? self.comboKeyTimeIntervalMs
         comboSendQueue.async {
             var pendingTapReleaseIndex: Int? = nil
+            var pendingTapPressTime: CFTimeInterval = 0
             for i in 0..<comboStrings.count {
                 if i > 0 {
                     usleep(gap * 1000) // delay xxx ms between consecutive presses
                 }
                 // Let a previous tap key go right as the next one goes down, so it reads
-                // as a quick tap (held ~one inter-key interval) rather than a hold.
+                // as a quick tap (held ~one inter-key interval) rather than a hold — but
+                // never shorter than the host-press floor (the interval defaults to 0).
                 if let releaseIndex = pendingTapReleaseIndex {
+                    self.sleepForHostPressFloor(since: pendingTapPressTime)
                     self.releaseComboToken(comboStrings[releaseIndex])
                     pendingTapReleaseIndex = nil
                 }
                 self.pressComboToken(comboStrings[i])
                 if i < tapFlags.count && tapFlags[i] {
                     pendingTapReleaseIndex = i
+                    pendingTapPressTime = CACurrentMediaTime()
                 }
             }
+            self.lastHostDownTimeOnQueue = CACurrentMediaTime()
             if let releaseIndex = pendingTapReleaseIndex {
                 usleep(OnScreenWidgetView.trailingTapHoldMs * 1000)
                 self.releaseComboToken(comboStrings[releaseIndex])
@@ -3057,6 +3080,7 @@ import UIKit
     private func sendComboButtonsUpEvent(comboStrings: [String], intervalMs: UInt32? = nil) {
         let gap = intervalMs ?? self.comboKeyTimeIntervalMs
         comboSendQueue.async {
+            self.sleepForHostPressFloor(since: self.lastHostDownTimeOnQueue)
             for i in 0..<comboStrings.count {
                 self.releaseComboToken(comboStrings[i])
                 if i != comboStrings.count - 1 {

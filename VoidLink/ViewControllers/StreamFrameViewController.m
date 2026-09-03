@@ -180,6 +180,7 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     CustomEdgeSlideGestureRecognizer *_slideToSettingsRecognizer;
     CustomEdgeSlideGestureRecognizer *_slideToCmdToolRecognizer;
     CustomEdgeSlideGestureRecognizer *_rightEdgeToggleOscRecognizer;
+    CustomEdgeSlideGestureRecognizer *_rightEdgeOverControlRecognizer;
     CustomTapGestureRecognizer *_oscLayoutTapRecoginizer;
     LayoutOnScreenControlsViewController *_layoutOnScreenControlsVC;
     ToolboxViewController* toolBoxViewController;
@@ -561,6 +562,28 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
     _rightEdgeToggleOscRecognizer.edgeDelegate = self;
     // Right edge small gesture is standalone now; no dependency on Command Manager gesture
     [self.view addGestureRecognizer:_rightEdgeToggleOscRecognizer];
+
+    // Second right-edge recognizer for touches that land ON a tap-style OSC control
+    // (button widgets, legacy A/B/X/Y/L*/R*/start/select layers) inside the edge
+    // strip. The passive recognizer above can't take those: it never cancels the
+    // view's touches, so a swipe starting on R2 would both press R2 and toggle the
+    // OSC. This one uses UIKit's delaysTouchesBegan — the control's touchesBegan is
+    // withheld until the recognizer decides — and decides fast (see
+    // CustomEdgeSlideGestureRecognizer.earlyDecision): a finger that starts sliding
+    // inward at once is the edge gesture and the control never sees it; a finger
+    // that rests, taps, or moves vertically hands the control its normal touch
+    // sequence ~70ms late at most. Tap → control, drag → gesture, never both.
+    _rightEdgeOverControlRecognizer = [[CustomEdgeSlideGestureRecognizer alloc] initWithTarget:self action:@selector(handleRightEdgeToggle:)];
+    _rightEdgeOverControlRecognizer.edges = UIRectEdgeRight;
+    _rightEdgeOverControlRecognizer.normalizedThresholdDistance = smallThreshold;
+    _rightEdgeOverControlRecognizer.earlyDecision = YES;
+    _rightEdgeOverControlRecognizer.delaysTouchesBegan = YES;
+    _rightEdgeOverControlRecognizer.delaysTouchesEnded = NO;
+    _rightEdgeOverControlRecognizer.cancelsTouchesInView = YES;
+    _rightEdgeOverControlRecognizer.allowedTouchTypes = @[@(UITouchTypeDirect)];
+    _rightEdgeOverControlRecognizer.delegate = self;
+    _rightEdgeOverControlRecognizer.edgeDelegate = self;
+    [self.view addGestureRecognizer:_rightEdgeOverControlRecognizer];
     
     if([self isOscLayoutToolEnabled]){
         _oscLayoutTapRecoginizer = [[CustomTapGestureRecognizer alloc] initWithTarget:self action:@selector(handleWidgetLayoutGesture)];
@@ -3041,7 +3064,7 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
-    if (gestureRecognizer == _rightEdgeToggleOscRecognizer) {
+    if (gestureRecognizer == _rightEdgeToggleOscRecognizer || gestureRecognizer == _rightEdgeOverControlRecognizer) {
         CustomEdgeSlideGestureRecognizer *edgeRecognizer = (CustomEdgeSlideGestureRecognizer *)gestureRecognizer;
         CGPoint location = [touch locationInView:gestureRecognizer.view];
         CGRect bounds = gestureRecognizer.view.bounds;
@@ -3051,9 +3074,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         // touch's whole lifetime (beginRightEdgeGestureSuppressionForTouch) — every
         // touch landing in the band froze the widgets, zeroed active sticks, and
         // left widgets that missed their touchesBegan computing stick offsets from
-        // a stale anchor once the window lifted. The recognizer works like the
-        // settings edge-slide now: observe passively, act only on a completed
-        // swipe. The suppression machinery stays dormant (never armed).
+        // a stale anchor once the window lifted. The suppression machinery stays
+        // dormant (never armed).
         CGFloat tolerance = edgeRecognizer.EDGE_TOLERANCE;
         BOOL withinEdge = NO;
 
@@ -3073,18 +3095,46 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
             return NO;
         }
 
-        // A touch starting on an OSC element belongs to that control, never to the
-        // edge gesture — otherwise a button hugging the edge (e.g. R2) can feed the
-        // recognizer. Walk up from the hit-tested view to cover widget subviews.
+        // Classify what sits under the touch. Two recognizers split the edge strip:
+        //   - nothing / a UIControl / bare stream  → passive recognizer (observes,
+        //     never delays or cancels the view's touches; decides on lift);
+        //   - a tap-style OSC control (button widget of any slide mode, legacy
+        //     face/shoulder/trigger/start/select layer) → over-control recognizer
+        //     (delays the control's touchesBegan, decides within ~70–180ms);
+        //   - a drag-style control (pad widget, legacy stick or d-pad) → neither.
+        //     Dragging is that control's own language, so a leftward drag there is
+        //     never an edge gesture (same rule as before this split).
+        BOOL onTapControl = NO;
+        BOOL onDragControl = NO;
         for (UIView *hitView = touch.view; hitView != nil; hitView = hitView.superview) {
             if ([hitView isKindOfClass:[OnScreenWidgetView class]]) {
-                return NO;
+                OnScreenWidgetView *widget = (OnScreenWidgetView *)hitView;
+                if (widget.widgetType == WidgetTypeEnumButton) onTapControl = YES;
+                else onDragControl = YES;
+                break;
             }
         }
-        // Same for the legacy CALayer OSC buttons (they don't appear as views).
-        if ([self->_streamView pointHitsAnyVisibleLegacyOscButton:location]) {
+        if (!onTapControl && !onDragControl) {
+            // Legacy CALayer OSC buttons don't appear as views.
+            if ([self->_streamView pointHitsVisibleLegacyTapButton:location]) {
+                onTapControl = YES;
+            } else if ([self->_streamView pointHitsAnyVisibleLegacyOscButton:location]) {
+                onDragControl = YES; // stick or d-pad layer
+            }
+        }
+        if (onDragControl) {
             return NO;
         }
+        if (gestureRecognizer == _rightEdgeOverControlRecognizer) {
+            // Never withhold touches while the layout tool is open: dragging a
+            // widget from the edge is the editor's primary interaction, and the
+            // toggle is a no-op there anyway (toggleOscVisibility bails).
+            if (self->_streamView.widgetToolOpened) {
+                return NO;
+            }
+            return onTapControl;
+        }
+        return !onTapControl;
     }
     return YES;
 }

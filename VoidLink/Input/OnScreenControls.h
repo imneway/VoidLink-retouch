@@ -153,6 +153,10 @@ typedef NS_ENUM(NSInteger, OnScreenControlsLevel) {
 // touches through when they overlap an OSC button (the pad layer sits visually below
 // the OSC layer; touch routing has to follow).
 - (BOOL) pointHitsAnyVisibleLegacyOscButton:(CGPoint)point;
+// Same visibility rules, but only over the tap-style layers (A/B/X/Y, start,
+// select, L1/L2/L3, R1/R2/R3) — sticks and d-pad arrows excluded. Used by the
+// host VC's right-edge gesture delegate to tell "tap control" from "drag control".
+- (BOOL) pointHitsVisibleLegacyTapButton:(CGPoint)point;
 // Visual-only: light the legacy OSC button matching a custom widget's command token
 // (e.g. "OSCA" -> the A button) when that widget is pressed / released. Sends no input
 // and no haptics; no-op when OSC is off or the button isn't currently shown, so it can
