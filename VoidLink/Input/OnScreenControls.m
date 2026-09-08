@@ -87,6 +87,10 @@ static NSSet *validPositionButtonNames;
     NSMutableDictionary *_activeCustomOscButtonPositionDict;
     NSMutableDictionary *_originalControllerLayerOpacityDict;
     BOOL _obscuredByAlpha;
+    BOOL _suspended;
+    // Layers setSuspended: hid itself — resume un-hides only these, so a layer the
+    // custom profile keeps hidden (buttonState.isHidden) stays hidden.
+    NSMutableSet<CALayer *> *_layersHiddenBySuspension;
     // Layer names we mirror-highlighted on behalf of a pressed widget, so the release
     // path clears exactly those (and only those) even if the button was hidden meanwhile.
     NSMutableSet<NSString *> *_mirroredButtonNames;
@@ -819,6 +823,10 @@ static float L3_Y;
     for (CALayer* controllerLayer in self.OSCButtonLayers){
         [_originalControllerLayerOpacityDict setObject:@(controllerLayer.opacity) forKey:controllerLayer.name];
     }
+
+    // A layout pass mid-hold (show / setLevel / reload) just re-wrote every layer's
+    // hidden flag from the profile; put the suspension hiding back on top of it.
+    if (_suspended) [self osc_applySuspensionHiding:YES];
 }
 
 // For GCExtendedGamepad controls we move start, select, L3, and R3 to the button
@@ -1862,6 +1870,9 @@ typedef NS_ENUM(NSInteger, OscTapSlot) {
 }
 
 - (BOOL)handleTouchDownEvent:touches {
+    // Suspended (OSC ON/OFF button held): capture nothing, swallow nothing — the
+    // whole screen belongs to the mouse / native touch handler for the hold.
+    if (_suspended) return NO;
     BOOL updated = false;
     BOOL stickTouch = false;
     for (UITouch* touch in touches) {
@@ -2655,6 +2666,59 @@ typedef NS_ENUM(NSInteger, OscTapSlot) {
         dict = [NSMutableDictionary dictionary];
     });
     return dict;
+}
+
+#pragma mark - Suspend / resume (OSC ON/OFF button hold)
+
+- (BOOL)isSuspended {
+    return _suspended;
+}
+
+- (void)setSuspended:(BOOL)suspended {
+    if (_suspended == suspended) return;
+    _suspended = suspended;
+    if (suspended) {
+        // Release anything a finger is holding right now (the button flag AND the
+        // touch's captured-address entry) so nothing stays pressed on the host
+        // while the layers are gone.
+        [self cancelAllActiveTouches];
+    }
+    [self osc_applySuspensionHiding:suspended];
+    // The obscure-mode center dots are managed separately; drop them with the
+    // art and bring them back only if obscure mode is still on.
+    if (suspended) {
+        [self setButtonCenterIndicatorsHidden:YES animated:NO];
+    } else if (_obscuredByAlpha) {
+        [self setButtonCenterIndicatorsHidden:NO animated:NO];
+    }
+}
+
+// Hide / unhide the art. `hidden` is what osc_isLegacyLayerVisible and the
+// widgets' dead-zone checks look at, so hidden layers also stop counting as
+// "under the finger" for the right-edge and touchPad passthrough logic.
+// Hiding records the layers it touched; un-hiding restores only those. Safe to
+// call repeatedly with YES (after a layout pass): the record is rebuilt from the
+// layers' current, profile-derived state each time.
+- (void)osc_applySuspensionHiding:(BOOL)hide {
+    if (!_layersHiddenBySuspension) _layersHiddenBySuspension = [NSMutableSet set];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    if (hide) {
+        [_layersHiddenBySuspension removeAllObjects];
+        NSMutableArray<CALayer *> *candidates = [NSMutableArray arrayWithArray:self.OSCButtonLayers];
+        if (self._dPadBackground) [candidates addObject:self._dPadBackground];
+        for (CALayer *layer in candidates) {
+            if (layer.hidden) continue;
+            layer.hidden = YES;
+            [_layersHiddenBySuspension addObject:layer];
+        }
+    } else {
+        for (CALayer *layer in _layersHiddenBySuspension) {
+            layer.hidden = NO;
+        }
+        [_layersHiddenBySuspension removeAllObjects];
+    }
+    [CATransaction commit];
 }
 
 #pragma mark - Obscure by alpha

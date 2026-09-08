@@ -71,6 +71,31 @@
 - (void)setOscObscuredByAlpha:(BOOL)enabled;
 - (BOOL)isOscObscuredByAlpha;
 
+// Hold-to-suspend for the OSC ON/OFF button. While suspended the legacy OSC
+// layers and every OnScreenWidgetView are hidden AND non-interactive, so the
+// other hand's touches reach the host as plain mouse / native touch input.
+// Nothing is torn down: resuming just un-hides. Survives an OSC / widget reload
+// that happens mid-hold (the reload re-applies the suspension).
+- (void)setOscTemporarilySuspended:(BOOL)suspended;
+- (BOOL)isOscTemporarilySuspended;
+// YES when the legacy OSC level is on or any widget is attached — i.e. there is
+// something for a hold to suspend.
+- (BOOL)hasAnyOnScreenControls;
+// Whether any touch landed on the stream since the current suspension began.
+// The host VC uses it to tell a plain tap on the button (toggle) from a hold
+// during which the other hand operated the PC (never toggle).
+- (BOOL)oscSuspensionSawStreamTouch;
+
+// Multi-finger counting exemption. The finger holding the OSC ON/OFF button is
+// on screen for the whole hold, and it shows up in [event allTouches] for every
+// touch the stream receives — so a single left-hand tap would count as two
+// fingers (right click / scroll / ignored in absolute mode) and a two-finger
+// tap as three (keyboard toggle). Touch handlers and CustomTapGestureRecognizer
+// route allTouches through +streamTouchesForEvent: to drop that finger.
++ (void)setMultiTouchExemptView:(UIView *)view;
++ (NSSet<UITouch *> *)streamTouchesForEvent:(UIEvent *)event;
++ (NSSet<UITouch *> *)streamTouchesFrom:(NSSet<UITouch *> *)touches;
+
 - (CGSize) getVideoAreaSize;
 - (CGPoint) adjustCoordinatesForVideoArea:(CGPoint)point;
 - (uint16_t)getRotationFromAzimuthAngle:(float)azimuthAngle;

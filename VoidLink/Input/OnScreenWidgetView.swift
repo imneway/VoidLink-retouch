@@ -11,6 +11,11 @@ import UIKit
 @objc class OnScreenWidgetView: UIView, InstanceProviderDelegate, UIGestureRecognizerDelegate {
     private static let activeInstances = NSHashTable<OnScreenWidgetView>.weakObjects()
     private static var gesturesSuppressed = false
+    // Set by StreamView while the OSC ON/OFF button is held (OSC temporarily
+    // suspended): the widget is hidden, its active touches were cancelled, and
+    // anything still arriving for it — including the fullscreen-trigger double
+    // tap that lives on the superview — must be ignored.
+    @objc var suspendedByOscHold = false
 
     @objc static func beginGestureSuppression() {
         if OnScreenWidgetView.gesturesSuppressed { return }
@@ -1337,6 +1342,7 @@ import UIKit
     @objc private func handleFullscreenDoubleTap(_ gesture: UITapGestureRecognizer) {
         guard !OnScreenWidgetView.editMode else { return }
         guard !OnScreenWidgetView.gesturesSuppressed else { return }
+        guard !suspendedByOscHold else { return }
         if vibrationOn {
             vibrationGenerator.prepare()
             vibrationGenerator.impactOccurred()
@@ -1384,6 +1390,10 @@ import UIKit
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         guard gestureRecognizer === fullscreenDoubleTapGesture else { return true }
+        // OSC suspended by the ON/OFF button hold: don't even track the touch, or
+        // a recognized double tap (cancelsTouchesInView) would cancel the button's
+        // own touch and end the hold.
+        if suspendedByOscHold { return false }
         guard let superview = self.superview else { return true }
         let locationInSuper = touch.location(in: superview)
 
@@ -3097,7 +3107,7 @@ import UIKit
         // suppression): pencil input always belongs to the stream, never the widget.
         var touches = extractPencilPassthroughTouches(touches, with: event, phase: .began)
         if touches.isEmpty { return }
-        if OnScreenWidgetView.gesturesSuppressed {
+        if OnScreenWidgetView.gesturesSuppressed || suspendedByOscHold {
             OnScreenWidgetView.logSuppressedTouchDrop()
             super.touchesBegan(touches, with: event)
             return
@@ -3431,7 +3441,7 @@ import UIKit
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         var touches = extractPencilPassthroughTouches(touches, with: event, phase: .moved)
         if touches.isEmpty { return }
-        if OnScreenWidgetView.gesturesSuppressed {
+        if OnScreenWidgetView.gesturesSuppressed || suspendedByOscHold {
             super.touchesMoved(touches, with: event)
             return
         }
@@ -3641,7 +3651,7 @@ import UIKit
         pointerIdDict.removeAll()
     }
 
-    @objc private func cancelActiveTouchesDueToGestureSuppression() {
+    @objc func cancelActiveTouchesDueToGestureSuppression() {
         if Thread.isMainThread == false {
             DispatchQueue.main.async { self.cancelActiveTouchesDueToGestureSuppression() }
             return
@@ -3757,7 +3767,7 @@ import UIKit
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         var touches = extractPencilPassthroughTouches(touches, with: event, phase: .ended)
         if touches.isEmpty { return }
-        if OnScreenWidgetView.gesturesSuppressed {
+        if OnScreenWidgetView.gesturesSuppressed || suspendedByOscHold {
             super.touchesEnded(touches, with: event)
             return
         }

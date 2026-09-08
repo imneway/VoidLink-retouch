@@ -115,6 +115,14 @@ typedef NS_ENUM(NSInteger, OnScreenControlsLevel) {
 - (void)setObscuredByAlpha:(BOOL)enabled;
 - (BOOL)isObscuredByAlpha;
 
+// Temporarily take the legacy OSC out of play (the OSC ON/OFF button is being
+// held): every layer is hidden and handleTouchDownEvent captures nothing until
+// resumed, so touches fall through to the mouse / native touch handlers. Level,
+// positions and the obscure-by-alpha state are left untouched, so resuming is a
+// plain un-hide — no re-layout.
+- (void)setSuspended:(BOOL)suspended;
+- (BOOL)isSuspended;
+
 
 
 + (NSMutableSet* )touchAddrsCapturedByOnScreenControls;

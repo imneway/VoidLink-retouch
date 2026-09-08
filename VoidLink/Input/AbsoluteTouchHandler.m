@@ -74,8 +74,9 @@
     
     touchPointSpawnedAtUpperScreenEdge = false; // reset this flag immediately if we get a touch event passing the check above, this fixes irresponsive touch after closing the command tool menu.
 
-    // Ignore touch down events with more than one finger
-    if ([[event allTouches] count] > 1) {
+    // Ignore touch down events with more than one finger. The finger holding the
+    // OSC ON/OFF button is not counted (see +streamTouchesForEvent:).
+    if ([[StreamView streamTouchesForEvent:event] count] > 1) {
         return;
     }
     
@@ -108,7 +109,7 @@
     if(touchPointSpawnedAtUpperScreenEdge) return; // we're done here. this touch event will not be sent to the remote PC.
     
     // Ignore touch move events with more than one finger
-    if ([[event allTouches] count] > 1) {
+    if ([[StreamView streamTouchesForEvent:event] count] > 1) {
         return;
     }
     
@@ -130,7 +131,7 @@
     if(touchPointSpawnedAtUpperScreenEdge) return; // we're done here. this touch event will not be sent to the remote PC.
 
     // Only fire this logic if all touches have ended
-    if ([[event allTouches] count] == [touches count]) {
+    if ([[StreamView streamTouchesForEvent:event] count] == [touches count]) {
         // Cancel the long press timer
         [longPressTimer invalidate];
         longPressTimer = nil;

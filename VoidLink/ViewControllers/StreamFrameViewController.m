@@ -190,6 +190,11 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     UIButton *_oscToggleButton;
     UIButton *_rotationLockToggleButton;
     UIButton *_gyroToggleButton;
+    // OSC ON/OFF button hold: while the finger is down (and the OSC is on) the
+    // OSC is suspended so the other hand can drive the PC. A quick release with
+    // no stream touch in between is still the plain ON->OFF toggle tap.
+    BOOL _oscHoldActive;
+    CFTimeInterval _oscHoldStartTime;
     // Opaque black sheet behind the Metal video view. The Metal view is
     // shifted (snap-to-top / keyboard lift), and whatever it uncovers is
     // self.view's theme background — this keeps those regions letterbox-black
@@ -864,7 +869,14 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         [_oscToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
         [_oscToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
         _oscToggleButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
-        [_oscToggleButton addTarget:self action:@selector(toggleOscOnOff) forControlEvents:UIControlEventTouchUpInside];
+        // Press-and-hold semantics (see oscToggleTouchDown:) instead of a plain
+        // TouchUpInside -> toggle.
+        [_oscToggleButton addTarget:self action:@selector(oscToggleTouchDown:) forControlEvents:UIControlEventTouchDown];
+        [_oscToggleButton addTarget:self action:@selector(oscToggleTouchUpInside:) forControlEvents:UIControlEventTouchUpInside];
+        [_oscToggleButton addTarget:self action:@selector(oscToggleTouchEnded:) forControlEvents:(UIControlEventTouchUpOutside | UIControlEventTouchCancel)];
+        // The holding finger must not count toward the stream's multi-finger
+        // detection (2-finger right click / scroll, 3-finger keyboard, ...).
+        [StreamView setMultiTouchExemptView:_oscToggleButton];
         [self.view addSubview:_oscToggleButton];
     }
 
@@ -919,7 +931,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
     // Layout all buttons at bottom-right. Each gets a fixed width sized
     // to its widest possible title so toggling text never shifts neighbours.
-    // Order, right -> left: snap ratio (when visible), gyro, rotation lock, osc.
+    // Order, right -> left: osc (corner, so the right thumb can hold it),
+    // snap ratio (when visible), gyro, rotation lock.
     CGFloat snapW = VoidFixedToggleWidth(_snapRatioButton, @[@"16:9", @"FULL"]);
     CGFloat oscW  = VoidFixedToggleWidth(_oscToggleButton,  @[@"OSC ON", @"OSC OFF"]);
     CGFloat rotationW = VoidFixedToggleWidth(_rotationLockToggleButton, @[@"ROT LOCK", @"ROT FREE"]);
@@ -930,6 +943,11 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     CGFloat gap = 8;
 
     CGFloat rightEdge = self.view.bounds.size.width - 24;
+
+    CGFloat oscX = rightEdge - oscW;
+    _oscToggleButton.frame = CGRectMake(oscX, baseY - btnH, oscW, btnH);
+    rightEdge = oscX - gap;
+
     if (!_snapRatioButton.hidden) {
         CGFloat snapX = rightEdge - snapW;
         _snapRatioButton.frame = CGRectMake(snapX, baseY - btnH, snapW, btnH);
@@ -941,9 +959,46 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
     CGFloat rotationX = gyroX - gap - rotationW;
     _rotationLockToggleButton.frame = CGRectMake(rotationX, baseY - btnH, rotationW, btnH);
+}
 
-    CGFloat oscX = rotationX - gap - oscW;
-    _oscToggleButton.frame = CGRectMake(oscX, baseY - btnH, oscW, btnH);
+#pragma mark - OSC ON/OFF button: tap toggles, hold suspends
+
+// Release faster than this, with no stream touch in between, counts as a tap.
+static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
+
+- (void)oscToggleTouchDown:(UIButton *)sender {
+    _oscHoldActive = NO;
+    if (self->_streamView.widgetToolOpened) return;
+    // OSC OFF: nothing to suspend, the release is a plain "turn on" tap.
+    if (![self->_streamView hasAnyOnScreenControls]) return;
+    _oscHoldActive = YES;
+    _oscHoldStartTime = CACurrentMediaTime();
+    // Suspend right at touch-down (no long-press delay): a real tap ends up OFF
+    // anyway, so hiding early costs nothing and a hold feels instant.
+    [self->_streamView setOscTemporarilySuspended:YES];
+}
+
+- (void)oscToggleTouchUpInside:(UIButton *)sender {
+    if (!_oscHoldActive) {
+        [self toggleOscOnOff];
+        return;
+    }
+    BOOL usedAsHold = [self->_streamView oscSuspensionSawStreamTouch]
+                   || (CACurrentMediaTime() - _oscHoldStartTime) >= kOscHoldTapMaxDuration;
+    [self endOscHold];
+    // Resume first, then toggle: the toggle's OFF path tears the OSC down and the
+    // next ON reload must start from a clean, un-suspended state.
+    if (!usedAsHold) [self toggleOscOnOff];
+}
+
+- (void)oscToggleTouchEnded:(UIButton *)sender {
+    [self endOscHold];
+}
+
+- (void)endOscHold {
+    if (!_oscHoldActive) return;
+    _oscHoldActive = NO;
+    [self->_streamView setOscTemporarilySuspended:NO];
 }
 
 // Toggles the persistent forceGyroEnabled flag. An unset value behaves like

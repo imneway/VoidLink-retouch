@@ -140,7 +140,16 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     BOOL oscGestureSuppressed;
     NSUInteger rightEdgeGestureSuppressionDepth;
     NSMutableSet* suppressedGestureTouchAddrs;
+
+    // OSC ON/OFF button hold — see setOscTemporarilySuspended:.
+    BOOL oscTemporarilySuspended;
+    BOOL oscSuspensionSawStreamTouch;
+    NSHashTable<UIView *> *widgetsHiddenBySuspension;
 }
+
+// View whose touches are dropped from multi-finger counting (the OSC ON/OFF
+// button while held). Weak: the button belongs to the host VC.
+static __weak UIView *sMultiTouchExemptView = nil;
 
 // Canonical snap-to-top offset. This is the single source of truth shared by
 // applySnapToTopIfNeeded (StreamView shift) and liftMetalVideoViewIfNeeded
@@ -193,6 +202,10 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     suppressedGestureTouchAddrs = [NSMutableSet set];
     rightEdgeGestureSuppressionDepth = 0;
     oscGestureSuppressed = NO;
+    // NOT resetting oscTemporarilySuspended here: a reconfigure (resize /
+    // orientation / stats overlay) can run mid-hold, and the host VC still
+    // thinks it's holding. The OSC / widget reloads that follow re-apply it.
+    if (!widgetsHiddenBySuspension) widgetsHiddenBySuspension = [NSHashTable weakObjectsHashTable];
     // Guarantee a clean, non-suppressed input state on every (re)configuration so a
     // right-edge suppression that never received its matching "end" can't leave OSC
     // input dead until force-quit. Clears the process-wide static too.
@@ -557,6 +570,90 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 #endif
 }
 
+#pragma mark - OSC hold-to-suspend
+
+- (BOOL)hasAnyOnScreenControls {
+    if ([self getCurrentOscState] != OnScreenControlsLevelOff) return YES;
+    for (UIView *v in self->streamFrameTopLayerView.subviews) {
+        if ([v isKindOfClass:[OnScreenWidgetView class]]) return YES;
+    }
+    return NO;
+}
+
+- (BOOL)isOscTemporarilySuspended {
+    return oscTemporarilySuspended;
+}
+
+- (BOOL)oscSuspensionSawStreamTouch {
+    return oscSuspensionSawStreamTouch;
+}
+
+- (void)setOscTemporarilySuspended:(BOOL)suspended {
+    if (oscTemporarilySuspended == suspended) return;
+    oscTemporarilySuspended = suspended;
+    oscSuspensionSawStreamTouch = NO;
+    [self osc_syncSuspensionState];
+}
+
+// Push the current suspension flag onto whatever OSC instance / widget set exists
+// right now. Called on every flag change and again after a reload, since a reload
+// swaps in a fresh OnScreenControls and fresh (unhidden) widgets.
+- (void)osc_syncSuspensionState {
+#if !TARGET_OS_TV
+    [onScreenControls setSuspended:oscTemporarilySuspended];
+#endif
+    if (oscTemporarilySuspended) {
+        // `hidden` (not alpha) so hit-testing skips them entirely. Only the widgets
+        // we hid get restored — a widget that was hidden on its own stays hidden.
+        // A finger already down on a widget keeps delivering to it after it's
+        // hidden, so release its host-side state now (same path the right-edge
+        // gesture suppression uses) and flag it so the rest of that touch is inert.
+        for (UIView *v in self->streamFrameTopLayerView.subviews) {
+            if (![v isKindOfClass:[OnScreenWidgetView class]]) continue;
+            OnScreenWidgetView *widget = (OnScreenWidgetView *)v;
+            if (widget.suspendedByOscHold) continue;
+            widget.suspendedByOscHold = YES;
+            [widget cancelActiveTouchesDueToGestureSuppression];
+            if (!widget.hidden) {
+                widget.hidden = YES;
+                [widgetsHiddenBySuspension addObject:widget];
+            }
+        }
+    } else {
+        for (UIView *v in widgetsHiddenBySuspension) {
+            v.hidden = NO;
+        }
+        [widgetsHiddenBySuspension removeAllObjects];
+        for (UIView *v in self->streamFrameTopLayerView.subviews) {
+            if ([v isKindOfClass:[OnScreenWidgetView class]]) {
+                ((OnScreenWidgetView *)v).suspendedByOscHold = NO;
+            }
+        }
+    }
+}
+
++ (void)setMultiTouchExemptView:(UIView *)view {
+    sMultiTouchExemptView = view;
+}
+
++ (NSSet<UITouch *> *)streamTouchesFrom:(NSSet<UITouch *> *)touches {
+    UIView *exempt = sMultiTouchExemptView;
+    if (exempt == nil || touches.count == 0) return touches;
+    NSMutableSet<UITouch *> *filtered = nil;
+    for (UITouch *touch in touches) {
+        UIView *touchView = touch.view;
+        if (touchView != nil && [touchView isDescendantOfView:exempt]) {
+            if (filtered == nil) filtered = [touches mutableCopy];
+            [filtered removeObject:touch];
+        }
+    }
+    return filtered ?: touches;
+}
+
++ (NSSet<UITouch *> *)streamTouchesForEvent:(UIEvent *)event {
+    return [self streamTouchesFrom:[event allTouches]];
+}
+
 
 - (void) reloadOnScreenControlsWith:(ControllerSupport*)controllerSupport
                          andConfig:(StreamConfiguration*)streamConfig {
@@ -575,6 +672,8 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
         onScreenControls.mouseRightClickTapRecognizer = relativeTouchHandler.mouseRightClickTapRecognizer;
     } */
     if([self isOscEnabled]) [onScreenControls setLevel:(OnScreenControlsLevel)settings.onscreenControls.intValue];
+    // A reload mid-hold must not resurrect the OSC under the other hand.
+    if (oscTemporarilySuspended) [self osc_syncSuspensionState];
 }
 
 
@@ -851,6 +950,8 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
                 v.alpha = widgetViewAlpha;
             }
         }
+        // Same for a widget rebuild mid-hold: the fresh widgets start unhidden.
+        if (oscTemporarilySuspended) [self osc_syncSuspensionState];
     }
 }
 
@@ -1215,6 +1316,9 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 }
 
 - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
+    // Any stream touch during an OSC hold marks the hold as "used": the button's
+    // release must then NOT be treated as a tap that toggles the OSC off.
+    if (oscTemporarilySuspended) oscSuspensionSawStreamTouch = YES;
 #if !TARGET_OS_TV
     // if (@available(iOS 13.4, *)) {
     // cancel restriction of native touch for iOS13.3 & lower

@@ -10,6 +10,7 @@
 #import <UIKit/UIGestureRecognizerSubclass.h>
 #import "CustomTapGestureRecognizer.h"
 #import "VoidLink-Swift.h"
+#import "StreamView.h"
 
 // The most accurate & reliable tap gesture recognizer of iOS:
 // - Almost 100% recoginition rate. UITapGestureRecognizer of Apple API fails frequently, just a piece of crap.
@@ -38,11 +39,26 @@ static CGFloat screenWidthInPoints;
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    // These recognizers hang off streamFrameTopLayerView, which also hosts the
+    // OSC ON/OFF button — so the finger holding that button is delivered here
+    // and sits in allTouches for the whole hold. Drop it from both sets, or a
+    // hold + one tap reads as a 2-finger right click and + two as the keyboard.
+    NSSet<UITouch *> *streamTouches = [StreamView streamTouchesForEvent:event];
+    NSSet<UITouch *> *ownTouches = [StreamView streamTouchesFrom:touches];
+    if ([ownTouches count] != [touches count]) {
+        // Untrack the exempt finger: these recognizers keep cancelsTouchesInView,
+        // so a recognized right click / keyboard tap would otherwise cancel the
+        // button's touch (TouchCancel -> hold ends under the user's thumb).
+        for (UITouch *touch in touches) {
+            if (![ownTouches containsObject:touch]) [self ignoreTouch:touch forEvent:event];
+        }
+    }
+    if ([ownTouches count] == 0) return; // only the exempt finger went down
     // Check if the number of touches and taps meets the required criteria
-    if ([[event allTouches] count] == _numberOfTouchesRequired) {
+    if ([streamTouches count] == _numberOfTouchesRequired) {
         _gestureCapturedTime = CACurrentMediaTime();
         _gestureCaptured = true;
-        for(UITouch *touch in [event allTouches]){
+        for(UITouch *touch in streamTouches){
             if(lowestTouchPointYCoord < [touch locationInView:self.view].y) lowestTouchPointYCoord = [touch locationInView:self.view].y;
         }
         
@@ -61,7 +77,7 @@ static CGFloat screenWidthInPoints;
         }
         self.state = UIGestureRecognizerStatePossible;
     }
-    if ([[event allTouches] count] > _numberOfTouchesRequired) {
+    if ([streamTouches count] > _numberOfTouchesRequired) {
         _gestureCaptured = false;
         self.state = UIGestureRecognizerStateFailed;
     }
@@ -71,12 +87,14 @@ static CGFloat screenWidthInPoints;
     // [super touchesEnded:touches withEvent:event];
     
     if(_immediateTriggering) return;
-    uint8_t allTouchesCount = [[event allTouches] count];
+    NSSet<UITouch *> *ownTouches = [StreamView streamTouchesFrom:touches];
+    if ([ownTouches count] == 0) return; // only the exempt finger lifted
+    uint8_t allTouchesCount = [[StreamView streamTouchesForEvent:event] count];
     if(allTouchesCount > _numberOfTouchesRequired) {
         _gestureCaptured = false;
         self.state = UIGestureRecognizerStateFailed;
     }
-    else if(_gestureCaptured && allTouchesCount == [touches count] && !_isOnScreenControllerBeingPressed && ![self isOnScreenWidgetViewBeingPressed]){  //must exclude virtual controller & onscreen button taps here to prevent stucked button, _areVirtualControllerTaps flag is set by onscreencontrols, containOnScreenButtonsTaps will be returned by iterating all widget views in streamframeview
+    else if(_gestureCaptured && allTouchesCount == [ownTouches count] && !_isOnScreenControllerBeingPressed && ![self isOnScreenWidgetViewBeingPressed]){  //must exclude virtual controller & onscreen button taps here to prevent stucked button, _areVirtualControllerTaps flag is set by onscreencontrols, containOnScreenButtonsTaps will be returned by iterating all widget views in streamframeview
         _gestureCaptured = false; //reset for next recognition
         if((CACurrentMediaTime() - _gestureCapturedTime) < _tapDownTimeThreshold){
             lowestTouchPointYCoord = 0.0; //reset for next recognition
@@ -84,7 +102,7 @@ static CGFloat screenWidthInPoints;
             // NSLog(@"gen _lowestTouchPointHeight %f markmark touchesEnd", _lowestTouchPointHeight);
         }
     }
-    if (allTouchesCount == [touches count]) _isOnScreenControllerBeingPressed = false; // need to reset this flag anyway, when all fingers are lefting
+    if (allTouchesCount == [ownTouches count]) _isOnScreenControllerBeingPressed = false; // need to reset this flag anyway, when all fingers are lefting
 }
 
 

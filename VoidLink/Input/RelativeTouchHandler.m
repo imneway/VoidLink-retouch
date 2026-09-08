@@ -150,7 +150,10 @@ static const float QUICK_TAP_TIME_INTERVAL = 0.2;
     firstTouchMoved = false;
     touchPointSpawnedAtUpperScreenEdge = false; // reset this flag immediately if we get a touch event passing the check above, this fixes irresponsive touch after closing the command tool menu.
     
-    if([[event allTouches] count] == 2 && ![self isOnScreenWidgetViewBeingPressed] && ![self isOnScreenControllerBeingPressed:[event allTouches]]){
+    // allTouches minus the finger holding the OSC ON/OFF button (if any), so a hold
+    // + one left-hand finger stays a single-finger mouse move, not a scroll.
+    NSSet* streamTouches = [StreamView streamTouchesForEvent:event];
+    if([streamTouches count] == 2 && ![self isOnScreenWidgetViewBeingPressed] && ![self isOnScreenControllerBeingPressed:streamTouches]){
         NSLog(@"get in scrolling mode");
         isInMouseWheelScrollingMode = true;
         return; // if we got 2 touches on the blank area, it's gonna be a mouse scroll touch, and must prevent UITtouch object for mouse pointer being captured & locked
@@ -194,8 +197,9 @@ static const float QUICK_TAP_TIME_INTERVAL = 0.2;
     
     //NSLog(@"%f, touchesMoved callback, is scrolling: %d, touches count: %d", CACurrentMediaTime(), isInMouseWheelScrollingMode, (uint32_t)[touches count]);
     
-    if(isInMouseWheelScrollingMode && [[event allTouches] count] == 2 && ![self isOnScreenWidgetViewBeingPressed] && ![self isOnScreenControllerBeingPressed:touches]){
-        NSSet* twoTouches = [event allTouches];
+    NSSet* streamTouches = [StreamView streamTouchesForEvent:event];
+    if(isInMouseWheelScrollingMode && [streamTouches count] == 2 && ![self isOnScreenWidgetViewBeingPressed] && ![self isOnScreenControllerBeingPressed:touches]){
+        NSSet* twoTouches = streamTouches;
         CGPoint firstLocation = [[[twoTouches allObjects] objectAtIndex:0] locationInView:streamView];
         CGPoint secondLocation = [[[twoTouches allObjects] objectAtIndex:1] locationInView:streamView];
         
@@ -237,7 +241,7 @@ static const float QUICK_TAP_TIME_INTERVAL = 0.2;
         mousePointerMoved = false;
     }
     
-    if([[event allTouches] count] == [touches count]){
+    if([[StreamView streamTouchesForEvent:event] count] == [touches count]){
         isInMouseWheelScrollingMode = false;
         touchLockedForMouseMove = nil;
         mousePointerMoved = false; // need to reset this anyway
