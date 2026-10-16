@@ -70,6 +70,14 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     CFTimeInterval _lastHostFramePts; // only touched on _vtq
 }
 
+- (BOOL)providesDecodedFrames {
+    if (_renderingBackend == RENDER_AVSB &&
+        (_framePacingMode == FramePacingModeLegacy || _framePacingMode == FramePacingModeOff)) {
+        return NO;
+    }
+    return YES;
+}
+
 - (void)reinitializeDisplayLayer
 {
     if (_displayLayer == nil) {
@@ -172,6 +180,7 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     _view = view;
     _callbacks = callbacks;
     _streamAspectRatio = aspectRatio;
+    _letterboxDetector = [[StreamLetterboxDetector alloc] init];
     _maxRefreshRate = [[UIScreen mainScreen] maximumFramesPerSecond];
     _parameterSetBuffers = [[NSMutableArray alloc] init];
     _avgOverhead = 0.004f; // averaged each displaylink callback
@@ -1067,6 +1076,9 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
 
                 CMSampleBufferRef sampleBufferOut = nil;
                 CVPixelBufferRef pixelBuffer = nil;
+
+                // Game / desktop classification (throttled inside; no-op when disabled).
+                [self->_letterboxDetector analyzePixelBuffer:(CVPixelBufferRef)imageBuffer];
 
                 // AVSampleBuffer path: package into a SampleBuffer
                 if (self->_renderingBackend == RENDER_AVSB) {

@@ -13,6 +13,7 @@
 #import "StreamFrameViewController.h"
 #import "MainFrameViewController.h"
 #import "VideoDecoderRenderer.h"
+#import "StreamLetterboxDetector.h"
 #import "FrameQueue.h"
 #import "StreamManager.h"
 #import "SceneDelegate.h"
@@ -55,6 +56,18 @@
 @end
 #endif
 
+
+@interface StreamFrameViewController () <StreamLetterboxDetectorDelegate>
+@end
+
+// What "hide the OSC" means. Auto follows the letterbox detector (game ->
+// translucent but tappable, desktop -> fully off so touch drives the mouse);
+// Game / Desk are per-session manual overrides from the bottom-right button.
+typedef NS_ENUM(NSInteger, OscHideMode) {
+    OscHideModeAuto = 0,
+    OscHideModeGame,
+    OscHideModeDesk,
+};
 
 typedef NS_ENUM(NSInteger, StreamCountdownState) {
     StreamCountdownStateIdle = 0,
@@ -187,14 +200,19 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     UIControl *_toolboxOverlay;
 #pragma mark Snap ratio button
     UIButton *_snapRatioButton;
-    UIButton *_oscToggleButton;
+    UIButton *_oscModeButton;
     UIButton *_rotationLockToggleButton;
     UIButton *_gyroToggleButton;
-    // OSC ON/OFF button hold: while the finger is down (and the OSC is on) the
+    // OSC mode button hold: while the finger is down (and the OSC is on) the
     // OSC is suspended so the other hand can drive the PC. A quick release with
-    // no stream touch in between is still the plain ON->OFF toggle tap.
+    // no stream touch in between is still the plain mode-cycling tap.
     BOOL _oscHoldActive;
     CFTimeInterval _oscHoldStartTime;
+    // OSC visibility model — see "OSC visibility & hide mode".
+    BOOL _oscHidden;                         // right-edge swipe / detector
+    OscHideMode _oscModeOverride;            // Auto unless the mode button was tapped this session
+    StreamContentClass _oscDetectedContent;  // last debounced detector verdict
+    BOOL _oscAutoDetectApplicable;           // stream aspect matches the screen (iPad-size host display)
     // Opaque black sheet behind the Metal video view. The Metal view is
     // shifted (snap-to-top / keyboard lift), and whatever it uncovers is
     // self.view's theme background — this keeps those regions letterbox-black
@@ -670,15 +688,9 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
                                         andConfig:(StreamConfiguration*)_streamConfig]; //reload OSC here.
     [self->_streamView reloadOnScreenWidgetViews]; //reload keyboard buttons here. the keyboard widget view will be added to the streamframe view instead streamview, the highest layer, which saves a lot of reengineering
 
-    // Restore persisted OSC ON/OFF state
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"oscManuallyDisabled"]) {
-        // Diagnostic: if the user reports "all OSC gone on entry, survives app
-        // restart", this line in Console is the smoking gun for the persisted
-        // toggle (vs. a stuck gesture suppression, which logs touch drops).
-        NSLog(@"[InputDiag] oscManuallyDisabled=YES -> clearing all OSC widgets at stream (re)config");
-        [self->_streamView disableOnScreenControls];
-        [self->_streamView clearOnScreenWidgets];
-    }
+    // The reloads above re-apply the OSC presentation inside StreamView; bring
+    // the bottom chrome and the mode button back in sync with it.
+    [self osc_applyPresentation];
     [self reloadAirPlayConfig];
     [self mousePresenceChanged];
     [self applySnapToTopIfNeeded];
@@ -862,22 +874,26 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         [self.view addSubview:_snapRatioButton];
     }
     
-    // Create OSC toggle button if not exists
-    if (!_oscToggleButton) {
-        _oscToggleButton = [UIButton buttonWithType:UIButtonTypeCustom];
-        _oscToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        [_oscToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
-        [_oscToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
-        _oscToggleButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
-        // Press-and-hold semantics (see oscToggleTouchDown:) instead of a plain
-        // TouchUpInside -> toggle.
-        [_oscToggleButton addTarget:self action:@selector(oscToggleTouchDown:) forControlEvents:UIControlEventTouchDown];
-        [_oscToggleButton addTarget:self action:@selector(oscToggleTouchUpInside:) forControlEvents:UIControlEventTouchUpInside];
-        [_oscToggleButton addTarget:self action:@selector(oscToggleTouchEnded:) forControlEvents:(UIControlEventTouchUpOutside | UIControlEventTouchCancel)];
+    // OSC hide-mode button (AUTO / GAME / DESK). Visibility itself is driven by
+    // the right-edge swipe and the letterbox detector; this only picks what
+    // "hidden" means. It sits on a black capsule so it stays legible over video.
+    if (!_oscModeButton) {
+        _oscModeButton = [UIButton buttonWithType:UIButtonTypeCustom];
+        _oscModeButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.70] forState:UIControlStateNormal];
+        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.35] forState:UIControlStateHighlighted];
+        _oscModeButton.contentEdgeInsets = UIEdgeInsetsMake(4, 10, 4, 10);
+        _oscModeButton.backgroundColor = [UIColor colorWithWhite:0 alpha:0.4];
+        _oscModeButton.clipsToBounds = YES;
+        // Press-and-hold semantics (see oscModeTouchDown:) instead of a plain
+        // TouchUpInside -> cycle.
+        [_oscModeButton addTarget:self action:@selector(oscModeTouchDown:) forControlEvents:UIControlEventTouchDown];
+        [_oscModeButton addTarget:self action:@selector(oscModeTouchUpInside:) forControlEvents:UIControlEventTouchUpInside];
+        [_oscModeButton addTarget:self action:@selector(oscModeTouchEnded:) forControlEvents:(UIControlEventTouchUpOutside | UIControlEventTouchCancel)];
         // The holding finger must not count toward the stream's multi-finger
         // detection (2-finger right click / scroll, 3-finger keyboard, ...).
-        [StreamView setMultiTouchExemptView:_oscToggleButton];
-        [self.view addSubview:_oscToggleButton];
+        [StreamView setMultiTouchExemptView:_oscModeButton];
+        [self.view addSubview:_oscModeButton];
     }
 
     if (!_rotationLockToggleButton) {
@@ -906,10 +922,7 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     NSString *snapTitle = _settings.snapScreenRatioMode.integerValue == 0 ? @"16:9" : @"FULL";
     [_snapRatioButton setTitle:snapTitle forState:UIControlStateNormal];
 
-    // Update OSC button title based ONLY on ON/OFF state, not transparency state
-    OnScreenControlsLevel currentLevel = [_streamView getCurrentOscState];
-    NSString *oscTitle = (currentLevel == OnScreenControlsLevelOff) ? @"OSC OFF" : @"OSC ON";
-    [_oscToggleButton setTitle:oscTitle forState:UIControlStateNormal];
+    [_oscModeButton setTitle:[self osc_modeButtonTitle] forState:UIControlStateNormal];
 
     [self stream_updateOrientationLockButton];
 
@@ -917,24 +930,24 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     [_gyroToggleButton setTitle:(gyroForceOn ? @"GYRO ON" : @"GYRO OFF") forState:UIControlStateNormal];
 
     // The ratio button is snap-specific (it picks the snap target aspect),
-    // so it hides when snap is off. The OSC/ROT/GYRO toggles are general
-    // stream controls and stay visible — they used to be tied to the snap
-    // switch, which silently removed them when the user disabled snap.
-    // The whole cluster remains iPad-only, matching the snap feature.
+    // so it hides when snap is off. The whole cluster is iPad-only, matching
+    // the snap feature, and follows the OSC: when the OSC is hidden (so the
+    // video can own the whole iPad-size screen) the bottom chrome goes too.
     BOOL isPad = [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad;
-    _snapRatioButton.hidden = !isPad || !_settings.snapScreenToTop;
-    _oscToggleButton.hidden = !isPad;
-    _rotationLockToggleButton.hidden = !isPad;
-    _gyroToggleButton.hidden = !isPad;
+    BOOL chromeHidden = !isPad || _oscHidden;
+    _snapRatioButton.hidden = chromeHidden || !_settings.snapScreenToTop;
+    _oscModeButton.hidden = chromeHidden;
+    _rotationLockToggleButton.hidden = chromeHidden;
+    _gyroToggleButton.hidden = chromeHidden;
 
     if (!isPad) return;
 
     // Layout all buttons at bottom-right. Each gets a fixed width sized
     // to its widest possible title so toggling text never shifts neighbours.
-    // Order, right -> left: osc (corner, so the right thumb can hold it),
+    // Order, right -> left: osc mode (corner, so the right thumb can hold it),
     // snap ratio (when visible), gyro, rotation lock.
     CGFloat snapW = VoidFixedToggleWidth(_snapRatioButton, @[@"16:9", @"FULL"]);
-    CGFloat oscW  = VoidFixedToggleWidth(_oscToggleButton,  @[@"OSC ON", @"OSC OFF"]);
+    CGFloat oscW  = VoidFixedToggleWidth(_oscModeButton,  @[@"AUTO·GAME", @"AUTO·DESK", @"GAME", @"DESK"]);
     CGFloat rotationW = VoidFixedToggleWidth(_rotationLockToggleButton, @[@"ROT LOCK", @"ROT FREE"]);
     CGFloat gyroW = VoidFixedToggleWidth(_gyroToggleButton, @[@"GYRO ON", @"GYRO OFF"]);
     CGFloat btnH  = [_snapRatioButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)].height;
@@ -945,7 +958,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     CGFloat rightEdge = self.view.bounds.size.width - 24;
 
     CGFloat oscX = rightEdge - oscW;
-    _oscToggleButton.frame = CGRectMake(oscX, baseY - btnH, oscW, btnH);
+    _oscModeButton.frame = CGRectMake(oscX, baseY - btnH, oscW, btnH);
+    _oscModeButton.layer.cornerRadius = btnH / 2.0f;
     rightEdge = oscX - gap;
 
     if (!_snapRatioButton.hidden) {
@@ -961,37 +975,35 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     _rotationLockToggleButton.frame = CGRectMake(rotationX, baseY - btnH, rotationW, btnH);
 }
 
-#pragma mark - OSC ON/OFF button: tap toggles, hold suspends
+#pragma mark - OSC mode button: tap cycles the hide mode, hold suspends
 
 // Release faster than this, with no stream touch in between, counts as a tap.
 static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
 
-- (void)oscToggleTouchDown:(UIButton *)sender {
+- (void)oscModeTouchDown:(UIButton *)sender {
     _oscHoldActive = NO;
     if (self->_streamView.widgetToolOpened) return;
-    // OSC OFF: nothing to suspend, the release is a plain "turn on" tap.
+    // Nothing on screen: nothing to suspend, the release is a plain tap.
     if (![self->_streamView hasAnyOnScreenControls]) return;
     _oscHoldActive = YES;
     _oscHoldStartTime = CACurrentMediaTime();
-    // Suspend right at touch-down (no long-press delay): a real tap ends up OFF
-    // anyway, so hiding early costs nothing and a hold feels instant.
+    // Suspend right at touch-down (no long-press delay) so a hold feels instant;
+    // a tap resumes within a few hundred ms, which is invisible.
     [self->_streamView setOscTemporarilySuspended:YES];
 }
 
-- (void)oscToggleTouchUpInside:(UIButton *)sender {
+- (void)oscModeTouchUpInside:(UIButton *)sender {
     if (!_oscHoldActive) {
-        [self toggleOscOnOff];
+        [self cycleOscHideMode];
         return;
     }
     BOOL usedAsHold = [self->_streamView oscSuspensionSawStreamTouch]
                    || (CACurrentMediaTime() - _oscHoldStartTime) >= kOscHoldTapMaxDuration;
     [self endOscHold];
-    // Resume first, then toggle: the toggle's OFF path tears the OSC down and the
-    // next ON reload must start from a clean, un-suspended state.
-    if (!usedAsHold) [self toggleOscOnOff];
+    if (!usedAsHold) [self cycleOscHideMode];
 }
 
-- (void)oscToggleTouchEnded:(UIButton *)sender {
+- (void)oscModeTouchEnded:(UIButton *)sender {
     [self endOscHold];
 }
 
@@ -1420,6 +1432,10 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     if (!_timeLabel || !_batteryLabel) {
         return;
     }
+    // Bottom-left info follows the OSC visibility, like the bottom-right buttons.
+    _timeLabel.hidden = _oscHidden;
+    _batteryLabel.hidden = _oscHidden;
+    _countdownHitAreaView.hidden = _oscHidden;
 
     // Layout labels at bottom-left
     CGFloat leftMargin = 24.0f;
@@ -1877,40 +1893,128 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     [self applySnapToTopIfNeeded];
 }
 
-- (void)toggleOscOnOff {
-    // Avoid interference when widget layout tool is open
-    if (self->_streamView.widgetToolOpened) {
-        return;
+#pragma mark - OSC visibility & hide mode
+
+// One visibility bit (`_oscHidden`, toggled by the right-edge swipe and driven
+// by the letterbox detector) and one mode that decides what hidden means:
+//   game    -> OscPresentationTranslucent (alpha ~0, still tappable)
+//   desktop -> OscPresentationOff        (hidden + non-interactive, touch = mouse)
+// Nothing is torn down in either state. The bottom chrome (mode / ratio / gyro /
+// rotation buttons, time + battery) follows the visibility bit, which is why the
+// old ON/OFF button could no longer own it: it hid together with the OSC.
+//
+// Auto mode needs the host display to match the iPad's aspect ratio (the
+// "iPad-size" virtual display): a 16:9 game then arrives letterboxed inside the
+// frame while the desktop fills it. On a plain 16:9 host nothing can be told
+// apart, so the mode falls back to game and the manual visibility is persisted
+// like before.
+static NSString * const kOscHiddenKey = @"oscHidden";
+
+- (OscHideMode)osc_effectiveHideMode {
+    if (_oscModeOverride != OscHideModeAuto) return _oscModeOverride;
+    if (!_oscAutoDetectApplicable) return OscHideModeGame;
+    return (_oscDetectedContent == StreamContentClassGame) ? OscHideModeGame : OscHideModeDesk;
+}
+
+- (NSString *)osc_modeButtonTitle {
+    switch (_oscModeOverride) {
+        case OscHideModeGame: return @"GAME";
+        case OscHideModeDesk: return @"DESK";
+        case OscHideModeAuto: break;
     }
+    return ([self osc_effectiveHideMode] == OscHideModeGame) ? @"AUTO·GAME" : @"AUTO·DESK";
+}
 
-    OnScreenControlsLevel currentLevel = [self->_streamView getCurrentOscState];
-    BOOL isOscObscured = [self->_streamView isOscObscuredByAlpha];
-    BOOL turningOn = (currentLevel == OnScreenControlsLevelOff || isOscObscured);
-
-    if (turningOn) {
-        // If OSC is off or obscured, turn it on
-        [self->_streamView reloadOnScreenControlsRealtimeWith:(ControllerSupport*)self->_controllerSupport
-                                                    andConfig:(StreamConfiguration*)self->_streamConfig];
-        [self->_streamView reloadOnScreenWidgetViews]; // Reload widgets to ensure they are recreated
-        [self->_streamView setOscObscuredByAlpha:NO]; // Restore OSC layers to normal opacity
-        [self setWidgetsHidden:NO]; // Restore widgets to normal opacity
-    } else {
-        // If OSC is on, turn it off completely
-        [self->_streamView disableOnScreenControls]; // Disable OSC completely
-        [self->_streamView clearOnScreenWidgets]; // Remove all onscreen widgets completely
+- (void)osc_applyPresentation {
+    OscPresentation presentation = OscPresentationShown;
+    if (_oscHidden) {
+        presentation = ([self osc_effectiveHideMode] == OscHideModeGame)
+            ? OscPresentationTranslucent : OscPresentationOff;
     }
-
-    // Persist OSC ON/OFF state from the INTENT (which branch ran), not by
-    // reading the level back: in touch modes where the legacy OSC level stays
-    // Off even with widgets shown (e.g. AbsoluteTouch — isOscEnabled is false
-    // but isOnScreenButtonEnabled is true), the read-back said "Off" right
-    // after the user turned everything ON, poisoning oscManuallyDisabled so
-    // the next stream entry silently wiped every widget — across restarts.
-    [[NSUserDefaults standardUserDefaults] setBool:!turningOn forKey:@"oscManuallyDisabled"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-
-    // Update button title
+    [self->_streamView setOscPresentation:presentation];
     [self updateSnapRatioButton];
+    [self layoutTimeBatteryCountdownDisplay];
+}
+
+- (void)setOscHidden:(BOOL)hidden {
+    _oscHidden = hidden;
+    if (!_oscAutoDetectApplicable) {
+        [[NSUserDefaults standardUserDefaults] setBool:hidden forKey:kOscHiddenKey];
+    }
+    [self osc_applyPresentation];
+}
+
+// Right-edge swipe.
+- (void)toggleOscVisibility {
+    // Avoid interference when widget layout tool is open
+    if (self->_streamView.widgetToolOpened) return;
+    [self setOscHidden:!_oscHidden];
+}
+
+// Mode button tap: AUTO -> GAME -> DESK -> AUTO. Overrides last for this stream
+// session and are dropped the moment the detector's verdict flips (the user
+// corrected a misdetection; once the content really changes, auto resumes).
+- (void)cycleOscHideMode {
+    if (self->_streamView.widgetToolOpened) return;
+    switch (_oscModeOverride) {
+        case OscHideModeAuto: _oscModeOverride = OscHideModeGame; break;
+        case OscHideModeGame: _oscModeOverride = OscHideModeDesk; break;
+        case OscHideModeDesk: _oscModeOverride = OscHideModeAuto; break;
+    }
+    [self osc_applyPresentation];
+}
+
+// Per-stream setup, from connectionStarted (main queue): the renderer exists and
+// the view has its final bounds by then. reConfigStreamViewRealtime also runs
+// mid-stream (settings sheet closed), so it must NOT reset this state.
+- (void)osc_configureForStream {
+    _oscModeOverride = OscHideModeAuto;
+    _oscDetectedContent = StreamContentClassUnknown;
+
+    CGFloat streamAspect = (_streamConfig.height > 0) ? (CGFloat)_streamConfig.width / (CGFloat)_streamConfig.height : 0;
+    self->_streamMan.videoRenderer.letterboxDetector.delegate = self;
+    [self osc_updateAutoDetectApplicabilityForStreamAspect:streamAspect];
+
+    if (_oscAutoDetectApplicable) {
+        // Desktop until the detector says game: touch drives the mouse from the
+        // first frame, and the OSC appears by itself once a game comes up.
+        _oscHidden = YES;
+    } else {
+        _oscHidden = [[NSUserDefaults standardUserDefaults] boolForKey:kOscHiddenKey];
+    }
+    [self osc_applyPresentation];
+}
+
+// Auto needs (a) decoded frames to look at and (b) a host display shaped like
+// the screen. Re-evaluated on every stream aspect change, see
+// handleStreamAspectRatioChanged:.
+- (void)osc_updateAutoDetectApplicabilityForStreamAspect:(CGFloat)streamAspect {
+    VideoDecoderRenderer *renderer = self->_streamMan.videoRenderer;
+    CGSize bounds = self.view.bounds.size;
+    CGFloat screenAspect = (bounds.height > 0) ? bounds.width / bounds.height : 0;
+    BOOL applicable = renderer.providesDecodedFrames
+        && streamAspect > 0 && screenAspect > 0
+        && fabs(streamAspect - screenAspect) < 0.04;
+    _oscAutoDetectApplicable = applicable;
+    [renderer.letterboxDetector reset];
+    renderer.letterboxDetector.enabled = applicable;
+    Log(LOG_I, @"OSC auto hide-mode %@ (stream %.3f vs screen %.3f, decoded frames %d)",
+        applicable ? @"enabled" : @"unavailable", streamAspect, screenAspect, renderer.providesDecodedFrames);
+}
+
+#pragma mark StreamLetterboxDetectorDelegate
+
+- (void)letterboxDetector:(StreamLetterboxDetector *)detector didChangeContentClass:(StreamContentClass)contentClass {
+    if (detector != self->_streamMan.videoRenderer.letterboxDetector) return; // stale session
+    _oscDetectedContent = contentClass;
+    _oscModeOverride = OscHideModeAuto;
+    // Game -> bring the OSC up; desktop -> put it away so touch drives the mouse.
+    _oscHidden = (contentClass != StreamContentClassGame);
+    Log(LOG_I, @"OSC auto hide-mode: content is now %@", contentClass == StreamContentClassGame ? @"game" : @"desktop");
+    // Never yank widgets out from under the layout editor; the state is kept and
+    // applied by the next user action / reConfig.
+    if (self->_streamView.widgetToolOpened) return;
+    [self osc_applyPresentation];
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -2459,6 +2563,19 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
         CGFloat aspectRatio = [aspectRatioNum doubleValue];
         Log(LOG_I, @"Updating StreamView aspect ratio to %.4f", aspectRatio);
         _streamView.streamAspectRatio = aspectRatio;
+
+        // The host changed resolution mid-stream. If the stream no longer matches
+        // the screen, letterboxing can't be read any more — and a game switching
+        // the display to its own 16:9 mode is itself a strong "game" signal, so
+        // bring the OSC up. Back to a matching aspect: auto resumes from scratch.
+        BOOL wasApplicable = _oscAutoDetectApplicable;
+        [self osc_updateAutoDetectApplicabilityForStreamAspect:aspectRatio];
+        _oscDetectedContent = StreamContentClassUnknown;
+        if (wasApplicable && !_oscAutoDetectApplicable) {
+            _oscModeOverride = OscHideModeAuto;
+            _oscHidden = NO;
+        }
+        if (!self->_streamView.widgetToolOpened) [self osc_applyPresentation];
     }
 }
 
@@ -2471,6 +2588,9 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     [self->_streamView showOnScreenControls];
     [self->_streamView reloadOnScreenWidgetViews]; //update keyboard buttons here
     [self stream_publishOrientationLockAndRefresh];
+    // A detector verdict that arrived while the editor was open was recorded but
+    // not applied (never yank widgets out from under the editor); apply it now.
+    [self osc_applyPresentation];
 }
 
 - (void)setUserInteractionEnabledForStreamView:(bool)enabled{
@@ -3204,49 +3324,6 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     }
 }
 
-- (void)toggleOscVisibility{
-    // Avoid interference when widget layout tool is open
-    if (self->_streamView.widgetToolOpened) {
-        return;
-    }
-    OnScreenControlsLevel current = [self->_streamView getCurrentOscState];
-    BOOL obscured = [self->_streamView isOscObscuredByAlpha];
-    
-    // If OSC is completely off, right swipe should do nothing
-    // Only ON/OFF button can turn it back on
-    if (current == OnScreenControlsLevelOff) {
-        return;
-    }
-    
-    // Only handle transparency changes when OSC is actually enabled
-    if (obscured) {
-        // Currently hidden by alpha -> show
-        [self->_streamView setOscObscuredByAlpha:NO];
-        [self setWidgetsHidden:NO];
-    } else {
-        // Currently shown -> hide by alpha
-        [self->_streamView setOscObscuredByAlpha:YES];
-        [self setWidgetsHidden:YES];
-    }
-    // Do NOT update button title - right swipe should not affect ON/OFF button state
-}
-
-// Make on-screen widgets visually transparent but still interactive
-- (void)setWidgetsHidden:(BOOL)hidden {
-    // Use a near-zero alpha to keep hit-testing enabled (UIKit ignores alpha < 0.01)
-    CGFloat targetAlpha = hidden ? 0.02f : 1.0f;
-    [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
-        for (UIView *widgetView in self.view.subviews) {
-            if ([widgetView isKindOfClass:[OnScreenWidgetView class]]) {
-                widgetView.alpha = targetAlpha;
-                widgetView.userInteractionEnabled = YES;
-            }
-        }
-    } completion:nil];
-    // Inform Swift side (OnScreenWidgetView) to enable per-button highlight when obscured
-    [OnScreenWidgetView setObscuredByAlpha:hidden];
-}
-
 - (void)disconnectRemoteSession {
     Log(LOG_I, @"Settings view disconnect the session in stream view");
     [self returnToMainFrame];
@@ -3292,6 +3369,7 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
         }
 
         [self->_streamView showOnScreenControls];
+        [self osc_configureForStream];
 
         // Re-apply snap-to-top now that the view hierarchy is final-sized and
         // the Metal view (if any) exists — idempotent, covers any case where

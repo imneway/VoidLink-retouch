@@ -11,6 +11,7 @@
 #import "ConnectionCallbacks.h"
 #import "FrameQueue.h"
 #import "Plot.h"
+#import "StreamLetterboxDetector.h"
 
 #include "Limelight.h"
 
@@ -20,6 +21,12 @@
 @property (atomic, readonly) PlotMetrics frameQueueMetrics;
 
 @property (nonatomic, strong, readonly) AVSampleBufferDisplayLayer *displayLayer;
+// Game / desktop classifier fed with every decoded frame (both backends). The
+// host VC enables it and listens as its delegate; disabled it costs nothing.
+@property (nonatomic, strong, readonly) StreamLetterboxDetector *letterboxDetector;
+// NO when frames go straight to the display layer undecoded (AVSB backend with
+// Legacy / Off frame pacing): the detector never sees a pixel buffer then.
+@property (nonatomic, readonly) BOOL providesDecodedFrames;
 
 - (id)initWithView:(UIView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio;
 

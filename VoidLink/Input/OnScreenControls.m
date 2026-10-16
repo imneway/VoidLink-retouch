@@ -675,6 +675,11 @@ static float L3_Y;
 
 - (void) updateControls {
     _cachedDecodedButtonStates = nil; // profile may have changed — force a fresh decode
+    // Lift the suspension hiding before the layout pass so the profile owns every
+    // hidden flag during it; it is put back at the end. Simple / Full don't rewrite
+    // hidden flags, so re-applying on top of OUR hidden layers would otherwise
+    // read them as profile-hidden and never restore them on resume.
+    if (_suspended) [self osc_applySuspensionHiding:NO];
     if(self._level == OnScreenControlsLevelCustom){
         // mark all OSC buttons that has valid coords of positions
         validPositionButtonNames = [NSSet setWithObjects:
@@ -824,8 +829,12 @@ static float L3_Y;
         [_originalControllerLayerOpacityDict setObject:@(controllerLayer.opacity) forKey:controllerLayer.name];
     }
 
-    // A layout pass mid-hold (show / setLevel / reload) just re-wrote every layer's
-    // hidden flag from the profile; put the suspension hiding back on top of it.
+    // A layout pass (show / setLevel / reload) just re-wrote every layer's opacity
+    // and (on Custom) hidden flag from the profile; put the obscure opacity and the
+    // suspension hiding back on top of it. Both get set on a fresh instance BEFORE
+    // its first show, so without this the translucent / off state would be undone
+    // by that very first layout.
+    if (_obscuredByAlpha) [self setObscuredByAlpha:YES];
     if (_suspended) [self osc_applySuspensionHiding:YES];
 }
 

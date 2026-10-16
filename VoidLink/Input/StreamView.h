@@ -67,11 +67,20 @@
 // Tap-style legacy layers only (no sticks / d-pad). See OnScreenControls.
 - (BOOL)pointHitsVisibleLegacyTapButton:(CGPoint)point;
 
-// Obscure OSC layers by alpha while keeping them interactive
-- (void)setOscObscuredByAlpha:(BOOL)enabled;
-- (BOOL)isOscObscuredByAlpha;
+// How the OSC (legacy layers + widgets) is presented. The host VC picks the
+// hidden flavour from its game/desktop mode: Translucent for games (alpha ~0,
+// still tappable), Off for the desktop (hidden and non-interactive so touches
+// reach the host as mouse / native touch). Nothing is torn down in either
+// hidden state; a reload re-applies the current presentation.
+typedef NS_ENUM(NSInteger, OscPresentation) {
+    OscPresentationShown = 0,
+    OscPresentationTranslucent,
+    OscPresentationOff,
+};
+- (void)setOscPresentation:(OscPresentation)presentation;
+- (OscPresentation)oscPresentation;
 
-// Hold-to-suspend for the OSC ON/OFF button. While suspended the legacy OSC
+// Hold-to-suspend for the OSC mode button. While suspended the legacy OSC
 // layers and every OnScreenWidgetView are hidden AND non-interactive, so the
 // other hand's touches reach the host as plain mouse / native touch input.
 // Nothing is torn down: resuming just un-hides. Survives an OSC / widget reload
@@ -86,7 +95,7 @@
 // during which the other hand operated the PC (never toggle).
 - (BOOL)oscSuspensionSawStreamTouch;
 
-// Multi-finger counting exemption. The finger holding the OSC ON/OFF button is
+// Multi-finger counting exemption. The finger holding the OSC mode button is
 // on screen for the whole hold, and it shows up in [event allTouches] for every
 // touch the stream receives — so a single left-hand tap would count as two
 // fingers (right click / scroll / ignored in absolute mode) and a two-finger

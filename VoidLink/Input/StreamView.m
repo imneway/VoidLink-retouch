@@ -143,6 +143,9 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 
     // OSC ON/OFF button hold — see setOscTemporarilySuspended:.
     BOOL oscTemporarilySuspended;
+    // Shown / Translucent / Off — see setOscPresentation:. The Off flavour
+    // reuses the hold-suspend machinery (hidden + non-interactive).
+    OscPresentation oscPresentation;
     BOOL oscSuspensionSawStreamTouch;
     NSHashTable<UIView *> *widgetsHiddenBySuspension;
 }
@@ -553,21 +556,45 @@ static __weak UIView *sMultiTouchExemptView = nil;
     else [self disableOnScreenControls];
 }
 
-// Obscure OSC layers by alpha while keeping them interactive
-- (void)setOscObscuredByAlpha:(BOOL)enabled {
-#if !TARGET_OS_TV
-    if (onScreenControls) {
-        [onScreenControls setObscuredByAlpha:enabled];
-    }
-#endif
+#pragma mark - OSC presentation
+
+- (void)setOscPresentation:(OscPresentation)presentation {
+    if (oscPresentation == presentation) return;
+    oscPresentation = presentation;
+    [self osc_syncPresentationStateAnimated:YES];
 }
 
-- (BOOL)isOscObscuredByAlpha {
+- (OscPresentation)oscPresentation {
+    return oscPresentation;
+}
+
+// Push the current presentation onto whatever OSC instance / widget set exists
+// right now. Called on every change and again after each reload: a reload swaps
+// in a fresh OnScreenControls and fresh, fully visible widgets, while
+// OnScreenWidgetView.obscuredByAlpha is a STATIC that survives it — left alone,
+// the new widgets would be visible yet flagged obscured, and the next tap would
+// drop the tapped one to 0.02 (it "disappears").
+- (void)osc_syncPresentationStateAnimated:(BOOL)animated {
+    BOOL translucent = (oscPresentation == OscPresentationTranslucent);
 #if !TARGET_OS_TV
-    return onScreenControls ? [onScreenControls isObscuredByAlpha] : NO;
-#else
-    return NO;
+    if (onScreenControls && [onScreenControls isObscuredByAlpha] != translucent) {
+        [onScreenControls setObscuredByAlpha:translucent];
+    }
 #endif
+    [OnScreenWidgetView setObscuredByAlpha:translucent];
+    // Near-zero alpha keeps hit-testing on (UIKit ignores alpha < 0.01).
+    CGFloat widgetAlpha = translucent ? 0.02f : 1.0f;
+    void (^apply)(void) = ^{
+        for (UIView *v in self->streamFrameTopLayerView.subviews) {
+            if ([v isKindOfClass:[OnScreenWidgetView class]]) v.alpha = widgetAlpha;
+        }
+    };
+    if (animated) {
+        [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:apply completion:nil];
+    } else {
+        apply();
+    }
+    [self osc_syncSuspensionState];
 }
 
 #pragma mark - OSC hold-to-suspend
@@ -595,14 +622,16 @@ static __weak UIView *sMultiTouchExemptView = nil;
     [self osc_syncSuspensionState];
 }
 
-// Push the current suspension flag onto whatever OSC instance / widget set exists
-// right now. Called on every flag change and again after a reload, since a reload
-// swaps in a fresh OnScreenControls and fresh (unhidden) widgets.
+// Push the effective suspension (mode-button hold OR the Off presentation) onto
+// whatever OSC instance / widget set exists right now. Called on every change and
+// again after a reload, since a reload swaps in a fresh OnScreenControls and
+// fresh (unhidden) widgets.
 - (void)osc_syncSuspensionState {
+    BOOL suspended = oscTemporarilySuspended || (oscPresentation == OscPresentationOff);
 #if !TARGET_OS_TV
-    [onScreenControls setSuspended:oscTemporarilySuspended];
+    [onScreenControls setSuspended:suspended];
 #endif
-    if (oscTemporarilySuspended) {
+    if (suspended) {
         // `hidden` (not alpha) so hit-testing skips them entirely. Only the widgets
         // we hid get restored — a widget that was hidden on its own stays hidden.
         // A finger already down on a widget keeps delivering to it after it's
@@ -672,8 +701,9 @@ static __weak UIView *sMultiTouchExemptView = nil;
         onScreenControls.mouseRightClickTapRecognizer = relativeTouchHandler.mouseRightClickTapRecognizer;
     } */
     if([self isOscEnabled]) [onScreenControls setLevel:(OnScreenControlsLevel)settings.onscreenControls.intValue];
-    // A reload mid-hold must not resurrect the OSC under the other hand.
-    if (oscTemporarilySuspended) [self osc_syncSuspensionState];
+    // A reload must not resurrect a hidden OSC (mid-hold, or in the Off /
+    // Translucent presentation).
+    [self osc_syncPresentationStateAnimated:NO];
 }
 
 
@@ -934,24 +964,10 @@ static __weak UIView *sMultiTouchExemptView = nil;
             [widgetView adjustTextAlphaWithAlpha:buttonState.textAlpha];
         }
 
-        // Keep the freshly-rebuilt widgets in lockstep with the legacy OSC layers'
-        // obscure-by-alpha state. OnScreenWidgetView.obscuredByAlpha is a STATIC that
-        // survives this reload, while new widgets default to full alpha — so a reload
-        // that happens while the OSC is hidden (right-edge swipe or the OSC ON/OFF
-        // button) leaves the new widgets VISIBLE yet still flagged obscured. The next
-        // tap then drops the tapped widget to 0.02 (it "disappears"), and only an
-        // OSC ON/OFF toggle resynced it. Re-apply the current obscure state to both the
-        // flag and the just-attached widgets so visibility and the flag can't diverge.
-        BOOL oscObscured = [self isOscObscuredByAlpha];
-        [OnScreenWidgetView setObscuredByAlpha:oscObscured];
-        CGFloat widgetViewAlpha = oscObscured ? 0.02f : 1.0f;
-        for (UIView *v in self->streamFrameTopLayerView.subviews) {
-            if ([v isKindOfClass:[OnScreenWidgetView class]]) {
-                v.alpha = widgetViewAlpha;
-            }
-        }
-        // Same for a widget rebuild mid-hold: the fresh widgets start unhidden.
-        if (oscTemporarilySuspended) [self osc_syncSuspensionState];
+        // Keep the freshly-rebuilt widgets in lockstep with the current
+        // presentation (translucent alpha + obscured flag, Off / hold suspension):
+        // new widgets start fully visible and unsuspended.
+        [self osc_syncPresentationStateAnimated:NO];
     }
 }
 
