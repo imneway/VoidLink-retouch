@@ -12,23 +12,28 @@ static const CFTimeInterval kSampleInterval = 0.5;
 static const CFTimeInterval kDebounceInterval = 2.0;
 
 // Luma (8-bit scale) at or below this counts as black. Limited-range black is 16;
-// the headroom absorbs encoder noise and ringing next to the bar edge.
-static const int kBlackLumaMax = 24;
-// A row is "black" when at least this fraction of its samples are black.
-static const float kRowBlackFraction = 0.98f;
-// Columns sampled per row.
-static const int kColumnSamples = 64;
-// Letterbox geometry, as fractions of the frame height. Loose on purpose:
-// a 16:9 game on a 4:3 display pads ~25% in total, 16:10 content ~17%, and
-// some games pin the window to the top so one bar carries all of it.
+// a little headroom absorbs encoder noise. Kept tight so dim game content
+// (dark blue skies etc.) is not swallowed as "bar".
+static const int kBlackLumaMax = 20;
+// A line is "black" when at most this many of its samples are non-black.
+static const int kLineMaxNonBlack = 2;
+// Samples taken along each scanned line (columns of a row / rows of a column).
+static const int kLineSamples = 256;
+// Dark content can only make a measured bar LARGER (its rows pass the black
+// test), never smaller, so the bar estimate is the minimum over the last few
+// samples. A sprite or firefly touching the content edge once in this window
+// pins the real bar. 8 samples = 4 s at the sampling cadence.
+enum { kWindowSamples = 8 };
+// Letterbox / pillarbox geometry, as fractions of the frame height / width.
+// Loose on purpose: a 16:9 game on this ~1.45 display pads ~18% vertically,
+// a 4:3 game ~8% horizontally, and some games pin the window to one edge so a
+// single bar carries all of it. Past the maximum the frame is a loading screen
+// (small logo on black) or a fade: the verdict holds instead of flipping.
 static const float kMinTotalBarFraction = 0.05f;
 static const float kMaxTotalBarFraction = 0.40f;
 static const float kMinSingleBarFraction = 0.02f;
-// Scanning stops here from each edge; past it the frame is treated as all-black.
+// Scanning stops here from each edge.
 static const float kMaxScanFraction = 0.45f;
-// The band between the bars must carry at least this much non-black content,
-// or the frame is a loading / fade-to-black screen and the verdict holds.
-static const float kMinMiddleContentFraction = 0.02f;
 // A bar scan tolerates this many non-black rows before it stops, so a thin
 // bright line at the very edge of the frame (window border, capture artifact)
 // or a stray row inside the bar does not collapse the bar to zero height.
@@ -38,6 +43,36 @@ static const int kMaxBarGapRows = 3;
 // detector actually sees (bar heights, pixel format) without a debugger.
 static const CFTimeInterval kDiagLogInterval = 5.0;
 
+typedef struct {
+    size_t a[kWindowSamples];   // top or left
+    size_t b[kWindowSamples];   // bottom or right
+    int count;
+    int next;
+    BOOL edgesBlack;            // regime the window was collected in
+} BarWindow;
+
+static void BarWindowClear(BarWindow *w) {
+    w->count = 0;
+    w->next = 0;
+}
+
+static void BarWindowPush(BarWindow *w, size_t a, size_t b) {
+    w->a[w->next] = a;
+    w->b[w->next] = b;
+    w->next = (w->next + 1) % kWindowSamples;
+    if (w->count < kWindowSamples) w->count++;
+}
+
+static void BarWindowMin(const BarWindow *w, size_t *outA, size_t *outB) {
+    size_t ma = SIZE_MAX, mb = SIZE_MAX;
+    for (int i = 0; i < w->count; i++) {
+        if (w->a[i] < ma) ma = w->a[i];
+        if (w->b[i] < mb) mb = w->b[i];
+    }
+    *outA = ma;
+    *outB = mb;
+}
+
 @implementation StreamLetterboxDetector {
     dispatch_queue_t _stateQueue;
     BOOL _enabled;                       // guarded by @synchronized(self)
@@ -45,6 +80,12 @@ static const CFTimeInterval kDiagLogInterval = 5.0;
     CFTimeInterval _lastDiagLogTime;     // VT callback thread only
     StreamContentClass _lastDiagRaw;     // VT callback thread only
     CFTimeInterval _lastFailureLogTime;  // VT callback thread only
+    // Bar measurement windows (VT callback thread only). One ring per axis,
+    // cleared whenever that axis' edge-black state flips (desktop <-> bars),
+    // so a fresh game is measured from its first sample, not against the
+    // desktop's zeros.
+    BarWindow _vertical;                 // top / bottom
+    BarWindow _horizontal;               // left / right
     StreamContentClass _current;         // _stateQueue
     StreamContentClass _pending;         // _stateQueue
     CFTimeInterval _pendingSince;        // _stateQueue
@@ -66,6 +107,10 @@ static const CFTimeInterval kDiagLogInterval = 5.0;
 - (void)reset {
     @synchronized (self) {
         _lastSampleTime = 0;
+    }
+    @synchronized (self) {   // windows are touched under the same lock on the VT thread
+        BarWindowClear(&_vertical);
+        BarWindowClear(&_horizontal);
     }
     dispatch_async(_stateQueue, ^{
         self->_current = StreamContentClassUnknown;
@@ -117,30 +162,36 @@ static inline int LumaAt(const uint8_t *row, size_t x, BOOL wide) {
     return row[x];
 }
 
-static BOOL RowIsBlack(const uint8_t *base, size_t bytesPerRow, size_t width, size_t y, BOOL wide, int *outNonBlack) {
+static BOOL RowIsBlack(const uint8_t *base, size_t bytesPerRow, size_t width, size_t y, BOOL wide) {
     const uint8_t *row = base + y * bytesPerRow;
-    int black = 0;
-    int samples = 0;
-    size_t step = width / kColumnSamples;
+    int nonBlack = 0;
+    size_t step = width / kLineSamples;
     if (step == 0) step = 1;
     for (size_t x = step / 2; x < width; x += step) {
-        samples++;
-        if (LumaAt(row, x, wide) <= kBlackLumaMax) black++;
+        if (LumaAt(row, x, wide) > kBlackLumaMax && ++nonBlack > kLineMaxNonBlack) return NO;
     }
-    if (outNonBlack) *outNonBlack = samples - black;
-    return samples > 0 && (float)black >= kRowBlackFraction * (float)samples;
+    return YES;
+}
+
+static BOOL ColumnIsBlack(const uint8_t *base, size_t bytesPerRow, size_t height, size_t x, BOOL wide) {
+    int nonBlack = 0;
+    size_t step = height / kLineSamples;
+    if (step == 0) step = 1;
+    for (size_t y = step / 2; y < height; y += step) {
+        if (LumaAt(base + y * bytesPerRow, x, wide) > kBlackLumaMax && ++nonBlack > kLineMaxNonBlack) return NO;
+    }
+    return YES;
 }
 
 // Bar height from one edge: the extent of the leading run of black rows, where
 // up to kMaxBarGapRows non-black rows in a row are skipped over. Returns the
 // index just past the last black row seen (0 when the edge row isn't black and
 // no black run follows within the gap allowance).
-static size_t ScanBar(const uint8_t *base, size_t bytesPerRow, size_t width, BOOL wide, size_t maxScan,
-                      size_t (^rowAt)(size_t i)) {
+static size_t ScanBar(size_t maxScan, BOOL (^lineIsBlack)(size_t i)) {
     size_t bar = 0;
     int gap = 0;
     for (size_t i = 0; i < maxScan; i++) {
-        if (RowIsBlack(base, bytesPerRow, width, rowAt(i), wide, NULL)) {
+        if (lineIsBlack(i)) {
             bar = i + 1;
             gap = 0;
         } else if (++gap > kMaxBarGapRows) {
@@ -148,6 +199,43 @@ static size_t ScanBar(const uint8_t *base, size_t bytesPerRow, size_t width, BOO
         }
     }
     return bar;
+}
+
+// Feeds one axis' fresh measurement into its window and returns the windowed
+// estimate. The window restarts when the regime flips between "no plausible
+// bar" (desktop; a 1-2 px dark border still counts as none) and "a bar on at
+// least one side", so a fresh game is not held back by the desktop's zeros.
+static void UpdateAxis(BarWindow *w, size_t a, size_t b, size_t extent, size_t *outA, size_t *outB) {
+    size_t minBar = (size_t)(extent * kMinSingleBarFraction);
+    BOOL edgesBlack = (a >= minBar || b >= minBar);
+    if (w->count == 0 || edgesBlack != w->edgesBlack) {
+        BarWindowClear(w);
+        w->edgesBlack = edgesBlack;
+    }
+    BarWindowPush(w, a, b);
+    BarWindowMin(w, outA, outB);
+}
+
+// Bars on one axis: game geometry, desktop (no / negligible bars), or
+// "too much black" (loading screen, fade) which holds the verdict.
+typedef NS_ENUM(NSInteger, AxisClass) { AxisClassNone, AxisClassBars, AxisClassBlack };
+
+static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan) {
+    if (a >= maxScan && b >= maxScan) return AxisClassBlack;
+    float e = (float)extent;
+    float total = (float)(a + b) / e;
+    float small = (float)MIN(a, b) / e;
+    float large = (float)MAX(a, b) / e;
+    if (total <= kMaxTotalBarFraction) {
+        return (total >= kMinTotalBarFraction && large >= kMinSingleBarFraction) ? AxisClassBars : AxisClassNone;
+    }
+    // Too much black in total. Bars are (near) symmetric, so when the smaller
+    // side is a plausible bar the larger side is dark content that nothing has
+    // touched yet (a night scene with the sprites all in the upper half);
+    // assume the bar mirrors the small side. Otherwise it's a loading screen /
+    // fade and the verdict holds.
+    if (small >= kMinSingleBarFraction && 2 * small <= kMaxTotalBarFraction) return AxisClassBars;
+    return AxisClassBlack;
 }
 
 - (void)analyzePixelBuffer:(CVPixelBufferRef)pixelBuffer {
@@ -195,43 +283,47 @@ static size_t ScanBar(const uint8_t *base, size_t bytesPerRow, size_t width, BOO
     // stride, which may carry alignment padding.
     BOOL wide = PixelFormatIsWide(fmt);
 
-    size_t maxScan = (size_t)(height * kMaxScanFraction);
-    size_t top = ScanBar(base, bytesPerRow, width, wide, maxScan, ^size_t(size_t i) { return i; });
-    size_t bottom = ScanBar(base, bytesPerRow, width, wide, maxScan, ^size_t(size_t i) { return height - 1 - i; });
-
-    BOOL allBlack = (top >= maxScan && bottom >= maxScan);
-    if (!allBlack) {
-        // Content check across the band between the bars.
-        size_t bandTop = top, bandBottom = height - bottom;
-        int nonBlack = 0, samples = 0;
-        const int rows = 16;
-        for (int i = 0; i < rows; i++) {
-            size_t y = bandTop + ((bandBottom - bandTop) * (2 * i + 1)) / (2 * rows);
-            int rowNonBlack = 0;
-            RowIsBlack(base, bytesPerRow, width, y, wide, &rowNonBlack);
-            nonBlack += rowNonBlack;
-            samples += kColumnSamples;
-        }
-        allBlack = (float)nonBlack < kMinMiddleContentFraction * (float)samples;
-    }
+    size_t maxScanV = (size_t)(height * kMaxScanFraction);
+    size_t maxScanH = (size_t)(width * kMaxScanFraction);
+    size_t topRaw = ScanBar(maxScanV, ^BOOL(size_t i) { return RowIsBlack(base, bytesPerRow, width, i, wide); });
+    size_t bottomRaw = ScanBar(maxScanV, ^BOOL(size_t i) { return RowIsBlack(base, bytesPerRow, width, height - 1 - i, wide); });
+    size_t leftRaw = ScanBar(maxScanH, ^BOOL(size_t i) { return ColumnIsBlack(base, bytesPerRow, height, i, wide); });
+    size_t rightRaw = ScanBar(maxScanH, ^BOOL(size_t i) { return ColumnIsBlack(base, bytesPerRow, height, width - 1 - i, wide); });
     CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
 
-    float h = (float)height;
-    float total = (float)(top + bottom) / h;
-    float single = (float)MAX(top, bottom) / h;
-    BOOL letterboxed = total >= kMinTotalBarFraction && total <= kMaxTotalBarFraction && single >= kMinSingleBarFraction;
-    StreamContentClass raw = allBlack ? StreamContentClassUnknown
-                           : (letterboxed ? StreamContentClassGame : StreamContentClassDesktop);
+    // A frame that is black to the scan limit on every edge is a fade / loading
+    // screen right now, whatever the window remembers: hold immediately so a
+    // pending switch can't commit unseen behind the black.
+    BOOL frameBlack = topRaw >= maxScanV && bottomRaw >= maxScanV && leftRaw >= maxScanH && rightRaw >= maxScanH;
+
+    size_t top, bottom, left, right;
+    @synchronized (self) {
+        UpdateAxis(&_vertical, topRaw, bottomRaw, height, &top, &bottom);
+        UpdateAxis(&_horizontal, leftRaw, rightRaw, width, &left, &right);
+    }
+
+    AxisClass v = ClassifyAxis(top, bottom, height, maxScanV);
+    AxisClass h = ClassifyAxis(left, right, width, maxScanH);
+    StreamContentClass raw;
+    if (frameBlack) {
+        raw = StreamContentClassUnknown;     // hold
+    } else if (v == AxisClassBars || h == AxisClassBars) {
+        raw = StreamContentClassGame;
+    } else if (v == AxisClassBlack || h == AxisClassBlack) {
+        raw = StreamContentClassUnknown;     // hold
+    } else {
+        raw = StreamContentClassDesktop;
+    }
 
     if (raw != _lastDiagRaw || now - _lastDiagLogTime >= kDiagLogInterval) {
         _lastDiagRaw = raw;
         _lastDiagLogTime = now;
-        Log(LOG_I, @"[Letterbox] raw=%@ top=%zu bottom=%zu of %zux%zu fmt=%c%c%c%c wide=%d stride=%zu",
+        Log(LOG_I, @"[Letterbox] raw=%@ tb=%zu/%zu (now %zu/%zu) lr=%zu/%zu (now %zu/%zu) of %zux%zu fmt=%c%c%c%c wide=%d",
             raw == StreamContentClassGame ? @"game" : (raw == StreamContentClassDesktop ? @"desktop" : @"black"),
-            top, bottom, width, height, FOURCC_CHARS(fmt), wide, bytesPerRow);
+            top, bottom, topRaw, bottomRaw, left, right, leftRaw, rightRaw, width, height, FOURCC_CHARS(fmt), wide);
     }
 
-    if (allBlack) {
+    if (raw == StreamContentClassUnknown) {
         // Loading / fade: hold the current verdict AND drop any pending switch, so a
         // single contradicting sample right before a black screen can't commit
         // unseen two seconds later.
