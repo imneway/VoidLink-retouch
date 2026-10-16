@@ -111,6 +111,15 @@ typedef NS_ENUM(NSInteger, OscPresentation) {
 
 // Expose current visual top offset (iPad-only; 0 elsewhere)
 - (CGFloat) currentSnapOffset;
+// Snap target override. None follows the persisted snapScreenRatioMode
+// setting; the others force the target. Set by the host VC when the letterbox
+// detector / a session tap decides the ratio.
+typedef NS_ENUM(NSInteger, SnapRatioOverride) {
+    SnapRatioOverrideNone = 0,
+    SnapRatioOverrideSixteenNine,
+    SnapRatioOverrideFull,
+};
+@property (assign, nonatomic) SnapRatioOverride snapRatioOverride;
 
 - (OnScreenControlsLevel) getCurrentOscState;
 
@@ -118,6 +127,9 @@ typedef NS_ENUM(NSInteger, OscPresentation) {
 - (void)keyboardWillShow:(NSNotification *)notification;
 - (void)keyboardWillHide;
 - (void)liftMetalVideoViewIfNeeded:(CGFloat)liftHeight;
+// Extra upward shift currently applied for the on-screen keyboard (0 when it
+// is down). The host VC keeps it when it re-bases the snap offset.
+- (CGFloat)activeKeyboardLift;
 
 #if !TARGET_OS_TV
 - (void) updateCursorLocation:(CGPoint)location isMouse:(BOOL)isMouse;

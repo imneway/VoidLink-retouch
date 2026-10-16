@@ -27,6 +27,9 @@
 // NO when frames go straight to the display layer undecoded (AVSB backend with
 // Legacy / Off frame pacing): the detector never sees a pixel buffer then.
 @property (nonatomic, readonly) BOOL providesDecodedFrames;
+// Aspect ratio of the frames actually being decoded; follows host resolution
+// changes (StreamAspectRatioChanged), unlike the configured stream size.
+@property (nonatomic, readonly) float streamAspectRatio;
 
 - (id)initWithView:(UIView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio;
 

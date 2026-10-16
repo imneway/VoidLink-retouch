@@ -70,6 +70,8 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     CFTimeInterval _lastHostFramePts; // only touched on _vtq
 }
 
+@synthesize streamAspectRatio = _streamAspectRatio;
+
 - (BOOL)providesDecodedFrames {
     if (_renderingBackend == RENDER_AVSB &&
         (_framePacingMode == FramePacingModeLegacy || _framePacingMode == FramePacingModeOff)) {

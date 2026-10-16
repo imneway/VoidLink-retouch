@@ -213,6 +213,10 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     OscHideMode _oscModeOverride;            // Auto unless the mode button was tapped this session
     StreamContentClass _oscDetectedContent;  // last debounced detector verdict
     BOOL _oscAutoDetectApplicable;           // stream aspect matches the screen (iPad-size host display)
+    // Auto snap ratio — see "Snap ratio (16:9 / FULL)". Shares the detector
+    // and its applicability with the OSC hide mode.
+    BOOL _snapDetectedFits;                  // detector: content sits inside the centred 16:9 region
+    SnapRatioOverride _snapRatioOverride;    // None unless the ratio button was tapped this session
     // Opaque black sheet behind the Metal video view. The Metal view is
     // shifted (snap-to-top / keyboard lift), and whatever it uncovers is
     // self.view's theme background — this keeps those regions letterbox-black
@@ -760,15 +764,20 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
 }
 
 - (void)applySnapToTopIfNeeded {
+    [self snap_syncOverrideToStreamView];
     BOOL isPad = [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad;
+    // An open keyboard's lift rides on top of whatever base is applied here;
+    // originalFrame stays the unlifted frame so keyboardWillHide restores it.
+    CGFloat keyboardLift = [_streamView activeKeyboardLift];
     if (!isPad || !_settings.snapScreenToTop) {
         // Restore to original position
         CGRect f = _streamView.frame;
-        f.origin.y = 0;
+        f.origin.y = -keyboardLift;
         _streamView.frame = f;
+        f.origin.y = 0;
         _streamView.originalFrame = f;
         // Restore Metal view (currentSnapOffset is 0 when snap is off)
-        [_streamView liftMetalVideoViewIfNeeded:0];
+        [_streamView liftMetalVideoViewIfNeeded:keyboardLift];
         // Re-evaluate button visibility/layout (ratio button hides, the
         // OSC/ROT/GYRO toggles stay — they are not snap-specific)
         [self updateSnapRatioButton];
@@ -785,11 +794,12 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
     // Move the entire StreamView up
     CGRect f = self.view.bounds;
     f.origin.y = -topBlackBar;
-    _streamView.frame = f;
     _streamView.originalFrame = f; // so keyboard lift restores correctly
+    f.origin.y = -topBlackBar - keyboardLift;
+    _streamView.frame = f;
 
-    // Metal view picks up the snap base internally; extra lift is 0 here
-    [_streamView liftMetalVideoViewIfNeeded:0];
+    // Metal view picks up the snap base internally; only the keyboard lift is extra
+    [_streamView liftMetalVideoViewIfNeeded:keyboardLift];
 
     // Show/update ratio button
     [self updateSnapRatioButton];
@@ -919,7 +929,7 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     }
 
     // Update titles
-    NSString *snapTitle = _settings.snapScreenRatioMode.integerValue == 0 ? @"16:9" : @"FULL";
+    NSString *snapTitle = [self snap_effectiveRatioMode] == 0 ? @"16:9" : @"FULL";
     [_snapRatioButton setTitle:snapTitle forState:UIControlStateNormal];
 
     [_oscModeButton setTitle:[self osc_modeButtonTitle] forState:UIControlStateNormal];
@@ -1881,16 +1891,55 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     } completion:nil];
 }
 
+#pragma mark - Snap ratio (16:9 / FULL)
+
+// With auto detection available (iPad-size host display) the ratio follows the
+// detector: content inside the centred 16:9 region -> 16:9 (snap it to the
+// top), anything else -> FULL. A tap on the ratio button overrides for this
+// session and is dropped the moment the detector's fit verdict flips, exactly
+// like the OSC mode button. Without auto detection the button keeps its old
+// persisted behaviour.
+- (NSInteger)snap_effectiveRatioMode {
+    if (!_oscAutoDetectApplicable) return _settings.snapScreenRatioMode.integerValue;
+    if (_snapRatioOverride != SnapRatioOverrideNone) return (_snapRatioOverride == SnapRatioOverrideSixteenNine) ? 0 : 1;
+    return _snapDetectedFits ? 0 : 1;
+}
+
+- (void)snap_syncOverrideToStreamView {
+    SnapRatioOverride override = SnapRatioOverrideNone;
+    if (_oscAutoDetectApplicable) {
+        override = ([self snap_effectiveRatioMode] == 0) ? SnapRatioOverrideSixteenNine : SnapRatioOverrideFull;
+    }
+    _streamView.snapRatioOverride = override;
+}
+
 - (void)toggleSnapRatio {
-    // Toggle 0<->1
-    NSInteger mode = _settings.snapScreenRatioMode.integerValue == 0 ? 1 : 0;
-    // Persist to NSUserDefaults so侧栏也能读到
-    [[NSUserDefaults standardUserDefaults] setInteger:mode forKey:@"snapScreenRatioMode"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-    // 立即更新内存 settings
-    _settings.snapScreenRatioMode = [NSNumber numberWithInteger:mode];
-    // 重新应用布局
-    [self applySnapToTopIfNeeded];
+    NSInteger mode = [self snap_effectiveRatioMode] == 0 ? 1 : 0;
+    if (_oscAutoDetectApplicable) {
+        _snapRatioOverride = (mode == 0) ? SnapRatioOverrideSixteenNine : SnapRatioOverrideFull;
+    } else {
+        // Persist to NSUserDefaults so侧栏也能读到
+        [[NSUserDefaults standardUserDefaults] setInteger:mode forKey:@"snapScreenRatioMode"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        // 立即更新内存 settings
+        _settings.snapScreenRatioMode = [NSNumber numberWithInteger:mode];
+    }
+    [self applySnapToTopAnimated:YES];
+}
+
+// Eased re-layout for ratio changes while the stream is up. The frames are
+// model values, so touch mapping and the keyboard lift's originalFrame are
+// final immediately; only the picture glides.
+- (void)applySnapToTopAnimated:(BOOL)animated {
+    if (!animated) {
+        [self applySnapToTopIfNeeded];
+        return;
+    }
+    [UIView animateWithDuration:0.3
+                          delay:0
+                        options:(UIViewAnimationOptionCurveEaseInOut | UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction)
+                     animations:^{ [self applySnapToTopIfNeeded]; }
+                     completion:nil];
 }
 
 #pragma mark - OSC visibility & hide mode
@@ -1970,6 +2019,8 @@ static NSString * const kOscHiddenKey = @"oscHidden";
 - (void)osc_configureForStream {
     _oscModeOverride = OscHideModeAuto;
     _oscDetectedContent = StreamContentClassUnknown;
+    _snapRatioOverride = SnapRatioOverrideNone;
+    _snapDetectedFits = NO;
 
     CGFloat streamAspect = (_streamConfig.height > 0) ? (CGFloat)_streamConfig.width / (CGFloat)_streamConfig.height : 0;
     self->_streamMan.videoRenderer.letterboxDetector.delegate = self;
@@ -2002,19 +2053,59 @@ static NSString * const kOscHiddenKey = @"oscHidden";
         applicable ? @"enabled" : @"unavailable", streamAspect, screenAspect, renderer.providesDecodedFrames);
 }
 
+// Rotation / split view changes the screen aspect under a live stream. Only
+// a change of the applicable flag is acted on, so a same-orientation relayout
+// doesn't throw the detector's verdict away.
+- (void)osc_reevaluateAutoDetectApplicabilityAfterLayout {
+    if (!_hasConnectionStarted) return;
+    VideoDecoderRenderer *renderer = self->_streamMan.videoRenderer;
+    // The decoded aspect, not StreamView's: reConfig re-seeds that one from the
+    // configured size and would hide a host resolution change.
+    CGFloat streamAspect = renderer.streamAspectRatio > 0 ? renderer.streamAspectRatio : _streamView.streamAspectRatio;
+    CGSize bounds = self.view.bounds.size;
+    CGFloat screenAspect = (bounds.height > 0) ? bounds.width / bounds.height : 0;
+    BOOL applicable = renderer.providesDecodedFrames
+        && streamAspect > 0 && screenAspect > 0
+        && fabs(streamAspect - screenAspect) < 0.04;
+    if (applicable == _oscAutoDetectApplicable) return;
+    [self osc_updateAutoDetectApplicabilityForStreamAspect:streamAspect];
+    _oscDetectedContent = StreamContentClassUnknown;
+    _snapDetectedFits = NO;
+    _snapRatioOverride = SnapRatioOverrideNone;
+    _oscModeOverride = OscHideModeAuto;
+    if (!applicable) {
+        // Back on a non-matching screen: the old manual visibility applies again.
+        _oscHidden = [[NSUserDefaults standardUserDefaults] boolForKey:kOscHiddenKey];
+    }
+    if (!self->_streamView.widgetToolOpened) [self osc_applyPresentation];
+    // The caller applies the snap layout right after this.
+}
+
 #pragma mark StreamLetterboxDetectorDelegate
 
-- (void)letterboxDetector:(StreamLetterboxDetector *)detector didChangeContentClass:(StreamContentClass)contentClass {
+- (void)letterboxDetector:(StreamLetterboxDetector *)detector
+    didChangeContentClass:(StreamContentClass)contentClass
+          fitsSixteenNine:(BOOL)fitsSixteenNine {
     if (detector != self->_streamMan.videoRenderer.letterboxDetector) return; // stale session
+    BOOL classChanged = (contentClass != _oscDetectedContent);
+    BOOL fitChanged = (fitsSixteenNine != _snapDetectedFits);
     _oscDetectedContent = contentClass;
-    _oscModeOverride = OscHideModeAuto;
-    // Game -> bring the OSC up; desktop -> put it away so touch drives the mouse.
-    _oscHidden = (contentClass != StreamContentClassGame);
-    Log(LOG_I, @"OSC auto hide-mode: content is now %@", contentClass == StreamContentClassGame ? @"game" : @"desktop");
+    _snapDetectedFits = fitsSixteenNine;
+    Log(LOG_I, @"OSC auto hide-mode: content is now %@, fits 16:9 %d",
+        contentClass == StreamContentClassGame ? @"game" : @"desktop", fitsSixteenNine);
+    if (classChanged) {
+        _oscModeOverride = OscHideModeAuto;
+        // Game -> bring the OSC up; desktop -> put it away so touch drives the mouse.
+        _oscHidden = (contentClass != StreamContentClassGame);
+    }
+    if (fitChanged) {
+        _snapRatioOverride = SnapRatioOverrideNone;
+    }
     // Never yank widgets out from under the layout editor; the state is kept and
     // applied by the next user action / reConfig.
     if (self->_streamView.widgetToolOpened) return;
-    [self osc_applyPresentation];
+    if (classChanged) [self osc_applyPresentation];
+    if (fitChanged || classChanged) [self applySnapToTopAnimated:YES];
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -2571,11 +2662,16 @@ static NSString * const kOscHiddenKey = @"oscHidden";
         BOOL wasApplicable = _oscAutoDetectApplicable;
         [self osc_updateAutoDetectApplicabilityForStreamAspect:aspectRatio];
         _oscDetectedContent = StreamContentClassUnknown;
+        _snapDetectedFits = NO;
+        _snapRatioOverride = SnapRatioOverrideNone;
         if (wasApplicable && !_oscAutoDetectApplicable) {
             _oscModeOverride = OscHideModeAuto;
             _oscHidden = NO;
         }
-        if (!self->_streamView.widgetToolOpened) [self osc_applyPresentation];
+        if (!self->_streamView.widgetToolOpened) {
+            [self osc_applyPresentation];
+            [self applySnapToTopAnimated:YES];
+        }
     }
 }
 
@@ -2591,6 +2687,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     // A detector verdict that arrived while the editor was open was recorded but
     // not applied (never yank widgets out from under the editor); apply it now.
     [self osc_applyPresentation];
+    [self applySnapToTopIfNeeded];
 }
 
 - (void)setUserInteractionEnabledForStreamView:(bool)enabled{
@@ -3914,6 +4011,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     }
     dispatch_block_t block = dispatch_block_create(0, ^{
         [self handleViewResize];
+        [self osc_reevaluateAutoDetectApplicabilityAfterLayout];
         [self applySnapToTopIfNeeded];
         // Update time and battery display layout after rotation
         [self updateTimeBatteryDisplay];

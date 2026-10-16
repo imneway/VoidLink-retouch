@@ -171,7 +171,10 @@ static __weak UIView *sMultiTouchExemptView = nil;
         CGFloat viewWidth = self.bounds.size.width;
         CGFloat viewHeight = self.bounds.size.height;
         // 0: 16:9, 1: Full Screen (actual stream aspect)
-        CGFloat targetAspect = (s.snapScreenRatioMode.integerValue == 0) ? (16.0f/9.0f) : self->streamAspectRatio;
+        NSInteger mode = s.snapScreenRatioMode.integerValue;
+        if (self.snapRatioOverride == SnapRatioOverrideSixteenNine) mode = 0;
+        else if (self.snapRatioOverride == SnapRatioOverrideFull) mode = 1;
+        CGFloat targetAspect = (mode == 0) ? (16.0f/9.0f) : self->streamAspectRatio;
         if (targetAspect <= 0.0f) targetAspect = 16.0f/9.0f;
         CGFloat frameHeight = viewWidth / targetAspect; // iPad：按宽等比
         CGFloat topBlackBar = (viewHeight - frameHeight) / 2.0f;
@@ -397,6 +400,10 @@ static __weak UIView *sMultiTouchExemptView = nil;
         
         isInputingText = NO;
     }
+}
+
+- (CGFloat)activeKeyboardLift {
+    return isInputingText ? HeightViewLiftedTo : 0;
 }
 
 - (void)liftMetalVideoViewIfNeeded:(CGFloat)liftHeight {
