@@ -6,10 +6,19 @@
 #import "StreamLetterboxDetector.h"
 #import "Logger.h"
 #import <QuartzCore/QuartzCore.h>
+#import <stdatomic.h>
 
-// Sampling cadence and debounce.
-static const CFTimeInterval kSampleInterval = 0.5;
-static const CFTimeInterval kDebounceInterval = 2.0;
+// Sampling cadence. The analysis itself runs on a utility-QoS queue with the
+// pixel buffer retained, so the decode path only pays for the throttle check;
+// a sample that arrives while the previous one is still being analysed is
+// dropped rather than queued.
+static const CFTimeInterval kSampleInterval = 0.2;
+// Debounce: a change commits once it has been seen in kDebounceSamples
+// consecutive samples (0.6 s of live video), or after kDebounceInterval
+// uncontradicted (a static desktop delivers very few frames, so the sample
+// count alone could stall).
+static const int kDebounceSamples = 3;
+static const CFTimeInterval kDebounceInterval = 1.2;
 
 // Luma (8-bit scale) at or below this counts as black. Limited-range black is 16;
 // a little headroom absorbs encoder noise. Kept tight so dim game content
@@ -23,7 +32,7 @@ static const int kLineSamples = 256;
 // test), never smaller, so the bar estimate is the minimum over the last few
 // samples. A sprite or firefly touching the content edge once in this window
 // pins the real bar. 8 samples = 4 s at the sampling cadence.
-enum { kWindowSamples = 8 };
+enum { kWindowSamples = 20 };   // 4 s at the sampling cadence
 // A measurement this far (fraction of the extent) below the window minimum
 // restarts the window — see UpdateAxis.
 static const float kRestartDropFraction = 0.05f;
@@ -84,13 +93,16 @@ static void BarWindowMin(const BarWindow *w, size_t *outA, size_t *outB) {
 
 @implementation StreamLetterboxDetector {
     dispatch_queue_t _stateQueue;
+    dispatch_queue_t _analysisQueue;
+    atomic_bool _analysisBusy;
+    atomic_uint _generation;             // bumped by reset; stale analyses are discarded
     BOOL _enabled;                       // guarded by @synchronized(self)
     CFTimeInterval _lastSampleTime;      // guarded by @synchronized(self)
-    CFTimeInterval _lastDiagLogTime;     // VT callback thread only
-    StreamContentClass _lastDiagRaw;     // VT callback thread only
-    BOOL _lastDiagFits;                  // VT callback thread only
-    CFTimeInterval _lastFailureLogTime;  // VT callback thread only
-    // Bar measurement windows (VT callback thread only). One ring per axis,
+    CFTimeInterval _lastDiagLogTime;     // _analysisQueue only
+    StreamContentClass _lastDiagRaw;     // _analysisQueue only
+    BOOL _lastDiagFits;                  // _analysisQueue only
+    CFTimeInterval _lastFailureLogTime;  // _analysisQueue only
+    // Bar measurement windows (guarded by @synchronized(self)). One ring per axis,
     // cleared whenever that axis' edge-black state flips (desktop <-> bars),
     // so a fresh game is measured from its first sample, not against the
     // desktop's zeros.
@@ -103,6 +115,7 @@ static void BarWindowMin(const BarWindow *w, size_t *outA, size_t *outB) {
     BOOL _fitsHysteresis;                // guarded by @synchronized(self)
     CFTimeInterval _pendingSince;        // _stateQueue
     NSUInteger _pendingToken;            // _stateQueue
+    int _pendingCount;                   // _stateQueue
 }
 
 @synthesize currentContentClass = _current;
@@ -112,6 +125,8 @@ static void BarWindowMin(const BarWindow *w, size_t *outA, size_t *outB) {
     self = [super init];
     if (self) {
         _stateQueue = dispatch_queue_create("com.voidlink.letterbox-detector", DISPATCH_QUEUE_SERIAL);
+        _analysisQueue = dispatch_queue_create("com.voidlink.letterbox-analysis",
+                                               dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
         _current = StreamContentClassUnknown;
         _pending = StreamContentClassUnknown;
     }
@@ -122,7 +137,8 @@ static void BarWindowMin(const BarWindow *w, size_t *outA, size_t *outB) {
     @synchronized (self) {
         _lastSampleTime = 0;
     }
-    @synchronized (self) {   // windows / hysteresis are touched under the same lock on the VT thread
+    atomic_fetch_add(&_generation, 1);
+    @synchronized (self) {   // windows / hysteresis are touched under the same lock on the analysis queue
         BarWindowClear(&_vertical);
         BarWindowClear(&_horizontal);
         _fitsHysteresis = NO;
@@ -274,7 +290,22 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
         if (now - _lastSampleTime < kSampleInterval) return;
         _lastSampleTime = now;
     }
+    bool expected = false;
+    if (!atomic_compare_exchange_strong(&_analysisBusy, &expected, true)) return; // previous sample still running
+    unsigned generation = atomic_load(&_generation);
+    CVPixelBufferRetain(pixelBuffer);
+    dispatch_async(_analysisQueue, ^{
+        // A reset that landed while this frame was queued invalidates it: it
+        // belongs to the previous stream geometry.
+        if (atomic_load(&self->_generation) == generation) {
+            [self analysisQueue_analyze:pixelBuffer at:now generation:generation];
+        }
+        CVPixelBufferRelease(pixelBuffer);
+        atomic_store(&self->_analysisBusy, false);
+    });
+}
 
+- (void)analysisQueue_analyze:(CVPixelBufferRef)pixelBuffer at:(CFTimeInterval)now generation:(unsigned)generation {
     OSType fmt = CVPixelBufferGetPixelFormatType(pixelBuffer);
     CVReturn lockResult = CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
     if (lockResult != kCVReturnSuccess) {
@@ -334,6 +365,7 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
 
     size_t top, bottom, left, right;
     @synchronized (self) {
+        if (atomic_load(&_generation) != generation) return; // reset raced the scan
         UpdateAxis(&_vertical, topRaw, bottomRaw, height, &top, &bottom);
         UpdateAxis(&_horizontal, leftRaw, rightRaw, width, &left, &right);
     }
@@ -355,6 +387,7 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
     // symmetry prior) still fit: snapping by the 16:9 offset clips nothing.
     BOOL fits = NO;
     @synchronized (self) {
+        if (atomic_load(&_generation) != generation) return;
         if (raw == StreamContentClassGame) {
             double ideal = ((double)height - (double)width * 9.0 / 16.0) / 2.0;
             if (ideal > 0) {
@@ -382,6 +415,7 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
         // single contradicting sample right before a black screen can't commit
         // unseen two seconds later.
         dispatch_async(_stateQueue, ^{
+            if (atomic_load(&self->_generation) != generation) return;
             self->_pending = StreamContentClassUnknown;
             self->_pendingToken++;
         });
@@ -389,6 +423,10 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
     }
 
     dispatch_async(_stateQueue, ^{
+        // reset's own state-queue block (which clears _current/_pending) is
+        // ordered before any observation from a later generation, and an
+        // observation from an older generation must not restart the debounce.
+        if (atomic_load(&self->_generation) != generation) return;
         [self stateQueue_observe:raw fits:fits at:now];
     });
 }
@@ -401,14 +439,17 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
         _pendingToken++;
         return;
     }
-    if (raw == _pending && fits == _pendingFits) return; // already counting down
+    if (raw == _pending && fits == _pendingFits) {
+        // Same change seen again: enough consecutive samples commit at once.
+        if (++_pendingCount >= kDebounceSamples) [self stateQueue_commitIfStillPending:_pendingToken];
+        return;
+    }
     _pending = raw;
     _pendingFits = fits;
     _pendingSince = now;
+    _pendingCount = 1;
     NSUInteger token = ++_pendingToken;
-    // Time-based rather than sample-count-based: a static desktop produces very
-    // few frames, so a change seen in a single frame must still commit once it
-    // has gone uncontradicted for the debounce window.
+    // Time fallback for content that stops producing frames once it changed.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kDebounceInterval * NSEC_PER_SEC)), _stateQueue, ^{
         [self stateQueue_commitIfStillPending:token];
     });

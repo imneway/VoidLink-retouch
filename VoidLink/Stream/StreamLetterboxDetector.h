@@ -42,8 +42,9 @@ typedef NS_ENUM(NSInteger, StreamContentClass) {
 @property (atomic, readonly) StreamContentClass currentContentClass;
 @property (atomic, readonly) BOOL currentFitsSixteenNine;
 
-// Call from the decoder's output path with every decoded frame; it samples at
-// most every 0.5 s and returns immediately otherwise. Safe on any thread.
+// Call from the decoder's output path with every decoded frame. At most one
+// frame per 0.2 s is retained and analysed on a background queue; every other
+// call returns after a cheap throttle check. Safe on any thread.
 - (void)analyzePixelBuffer:(CVPixelBufferRef)pixelBuffer;
 
 // Forget the current verdict and debounce history (new stream / resize).
