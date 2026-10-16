@@ -4,6 +4,7 @@
 //
 
 #import "StreamLetterboxDetector.h"
+#import "Logger.h"
 #import <QuartzCore/QuartzCore.h>
 
 // Sampling cadence and debounce.
@@ -27,12 +28,23 @@ static const float kMinSingleBarFraction = 0.02f;
 static const float kMaxScanFraction = 0.45f;
 // The band between the bars must carry at least this much non-black content,
 // or the frame is a loading / fade-to-black screen and the verdict holds.
-static const float kMinMiddleContentFraction = 0.05f;
+static const float kMinMiddleContentFraction = 0.02f;
+// A bar scan tolerates this many non-black rows before it stops, so a thin
+// bright line at the very edge of the frame (window border, capture artifact)
+// or a stray row inside the bar does not collapse the bar to zero height.
+static const int kMaxBarGapRows = 3;
+// Diagnostics: a measurement line is logged on every raw-class change and at
+// least this often while sampling, so a Console capture shows what the
+// detector actually sees (bar heights, pixel format) without a debugger.
+static const CFTimeInterval kDiagLogInterval = 5.0;
 
 @implementation StreamLetterboxDetector {
     dispatch_queue_t _stateQueue;
     BOOL _enabled;                       // guarded by @synchronized(self)
     CFTimeInterval _lastSampleTime;      // guarded by @synchronized(self)
+    CFTimeInterval _lastDiagLogTime;     // VT callback thread only
+    StreamContentClass _lastDiagRaw;     // VT callback thread only
+    CFTimeInterval _lastFailureLogTime;  // VT callback thread only
     StreamContentClass _current;         // _stateQueue
     StreamContentClass _pending;         // _stateQueue
     CFTimeInterval _pendingSince;        // _stateQueue
@@ -79,6 +91,22 @@ static const float kMinMiddleContentFraction = 0.05f;
 
 #pragma mark - Sampling
 
+#define FOURCC_CHARS(f) (char)((f) >> 24), (char)((f) >> 16), (char)((f) >> 8), (char)(f)
+
+static BOOL PixelFormatIsWide(OSType fmt) {
+    switch (fmt) {
+        case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
+        case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
+        case kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange:
+        case kCVPixelFormatType_422YpCbCr10BiPlanarFullRange:
+        case kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange:
+        case kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:
+            return YES;
+        default:
+            return NO;
+    }
+}
+
 // Reads one luma sample as an 8-bit value. 10-bit biplanar formats (x420 etc.)
 // keep their 10 bits in the MSBs of a 16-bit little-endian word.
 static inline int LumaAt(const uint8_t *row, size_t x, BOOL wide) {
@@ -103,6 +131,25 @@ static BOOL RowIsBlack(const uint8_t *base, size_t bytesPerRow, size_t width, si
     return samples > 0 && (float)black >= kRowBlackFraction * (float)samples;
 }
 
+// Bar height from one edge: the extent of the leading run of black rows, where
+// up to kMaxBarGapRows non-black rows in a row are skipped over. Returns the
+// index just past the last black row seen (0 when the edge row isn't black and
+// no black run follows within the gap allowance).
+static size_t ScanBar(const uint8_t *base, size_t bytesPerRow, size_t width, BOOL wide, size_t maxScan,
+                      size_t (^rowAt)(size_t i)) {
+    size_t bar = 0;
+    int gap = 0;
+    for (size_t i = 0; i < maxScan; i++) {
+        if (RowIsBlack(base, bytesPerRow, width, rowAt(i), wide, NULL)) {
+            bar = i + 1;
+            gap = 0;
+        } else if (++gap > kMaxBarGapRows) {
+            break;
+        }
+    }
+    return bar;
+}
+
 - (void)analyzePixelBuffer:(CVPixelBufferRef)pixelBuffer {
     if (!pixelBuffer) return;
     CFTimeInterval now = CACurrentMediaTime();
@@ -112,7 +159,15 @@ static BOOL RowIsBlack(const uint8_t *base, size_t bytesPerRow, size_t width, si
         _lastSampleTime = now;
     }
 
-    if (CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) return;
+    OSType fmt = CVPixelBufferGetPixelFormatType(pixelBuffer);
+    CVReturn lockResult = CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    if (lockResult != kCVReturnSuccess) {
+        if (now - _lastFailureLogTime >= kDiagLogInterval) {
+            _lastFailureLogTime = now;
+            Log(LOG_W, @"[Letterbox] lock failed %d, fmt %c%c%c%c", (int)lockResult, FOURCC_CHARS(fmt));
+        }
+        return;
+    }
 
     const uint8_t *base;
     size_t bytesPerRow, width, height;
@@ -129,16 +184,20 @@ static BOOL RowIsBlack(const uint8_t *base, size_t bytesPerRow, size_t width, si
     }
     if (!base || width < 16 || height < 16) {
         CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+        if (now - _lastFailureLogTime >= kDiagLogInterval) {
+            _lastFailureLogTime = now;
+            Log(LOG_W, @"[Letterbox] unreadable buffer: base %p %zux%zu fmt %c%c%c%c", base, width, height, FOURCC_CHARS(fmt));
+        }
         return;
     }
-    // Biplanar luma planes are either 1 or 2 bytes per sample.
-    BOOL wide = (bytesPerRow / width) >= 2;
+    // 10-bit biplanar formats store each sample in a 16-bit word; everything
+    // else we can receive is 8-bit. Decided from the format, not from the row
+    // stride, which may carry alignment padding.
+    BOOL wide = PixelFormatIsWide(fmt);
 
     size_t maxScan = (size_t)(height * kMaxScanFraction);
-    size_t top = 0;
-    while (top < maxScan && RowIsBlack(base, bytesPerRow, width, top, wide, NULL)) top++;
-    size_t bottom = 0;
-    while (bottom < maxScan && RowIsBlack(base, bytesPerRow, width, height - 1 - bottom, wide, NULL)) bottom++;
+    size_t top = ScanBar(base, bytesPerRow, width, wide, maxScan, ^size_t(size_t i) { return i; });
+    size_t bottom = ScanBar(base, bytesPerRow, width, wide, maxScan, ^size_t(size_t i) { return height - 1 - i; });
 
     BOOL allBlack = (top >= maxScan && bottom >= maxScan);
     if (!allBlack) {
@@ -157,6 +216,21 @@ static BOOL RowIsBlack(const uint8_t *base, size_t bytesPerRow, size_t width, si
     }
     CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
 
+    float h = (float)height;
+    float total = (float)(top + bottom) / h;
+    float single = (float)MAX(top, bottom) / h;
+    BOOL letterboxed = total >= kMinTotalBarFraction && total <= kMaxTotalBarFraction && single >= kMinSingleBarFraction;
+    StreamContentClass raw = allBlack ? StreamContentClassUnknown
+                           : (letterboxed ? StreamContentClassGame : StreamContentClassDesktop);
+
+    if (raw != _lastDiagRaw || now - _lastDiagLogTime >= kDiagLogInterval) {
+        _lastDiagRaw = raw;
+        _lastDiagLogTime = now;
+        Log(LOG_I, @"[Letterbox] raw=%@ top=%zu bottom=%zu of %zux%zu fmt=%c%c%c%c wide=%d stride=%zu",
+            raw == StreamContentClassGame ? @"game" : (raw == StreamContentClassDesktop ? @"desktop" : @"black"),
+            top, bottom, width, height, FOURCC_CHARS(fmt), wide, bytesPerRow);
+    }
+
     if (allBlack) {
         // Loading / fade: hold the current verdict AND drop any pending switch, so a
         // single contradicting sample right before a black screen can't commit
@@ -167,12 +241,6 @@ static BOOL RowIsBlack(const uint8_t *base, size_t bytesPerRow, size_t width, si
         });
         return;
     }
-
-    float h = (float)height;
-    float total = (float)(top + bottom) / h;
-    float single = (float)MAX(top, bottom) / h;
-    BOOL letterboxed = total >= kMinTotalBarFraction && total <= kMaxTotalBarFraction && single >= kMinSingleBarFraction;
-    StreamContentClass raw = letterboxed ? StreamContentClassGame : StreamContentClassDesktop;
 
     dispatch_async(_stateQueue, ^{
         [self stateQueue_observe:raw at:now];
@@ -205,7 +273,11 @@ static BOOL RowIsBlack(const uint8_t *base, size_t bytesPerRow, size_t width, si
     _current = _pending;
     _pending = StreamContentClassUnknown;
     StreamContentClass committed = _current;
+    Log(LOG_I, @"[Letterbox] verdict -> %@", committed == StreamContentClassGame ? @"game" : @"desktop");
     dispatch_async(dispatch_get_main_queue(), ^{
+        // A reset/disable that raced the hop to main must not deliver a verdict
+        // from the previous configuration.
+        if (!self.enabled) return;
         [self.delegate letterboxDetector:self didChangeContentClass:committed];
     });
 }

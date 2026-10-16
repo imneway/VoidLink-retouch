@@ -880,10 +880,10 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     if (!_oscModeButton) {
         _oscModeButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _oscModeButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.70] forState:UIControlStateNormal];
-        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.35] forState:UIControlStateHighlighted];
+        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
+        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
         _oscModeButton.contentEdgeInsets = UIEdgeInsetsMake(4, 10, 4, 10);
-        _oscModeButton.backgroundColor = [UIColor colorWithWhite:0 alpha:0.4];
+        _oscModeButton.backgroundColor = [UIColor colorWithWhite:0 alpha:0.8];
         _oscModeButton.clipsToBounds = YES;
         // Press-and-hold semantics (see oscModeTouchDown:) instead of a plain
         // TouchUpInside -> cycle.
