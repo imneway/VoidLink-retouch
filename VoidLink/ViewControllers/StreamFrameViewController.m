@@ -112,6 +112,9 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
 // StreamBackdropBlur) under a fixed black tint. Without an image it is just
 // the tint, which is also what it looks like over black letterbox bars.
 @interface VoidBackdropCapsuleView : UIView
+// NO for an opaque fill: nothing would show through, so it is never sampled.
+@property (nonatomic, assign) BOOL backdropEnabled;
+- (void)setFillColor:(UIColor *)color;
 - (void)setBackdropImage:(nullable CGImageRef)image;
 @end
 
@@ -122,6 +125,7 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
+        _backdropEnabled = YES;
         self.userInteractionEnabled = NO;
         self.backgroundColor = [UIColor clearColor];
         self.clipsToBounds = YES;
@@ -145,6 +149,10 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     self.layer.cornerRadius = self.bounds.size.height / 2.0f;
     _imageLayer.frame = self.bounds;
     _tintLayer.frame = self.bounds;
+}
+
+- (void)setFillColor:(UIColor *)color {
+    _tintLayer.backgroundColor = color.CGColor;
 }
 
 // contents keeps its implicit animation: about once a second the new sample
@@ -269,6 +277,9 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     BOOL _oscHidden;                         // right-edge swipe / detector
     OscHideMode _oscModeOverride;            // Auto unless the mode button was tapped this session
     StreamContentClass _oscDetectedContent;  // last debounced detector verdict
+    // YES from viewDidLoad until osc_configureForStream: the OSC stays fully
+    // Off (not translucent) while connecting, whatever the hide mode says.
+    BOOL _oscAwaitingStream;
     BOOL _oscAutoDetectApplicable;           // stream aspect matches the screen (iPad-size host display)
     // Auto snap ratio — see "Snap ratio (16:9 / FULL)". Shares the detector
     // and its applicability with the OSC hide mode.
@@ -967,6 +978,9 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         _quickMenuButton.accessibilityLabel = @"快捷菜单";
         [_quickMenuButton addTarget:self action:@selector(quickMenu_toggle) forControlEvents:UIControlEventTouchUpInside];
         _quickMenuBackdrop = [[VoidBackdropCapsuleView alloc] initWithFrame:CGRectZero];
+        // Solid #222: the menu capsule reads as a button, not a translucent chip.
+        [_quickMenuBackdrop setFillColor:[UIColor colorWithRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1]];
+        _quickMenuBackdrop.backdropEnabled = NO;
         [self.view addSubview:_quickMenuBackdrop];
         [self.view addSubview:_quickMenuButton];
     }
@@ -1140,7 +1154,7 @@ enum { kBackdropSlotToggleRow = 0, kBackdropSlotQuickMenu = 1 };
     for (NSUInteger slot = kBackdropSlotToggleRow; slot <= kBackdropSlotQuickMenu; slot++) {
         VoidBackdropCapsuleView *view = [self backdrop_viewForSlot:slot];
         CGRect r = view.frame;
-        BOOL active = onScreen && renderer.providesDecodedFrames && view && !view.hidden && !letterboxed
+        BOOL active = onScreen && renderer.providesDecodedFrames && view && view.backdropEnabled && !view.hidden && !letterboxed
             && !CGRectIsNull(video) && !CGRectIsEmpty(r) && CGRectContainsRect(CGRectInset(video, -1, -1), r);
         if (active) {
             CGRect norm = CGRectMake((r.origin.x - video.origin.x) / video.size.width,
@@ -2325,7 +2339,9 @@ static NSString * const kOscHiddenKey = @"oscHidden";
 
 - (void)osc_applyPresentation {
     OscPresentation presentation = OscPresentationShown;
-    if (_oscHidden) {
+    if (_oscAwaitingStream) {
+        presentation = OscPresentationOff;
+    } else if (_oscHidden) {
         presentation = ([self osc_effectiveHideMode] == OscHideModeGame)
             ? OscPresentationTranslucent : OscPresentationOff;
     }
@@ -2366,6 +2382,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
 // the view has its final bounds by then. reConfigStreamViewRealtime also runs
 // mid-stream (settings sheet closed), so it must NOT reset this state.
 - (void)osc_configureForStream {
+    _oscAwaitingStream = NO;
     _oscModeOverride = OscHideModeAuto;
     _oscDetectedContent = StreamContentClassUnknown;
     _snapRatioOverride = SnapRatioOverrideNone;
@@ -2652,6 +2669,12 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     _bgStopEpoch = 0;
 
     _streamView = [[StreamView alloc] initWithFrame:self.view.frame];
+    // Start with the OSC off: connectionStarted -> osc_configureForStream picks
+    // the real state. Otherwise the widgets built during viewDidLoad show up
+    // for a moment before auto mode hides them again.
+    _oscHidden = YES;
+    _oscAwaitingStream = YES;
+    [_streamView setOscPresentation:OscPresentationOff];
     [self stream_publishOrientationLockAndRefresh];
     
     toolBoxViewController = [[ToolboxViewController alloc] init];
@@ -3820,8 +3843,10 @@ static NSString * const kOscHiddenKey = @"oscHidden";
             self->_metalBackdropView.hidden = NO;
         }
 
-        [self->_streamView showOnScreenControls];
+        // Decide the presentation before the OSC is shown, so a hidden OSC
+        // never flashes up for a frame.
         [self osc_configureForStream];
+        [self->_streamView showOnScreenControls];
 
         // Re-apply snap-to-top now that the view hierarchy is final-sized and
         // the Metal view (if any) exists — idempotent, covers any case where
