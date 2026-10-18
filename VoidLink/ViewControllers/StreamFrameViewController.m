@@ -206,6 +206,7 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // Bottom-right quick menu: a blank capsule in the corner that pops a
     // horizontal panel of host shortcuts above itself.
     UIButton *_quickMenuButton;
+    UIView *_toggleRowBackground; // one capsule behind OSC/snap/gyro/rot
     UIView *_quickMenuPanel;
     UIControl *_quickMenuDismissCatcher;
     // Logical open state (the panel may still be attached while fading out);
@@ -887,8 +888,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         // on setTitle:, which looks sluggish for these instant on/off toggles.
         _snapRatioButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _snapRatioButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        [_snapRatioButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
-        [_snapRatioButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
+        [_snapRatioButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.33] forState:UIControlStateNormal];
+        [_snapRatioButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.15] forState:UIControlStateHighlighted];
         _snapRatioButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
         [_snapRatioButton addTarget:self action:@selector(toggleSnapRatio) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:_snapRatioButton];
@@ -896,15 +897,13 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     
     // OSC hide-mode button (AUTO / GAME / DESK). Visibility itself is driven by
     // the right-edge swipe and the letterbox detector; this only picks what
-    // "hidden" means. It sits on a black capsule so it stays legible over video.
+    // "hidden" means.
     if (!_oscModeButton) {
         _oscModeButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _oscModeButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
-        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
+        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.33] forState:UIControlStateNormal];
+        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.15] forState:UIControlStateHighlighted];
         _oscModeButton.contentEdgeInsets = UIEdgeInsetsMake(4, 10, 4, 10);
-        _oscModeButton.backgroundColor = [UIColor colorWithWhite:0 alpha:0.8];
-        _oscModeButton.clipsToBounds = YES;
         // Press-and-hold semantics (see oscModeTouchDown:) instead of a plain
         // TouchUpInside -> cycle.
         [_oscModeButton addTarget:self action:@selector(oscModeTouchDown:) forControlEvents:UIControlEventTouchDown];
@@ -918,7 +917,7 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
     if (!_quickMenuButton) {
         _quickMenuButton = [UIButton buttonWithType:UIButtonTypeCustom];
-        _quickMenuButton.backgroundColor = [UIColor colorWithWhite:1 alpha:0.2];
+        _quickMenuButton.backgroundColor = [UIColor colorWithWhite:0 alpha:0.4];
         _quickMenuButton.clipsToBounds = YES;
         _quickMenuButton.accessibilityLabel = @"快捷菜单";
         [_quickMenuButton addTarget:self action:@selector(quickMenu_toggle) forControlEvents:UIControlEventTouchUpInside];
@@ -928,8 +927,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     if (!_rotationLockToggleButton) {
         _rotationLockToggleButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _rotationLockToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        [_rotationLockToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
-        [_rotationLockToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
+        [_rotationLockToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.33] forState:UIControlStateNormal];
+        [_rotationLockToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.15] forState:UIControlStateHighlighted];
         _rotationLockToggleButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
         [_rotationLockToggleButton addTarget:self action:@selector(toggleStreamOrientationLock) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:_rotationLockToggleButton];
@@ -940,11 +939,18 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     if (!_gyroToggleButton) {
         _gyroToggleButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _gyroToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        [_gyroToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.22] forState:UIControlStateNormal];
-        [_gyroToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
+        [_gyroToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.33] forState:UIControlStateNormal];
+        [_gyroToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.15] forState:UIControlStateHighlighted];
         _gyroToggleButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
         [_gyroToggleButton addTarget:self action:@selector(toggleGyroOnOff) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:_gyroToggleButton];
+    }
+
+    if (!_toggleRowBackground) {
+        _toggleRowBackground = [[UIView alloc] initWithFrame:CGRectZero];
+        _toggleRowBackground.backgroundColor = [UIColor colorWithWhite:0 alpha:0.4];
+        _toggleRowBackground.userInteractionEnabled = NO;
+        [self.view insertSubview:_toggleRowBackground belowSubview:_snapRatioButton];
     }
 
     // Update titles
@@ -960,16 +966,18 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
     // The ratio button is snap-specific (it picks the snap target aspect),
     // so it hides when snap is off. The whole cluster is iPad-only, matching
-    // the snap feature, and follows the OSC: when the OSC is hidden (so the
-    // video can own the whole iPad-size screen) the bottom chrome goes too.
+    // the snap feature, and the toggles follow the OSC: when the OSC is hidden
+    // (so the video can own the whole iPad-size screen) they go too.
     BOOL isPad = [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad;
     BOOL chromeHidden = !isPad || _oscHidden;
     _snapRatioButton.hidden = chromeHidden || !_settings.snapScreenToTop;
     _oscModeButton.hidden = chromeHidden;
-    _quickMenuButton.hidden = chromeHidden;
-    if (chromeHidden) [self quickMenu_dismissAnimated:NO];
     _rotationLockToggleButton.hidden = chromeHidden;
     _gyroToggleButton.hidden = chromeHidden;
+    _toggleRowBackground.hidden = chromeHidden;
+    // The quick menu is the one control that stays put whatever the OSC does.
+    _quickMenuButton.hidden = !isPad;
+    if (!isPad) [self quickMenu_dismissAnimated:NO];
 
     if (!isPad) return;
 
@@ -981,19 +989,20 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     CGFloat oscW  = VoidFixedToggleWidth(_oscModeButton,  @[@"AUTO·GAME", @"AUTO·DESK", @"GAME", @"DESK"]);
     CGFloat rotationW = VoidFixedToggleWidth(_rotationLockToggleButton, @[@"ROT LOCK", @"ROT FREE"]);
     CGFloat gyroW = VoidFixedToggleWidth(_gyroToggleButton, @[@"GYRO ON", @"GYRO OFF"]);
-    CGFloat btnH  = [_snapRatioButton sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)].height;
+    CGFloat btnH  = [self stream_bottomRowHeight];
 
-    CGFloat baseY = self.view.bounds.size.height - 12;
+    CGFloat baseY = [self stream_bottomRowCenterY] + btnH / 2.0f;
     CGFloat gap = 8;
-
-    CGFloat rightEdge = self.view.bounds.size.width - 24;
+    CGFloat rowPad = 4; // capsule overhang past the outermost toggles
 
     CGFloat menuW = round(btnH * 1.5);
-    CGFloat menuX = rightEdge - menuW;
+    CGFloat menuX = self.view.bounds.size.width - 19 - menuW;
     _quickMenuButton.frame = CGRectMake(menuX, baseY - btnH, menuW, btnH);
     _quickMenuButton.layer.cornerRadius = btnH / 2.0f;
-    rightEdge = menuX - gap;
     [self quickMenu_layoutPanel];
+
+    CGFloat rowRight = menuX - gap;
+    CGFloat rightEdge = rowRight - rowPad;
 
     CGFloat oscX = rightEdge - oscW;
     _oscModeButton.frame = CGRectMake(oscX, baseY - btnH, oscW, btnH);
@@ -1011,6 +1020,21 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
     CGFloat rotationX = gyroX - gap - rotationW;
     _rotationLockToggleButton.frame = CGRectMake(rotationX, baseY - btnH, rotationW, btnH);
+
+    CGFloat rowLeft = rotationX - rowPad;
+    _toggleRowBackground.frame = CGRectMake(rowLeft, baseY - btnH, rowRight - rowLeft, btnH);
+    _toggleRowBackground.layer.cornerRadius = btnH / 2.0f;
+}
+
+// Shared geometry of the bottom chrome row: the right-hand toggles and the
+// left-hand time/battery/countdown labels are centred on the same line.
+- (CGFloat)stream_bottomRowHeight {
+    UIFont *font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    return ceil(font.lineHeight) + 8; // toggle content insets: 4 top + 4 bottom
+}
+
+- (CGFloat)stream_bottomRowCenterY {
+    return self.view.bounds.size.height - 15 - [self stream_bottomRowHeight] / 2.0f;
 }
 
 #pragma mark - Quick menu (bottom-right corner)
@@ -1034,7 +1058,7 @@ static const CGFloat kQuickMenuSpacing = 12;
     item.contentHorizontalAlignment = UIControlContentHorizontalAlignmentFill;
     item.contentVerticalAlignment = UIControlContentVerticalAlignmentFill;
     item.imageView.contentMode = UIViewContentModeScaleAspectFit;
-    item.tintColor = [UIColor colorWithWhite:1 alpha:0.85];
+    item.tintColor = [UIColor colorWithWhite:1 alpha:0.8];
     item.layer.cornerRadius = kQuickMenuItemDiameter / 2.0f;
     item.accessibilityLabel = label;
     [item addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
@@ -1058,11 +1082,12 @@ static const CGFloat kQuickMenuSpacing = 12;
     // menu button, and the open/close scale grows out of it.
     _quickMenuPanel.layer.anchorPoint = CGPointMake(1, 1);
 
+    // Left -> right; "1" ends up nearest the corner button.
     NSArray<UIButton *> *items = @[
-        [self quickMenu_itemWithSymbol:@"1.circle.fill" fallback:nil label:@"模拟器 1" action:@selector(quickMenu_sendEmulatorOne)],
-        [self quickMenu_itemWithSymbol:@"2.circle.fill" fallback:nil label:@"模拟器 2" action:@selector(quickMenu_sendEmulatorTwo)],
-        [self quickMenu_itemWithSymbol:@"rectangle.on.rectangle.circle.fill" fallback:@"arrow.left.arrow.right.circle.fill" label:@"切换屏幕" action:@selector(quickMenu_sendDisplaySwitch)],
         [self quickMenu_itemWithSymbol:@"ellipsis.circle.fill" fallback:nil label:@"命令管理器" action:@selector(quickMenu_openCommandManager)],
+        [self quickMenu_itemWithSymbol:@"rectangle.on.rectangle.circle.fill" fallback:@"arrow.left.arrow.right.circle.fill" label:@"切换屏幕" action:@selector(quickMenu_sendDisplaySwitch)],
+        [self quickMenu_itemWithSymbol:@"2.circle.fill" fallback:nil label:@"模拟器 2" action:@selector(quickMenu_sendEmulatorTwo)],
+        [self quickMenu_itemWithSymbol:@"1.circle.fill" fallback:nil label:@"模拟器 1" action:@selector(quickMenu_sendEmulatorOne)],
     ];
     CGFloat x = kQuickMenuPadding;
     for (UIButton *item in items) {
@@ -1088,13 +1113,13 @@ static const CGFloat kQuickMenuSpacing = 12;
     [self.view bringSubviewToFront:_quickMenuPanel];
 }
 
-// Panel sits above the menu button, right edges aligned. With the layer
-// anchored at (1, 1), center is the panel's bottom-right corner.
+// Panel sits above the menu button, 12pt from the screen's right edge. With
+// the layer anchored at (1, 1), center is the panel's bottom-right corner.
 - (void)quickMenu_layoutPanel {
     if (!_quickMenuPanel.superview) return;
     _quickMenuDismissCatcher.frame = self.view.bounds;
     CGRect anchor = _quickMenuButton.frame;
-    _quickMenuPanel.center = CGPointMake(CGRectGetMaxX(anchor), CGRectGetMinY(anchor) - 8);
+    _quickMenuPanel.center = CGPointMake(self.view.bounds.size.width - 12, CGRectGetMinY(anchor) - 8);
     [self quickMenu_raiseToFront];
 }
 
@@ -1244,7 +1269,7 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     if (!_timeLabel) {
         _timeLabel = [[UILabel alloc] init];
         _timeLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        _timeLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.22];
+        _timeLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.33];
         _timeLabel.userInteractionEnabled = NO;
         [self.view addSubview:_timeLabel];
     }
@@ -1253,7 +1278,7 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     if (!_batteryLabel) {
         _batteryLabel = [[UILabel alloc] init];
         _batteryLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        _batteryLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.22];
+        _batteryLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.33];
         _batteryLabel.userInteractionEnabled = NO;
         [self.view addSubview:_batteryLabel];
     }
@@ -1345,7 +1370,7 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
 #endif
 
 - (UIColor *)streamCountdownBaseTintColor {
-    return [[UIColor whiteColor] colorWithAlphaComponent:0.22];
+    return [[UIColor whiteColor] colorWithAlphaComponent:0.33];
 }
 
 - (CGSize)streamCountdownLabelSizeForText:(NSString *)text insets:(UIEdgeInsets)insets {
@@ -1601,7 +1626,7 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     if (_streamCountdownState == StreamCountdownStateRunning) {
         displayText = [self formattedStreamCountdownSeconds:_streamCountdownRemainingSeconds];
         foregroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.72];
-        backgroundColor = baseTint;
+        backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.22];
     } else if (_streamCountdownState == StreamCountdownStatePaused) {
         displayText = [self formattedStreamCountdownSeconds:_streamCountdownRemainingSeconds];
         foregroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.55];
@@ -1643,12 +1668,11 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
 
     // Layout labels at bottom-left
     CGFloat leftMargin = 24.0f;
-    CGFloat bottomMargin = 12.0f;
     CGFloat spacing = 16.0f;
     
     CGFloat timeX = leftMargin;
     CGFloat batteryX = timeX + _timeLabel.frame.size.width + spacing;
-    CGFloat y = self.view.bounds.size.height - bottomMargin - _timeLabel.frame.size.height;
+    CGFloat y = round([self stream_bottomRowCenterY] - _timeLabel.frame.size.height / 2.0f);
     
     _timeLabel.frame = CGRectMake(timeX, y, _timeLabel.frame.size.width, _timeLabel.frame.size.height);
     _batteryLabel.frame = CGRectMake(batteryX, y, _batteryLabel.frame.size.width, _batteryLabel.frame.size.height);
