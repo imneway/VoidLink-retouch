@@ -108,6 +108,52 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
 }
 
 
+// Bottom chrome capsule: an optional low-rate blurred backdrop image (from
+// StreamBackdropBlur) under a fixed black tint. Without an image it is just
+// the tint, which is also what it looks like over black letterbox bars.
+@interface VoidBackdropCapsuleView : UIView
+- (void)setBackdropImage:(nullable CGImageRef)image;
+@end
+
+@implementation VoidBackdropCapsuleView {
+    CALayer *_imageLayer;
+    CALayer *_tintLayer;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        self.userInteractionEnabled = NO;
+        self.backgroundColor = [UIColor clearColor];
+        self.clipsToBounds = YES;
+        _imageLayer = [CALayer layer];
+        // The image is a few pixels per capsule; linear magnification is the
+        // last smoothing step of the blur.
+        _imageLayer.contentsGravity = kCAGravityResize;
+        _imageLayer.magnificationFilter = kCAFilterLinear;
+        _imageLayer.actions = @{@"bounds": [NSNull null], @"position": [NSNull null]};
+        [self.layer addSublayer:_imageLayer];
+        _tintLayer = [CALayer layer];
+        _tintLayer.backgroundColor = [UIColor colorWithWhite:0 alpha:0.4].CGColor;
+        _tintLayer.actions = @{@"bounds": [NSNull null], @"position": [NSNull null]};
+        [self.layer addSublayer:_tintLayer];
+    }
+    return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    self.layer.cornerRadius = self.bounds.size.height / 2.0f;
+    _imageLayer.frame = self.bounds;
+    _tintLayer.frame = self.bounds;
+}
+
+// contents keeps its implicit animation: about once a second the new sample
+// cross-fades in instead of popping.
+- (void)setBackdropImage:(CGImageRef)image {
+    _imageLayer.contents = (__bridge id)image;
+}
+@end
+
 @implementation StreamFrameViewController {
     ControllerSupport *_controllerSupport;
     StreamManager *_streamMan;
@@ -206,7 +252,8 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // Bottom-right quick menu: a blank capsule in the corner that pops a
     // horizontal panel of host shortcuts above itself.
     UIButton *_quickMenuButton;
-    UIView *_toggleRowBackground; // one capsule behind OSC/snap/gyro/rot
+    VoidBackdropCapsuleView *_toggleRowBackground; // one capsule behind OSC/snap/gyro/rot
+    VoidBackdropCapsuleView *_quickMenuBackdrop;   // behind the quick menu button
     UIView *_quickMenuPanel;
     UIControl *_quickMenuDismissCatcher;
     // Logical open state (the panel may still be attached while fading out);
@@ -917,10 +964,10 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
     if (!_quickMenuButton) {
         _quickMenuButton = [UIButton buttonWithType:UIButtonTypeCustom];
-        _quickMenuButton.backgroundColor = [UIColor colorWithWhite:0 alpha:0.4];
-        _quickMenuButton.clipsToBounds = YES;
         _quickMenuButton.accessibilityLabel = @"快捷菜单";
         [_quickMenuButton addTarget:self action:@selector(quickMenu_toggle) forControlEvents:UIControlEventTouchUpInside];
+        _quickMenuBackdrop = [[VoidBackdropCapsuleView alloc] initWithFrame:CGRectZero];
+        [self.view addSubview:_quickMenuBackdrop];
         [self.view addSubview:_quickMenuButton];
     }
 
@@ -947,9 +994,7 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     }
 
     if (!_toggleRowBackground) {
-        _toggleRowBackground = [[UIView alloc] initWithFrame:CGRectZero];
-        _toggleRowBackground.backgroundColor = [UIColor colorWithWhite:0 alpha:0.4];
-        _toggleRowBackground.userInteractionEnabled = NO;
+        _toggleRowBackground = [[VoidBackdropCapsuleView alloc] initWithFrame:CGRectZero];
         [self.view insertSubview:_toggleRowBackground belowSubview:_snapRatioButton];
     }
 
@@ -977,9 +1022,13 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     _toggleRowBackground.hidden = chromeHidden;
     // The quick menu is the one control that stays put whatever the OSC does.
     _quickMenuButton.hidden = !isPad;
+    _quickMenuBackdrop.hidden = !isPad;
     if (!isPad) [self quickMenu_dismissAnimated:NO];
 
-    if (!isPad) return;
+    if (!isPad) {
+        [self backdrop_updateRegions];
+        return;
+    }
 
     // Layout all buttons at bottom-right. Each gets a fixed width sized
     // to its widest possible title so toggling text never shifts neighbours.
@@ -995,13 +1044,15 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     CGFloat gap = 8;
     CGFloat rowPad = 4; // capsule overhang past the outermost toggles
 
-    CGFloat menuW = round(btnH * 1.5);
-    CGFloat menuX = self.view.bounds.size.width - 19 - menuW;
+    CGFloat menuW = round(btnH * 1.5) - 2;
+    CGFloat menuX = self.view.bounds.size.width - 13 - menuW;
     _quickMenuButton.frame = CGRectMake(menuX, baseY - btnH, menuW, btnH);
-    _quickMenuButton.layer.cornerRadius = btnH / 2.0f;
+    _quickMenuBackdrop.frame = _quickMenuButton.frame;
     [self quickMenu_layoutPanel];
 
-    CGFloat rowRight = menuX - gap;
+    // The toggle row keeps its own anchor (where the menu's left edge used to
+    // be) so menu size/inset tweaks don't drag it around.
+    CGFloat rowRight = self.view.bounds.size.width - 15 - round(btnH * 1.5) - gap;
     CGFloat rightEdge = rowRight - rowPad;
 
     CGFloat oscX = rightEdge - oscW;
@@ -1023,7 +1074,7 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
     CGFloat rowLeft = rotationX - rowPad;
     _toggleRowBackground.frame = CGRectMake(rowLeft, baseY - btnH, rowRight - rowLeft, btnH);
-    _toggleRowBackground.layer.cornerRadius = btnH / 2.0f;
+    [self backdrop_updateRegions];
 }
 
 // Shared geometry of the bottom chrome row: the right-hand toggles and the
@@ -1034,12 +1085,89 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 }
 
 - (CGFloat)stream_bottomRowCenterY {
-    return self.view.bounds.size.height - 15 - [self stream_bottomRowHeight] / 2.0f;
+    return self.view.bounds.size.height - 12 - [self stream_bottomRowHeight] / 2.0f;
+}
+
+#pragma mark - Capsule backdrop blur
+
+enum { kBackdropSlotToggleRow = 0, kBackdropSlotQuickMenu = 1 };
+
+// Where the decoded picture is drawn, in self.view coordinates. AVSB: the
+// display layer itself. Metal: the Metal view (shifted by snap / keyboard
+// lift) with the picture aspect-fitted inside it.
+- (CGRect)backdrop_videoRectInView {
+    VideoDecoderRenderer *renderer = self->_streamMan.videoRenderer;
+    if (!renderer) return CGRectNull;
+    if ([_settings.renderingBackend intValue] == RENDER_METAL) {
+        UIView *metalView = self.metalViewController.view;
+        if (!metalView.superview) return CGRectNull;
+        CGRect base = [self.view convertRect:metalView.bounds fromView:metalView];
+        CGFloat aspect = renderer.streamAspectRatio;
+        if (aspect <= 0 || base.size.width <= 0 || base.size.height <= 0) return CGRectNull;
+        CGSize fit = (base.size.width / base.size.height > aspect)
+            ? CGSizeMake(base.size.height * aspect, base.size.height)
+            : CGSizeMake(base.size.width, base.size.width / aspect);
+        return CGRectMake(CGRectGetMidX(base) - fit.width / 2.0f, CGRectGetMidY(base) - fit.height / 2.0f,
+                          fit.width, fit.height);
+    }
+    CALayer *layer = renderer.displayLayer;
+    if (!layer.superlayer) return CGRectNull;
+    return [self.view.layer convertRect:layer.bounds fromLayer:layer];
+}
+
+// Recomputed on every bottom-chrome layout and detector verdict. A slot is
+// sampled only while its capsule is on screen over the picture; over black
+// letterbox bars (a game) the blurred result would be black anyway, so
+// sampling pauses and the capsule falls back to the plain tint.
+- (void)backdrop_updateRegions {
+    VideoDecoderRenderer *renderer = self->_streamMan.videoRenderer;
+    StreamBackdropBlur *blur = renderer.backdropBlur;
+    if (!blur) return;
+    if (!blur.imageHandler) {
+        __weak typeof(self) weakSelf = self;
+        __weak StreamBackdropBlur *weakBlur = blur;
+        blur.imageHandler = ^(NSUInteger slot, CGImageRef image) {
+            __strong typeof(weakSelf) self = weakSelf;
+            if (!self || weakBlur != self->_streamMan.videoRenderer.backdropBlur) return;
+            [[self backdrop_viewForSlot:slot] setBackdropImage:image];
+        };
+    }
+
+    BOOL letterboxed = (_oscDetectedContent == StreamContentClassGame);
+    BOOL onScreen = [UIApplication sharedApplication].applicationState != UIApplicationStateBackground;
+    CGRect video = [self backdrop_videoRectInView];
+    BOOL anyActive = NO;
+    for (NSUInteger slot = kBackdropSlotToggleRow; slot <= kBackdropSlotQuickMenu; slot++) {
+        VoidBackdropCapsuleView *view = [self backdrop_viewForSlot:slot];
+        CGRect r = view.frame;
+        BOOL active = onScreen && renderer.providesDecodedFrames && view && !view.hidden && !letterboxed
+            && !CGRectIsNull(video) && !CGRectIsEmpty(r) && CGRectContainsRect(CGRectInset(video, -1, -1), r);
+        if (active) {
+            CGRect norm = CGRectMake((r.origin.x - video.origin.x) / video.size.width,
+                                     (r.origin.y - video.origin.y) / video.size.height,
+                                     r.size.width / video.size.width,
+                                     r.size.height / video.size.height);
+            [blur setSlot:slot normalizedRect:norm pointSize:r.size];
+            anyActive = YES;
+        } else {
+            [blur setSlot:slot normalizedRect:CGRectNull pointSize:CGSizeZero];
+            [view setBackdropImage:NULL];
+        }
+    }
+    blur.enabled = anyActive;
+}
+
+- (VoidBackdropCapsuleView *)backdrop_viewForSlot:(NSUInteger)slot {
+    switch (slot) {
+        case kBackdropSlotToggleRow: return _toggleRowBackground;
+        case kBackdropSlotQuickMenu: return _quickMenuBackdrop;
+        default: return nil;
+    }
 }
 
 #pragma mark - Quick menu (bottom-right corner)
 
-static const CGFloat kQuickMenuItemDiameter = 40;
+static const CGFloat kQuickMenuItemDiameter = 52;
 static const CGFloat kQuickMenuPadding = 8;
 static const CGFloat kQuickMenuSpacing = 12;
 
@@ -1058,7 +1186,7 @@ static const CGFloat kQuickMenuSpacing = 12;
     item.contentHorizontalAlignment = UIControlContentHorizontalAlignmentFill;
     item.contentVerticalAlignment = UIControlContentVerticalAlignmentFill;
     item.imageView.contentMode = UIViewContentModeScaleAspectFit;
-    item.tintColor = [UIColor colorWithWhite:1 alpha:0.8];
+    item.tintColor = [UIColor colorWithWhite:1 alpha:0.6];
     item.layer.cornerRadius = kQuickMenuItemDiameter / 2.0f;
     item.accessibilityLabel = label;
     [item addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
@@ -1106,20 +1234,22 @@ static const CGFloat kQuickMenuSpacing = 12;
 // Other chrome (countdown hit area, re-added widgets, ...) gets raised on its
 // own refreshes; while the menu is attached it must stay above all of it so
 // an outside touch lands on the catcher. Order: catcher, capsule, panel.
+// (The capsule is the backdrop view plus the blank button on top of it.)
 - (void)quickMenu_raiseToFront {
     if (!_quickMenuPanel.superview) return;
     [self.view bringSubviewToFront:_quickMenuDismissCatcher];
+    [self.view bringSubviewToFront:_quickMenuBackdrop];
     [self.view bringSubviewToFront:_quickMenuButton];
     [self.view bringSubviewToFront:_quickMenuPanel];
 }
 
-// Panel sits above the menu button, 12pt from the screen's right edge. With
+// Panel sits 15pt above the menu button, 8pt from the screen's right edge. With
 // the layer anchored at (1, 1), center is the panel's bottom-right corner.
 - (void)quickMenu_layoutPanel {
     if (!_quickMenuPanel.superview) return;
     _quickMenuDismissCatcher.frame = self.view.bounds;
     CGRect anchor = _quickMenuButton.frame;
-    _quickMenuPanel.center = CGPointMake(self.view.bounds.size.width - 12, CGRectGetMinY(anchor) - 8);
+    _quickMenuPanel.center = CGPointMake(self.view.bounds.size.width - 8, CGRectGetMinY(anchor) - 15);
     [self quickMenu_raiseToFront];
 }
 
@@ -2320,6 +2450,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     if (fitChanged) {
         _snapRatioOverride = SnapRatioOverrideNone;
     }
+    if (classChanged) [self backdrop_updateRegions]; // pause over letterbox bars
     // Never yank widgets out from under the layout editor; the state is kept and
     // applied by the next user action / reConfig.
     if (self->_streamView.widgetToolOpened) return;
@@ -2837,10 +2968,12 @@ static NSString * const kOscHiddenKey = @"oscHidden";
 
 - (void)keyboardWillShow:(NSNotification *)notification{
     [_streamView keyboardWillShow:notification];
+    [self backdrop_updateRegions]; // the lift moves the picture under the capsules
 }
 
 - (void)keyboardWillHide{
     [_streamView keyboardWillHide];
+    [self backdrop_updateRegions];
 }
 
 - (void)handleWidgetLayoutGesture{
@@ -3278,6 +3411,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
 }
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
+    [self backdrop_updateRegions];
     // Stop the background timer, since we're foregrounded again
     if (_inactivityTimer != nil) {
         Log(LOG_I, @"Stopping inactivity timer after becoming active again");
@@ -3316,6 +3450,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
 // This fires when the home button is pressed
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     [self resetFinishedStreamCountdownToIdleIfNeeded];
+    [self backdrop_updateRegions]; // capsules are off screen: stop sampling (PiP keeps decoding)
 
     NSLog(@"did enter background, %d, %@, %d", _settings.enablePIP, self.pipController, self.pipController.isPictureInPictureActive);
     // Metal/MTKView command submission in the background gets the app killed by

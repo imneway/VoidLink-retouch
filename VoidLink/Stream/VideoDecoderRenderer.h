@@ -12,6 +12,7 @@
 #import "FrameQueue.h"
 #import "Plot.h"
 #import "StreamLetterboxDetector.h"
+#import "StreamBackdropBlur.h"
 
 #include "Limelight.h"
 
@@ -24,6 +25,9 @@
 // Game / desktop classifier fed with every decoded frame (both backends). The
 // host VC enables it and listens as its delegate; disabled it costs nothing.
 @property (nonatomic, strong, readonly) StreamLetterboxDetector *letterboxDetector;
+// ~1 Hz blurred samples of the frame behind the bottom chrome capsules. Same
+// feed as the detector; disabled it costs nothing.
+@property (nonatomic, strong, readonly) StreamBackdropBlur *backdropBlur;
 // NO when frames go straight to the display layer undecoded (AVSB backend with
 // Legacy / Off frame pacing): the detector never sees a pixel buffer then.
 @property (nonatomic, readonly) BOOL providesDecodedFrames;

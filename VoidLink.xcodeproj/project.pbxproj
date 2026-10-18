@@ -108,6 +108,7 @@
 		FB89463119F646E200339C8A /* StreamManager.m in Sources */ = {isa = PBXBuildFile; fileRef = FB89461B19F646E200339C8A /* StreamManager.m */; };
 		FB89463219F646E200339C8A /* VideoDecoderRenderer.m in Sources */ = {isa = PBXBuildFile; fileRef = FB89461D19F646E200339C8A /* VideoDecoderRenderer.m */; };
 		A1B2C3D401LETTERBOXB0001 /* StreamLetterboxDetector.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D401LETTERBOXM0001 /* StreamLetterboxDetector.m */; };
+		A1B2C3D401BACKDROPBB0001 /* StreamBackdropBlur.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D401BACKDROPBM0001 /* StreamBackdropBlur.m */; };
 		FB89463419F646E200339C8A /* Utils.m in Sources */ = {isa = PBXBuildFile; fileRef = FB89462219F646E200339C8A /* Utils.m */; };
 		FB89463519F646E200339C8A /* MainFrameViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = FB89462519F646E200339C8A /* MainFrameViewController.m */; };
 		FB89463619F646E200339C8A /* StreamFrameViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = FB89462719F646E200339C8A /* StreamFrameViewController.m */; };
@@ -344,6 +345,8 @@
 		FB89461D19F646E200339C8A /* VideoDecoderRenderer.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = VideoDecoderRenderer.m; sourceTree = "<group>"; };
 		A1B2C3D401LETTERBOXH0001 /* StreamLetterboxDetector.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = StreamLetterboxDetector.h; sourceTree = "<group>"; };
 		A1B2C3D401LETTERBOXM0001 /* StreamLetterboxDetector.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = StreamLetterboxDetector.m; sourceTree = "<group>"; };
+		A1B2C3D401BACKDROPBH0001 /* StreamBackdropBlur.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = StreamBackdropBlur.h; sourceTree = "<group>"; };
+		A1B2C3D401BACKDROPBM0001 /* StreamBackdropBlur.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = StreamBackdropBlur.m; sourceTree = "<group>"; };
 		FB89462119F646E200339C8A /* Utils.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Utils.h; sourceTree = "<group>"; };
 		FB89462219F646E200339C8A /* Utils.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = Utils.m; sourceTree = "<group>"; };
 		FB89462419F646E200339C8A /* MainFrameViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = MainFrameViewController.h; sourceTree = "<group>"; };
@@ -735,6 +738,8 @@
 				FB89461D19F646E200339C8A /* VideoDecoderRenderer.m */,
 				A1B2C3D401LETTERBOXH0001 /* StreamLetterboxDetector.h */,
 				A1B2C3D401LETTERBOXM0001 /* StreamLetterboxDetector.m */,
+				A1B2C3D401BACKDROPBH0001 /* StreamBackdropBlur.h */,
+				A1B2C3D401BACKDROPBM0001 /* StreamBackdropBlur.m */,
 				9803CCAB254F9EAF00EE185E /* ConnectionCallbacks.h */,
 			);
 			path = Stream;
@@ -1008,6 +1013,7 @@
 				97E20DEE2E2165A5000D5DCA /* ImGuiPlots.mm in Sources */,
 				FB89463219F646E200339C8A /* VideoDecoderRenderer.m in Sources */,
 				A1B2C3D401LETTERBOXB0001 /* StreamLetterboxDetector.m in Sources */,
+				A1B2C3D401BACKDROPBB0001 /* StreamBackdropBlur.m in Sources */,
 				FB290D0419B2C406004C83CF /* AppDelegate.m in Sources */,
 				FB9AFD401A7E127D00872C98 /* AppListResponse.m in Sources */,
 				FB89463419F646E200339C8A /* Utils.m in Sources */,
