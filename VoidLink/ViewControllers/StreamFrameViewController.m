@@ -203,6 +203,15 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     UIButton *_oscModeButton;
     UIButton *_rotationLockToggleButton;
     UIButton *_gyroToggleButton;
+    // Bottom-right quick menu: a blank capsule in the corner that pops a
+    // horizontal panel of host shortcuts above itself.
+    UIButton *_quickMenuButton;
+    UIView *_quickMenuPanel;
+    UIControl *_quickMenuDismissCatcher;
+    // Logical open state (the panel may still be attached while fading out);
+    // the token invalidates a stale close-animation completion on reopen.
+    BOOL _quickMenuOpen;
+    NSUInteger _quickMenuToken;
     // OSC mode button hold: while the finger is down (and the OSC is on) the
     // OSC is suspended so the other hand can drive the PC. A quick release with
     // no stream touch in between is still the plain mode-cycling tap.
@@ -479,6 +488,7 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
 }
 
 - (void)presentToolboxViewController{
+    [self quickMenu_dismissAnimated:NO];
     [self configOscLayoutTool];
     ToolboxViewController* oldToolboxVC = toolBoxViewController;
     toolBoxViewController = [[ToolboxViewController alloc] init];
@@ -906,6 +916,15 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         [self.view addSubview:_oscModeButton];
     }
 
+    if (!_quickMenuButton) {
+        _quickMenuButton = [UIButton buttonWithType:UIButtonTypeCustom];
+        _quickMenuButton.backgroundColor = [UIColor colorWithWhite:1 alpha:0.2];
+        _quickMenuButton.clipsToBounds = YES;
+        _quickMenuButton.accessibilityLabel = @"快捷菜单";
+        [_quickMenuButton addTarget:self action:@selector(quickMenu_toggle) forControlEvents:UIControlEventTouchUpInside];
+        [self.view addSubview:_quickMenuButton];
+    }
+
     if (!_rotationLockToggleButton) {
         _rotationLockToggleButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _rotationLockToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
@@ -947,6 +966,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     BOOL chromeHidden = !isPad || _oscHidden;
     _snapRatioButton.hidden = chromeHidden || !_settings.snapScreenToTop;
     _oscModeButton.hidden = chromeHidden;
+    _quickMenuButton.hidden = chromeHidden;
+    if (chromeHidden) [self quickMenu_dismissAnimated:NO];
     _rotationLockToggleButton.hidden = chromeHidden;
     _gyroToggleButton.hidden = chromeHidden;
 
@@ -954,8 +975,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
     // Layout all buttons at bottom-right. Each gets a fixed width sized
     // to its widest possible title so toggling text never shifts neighbours.
-    // Order, right -> left: osc mode (corner, so the right thumb can hold it),
-    // snap ratio (when visible), gyro, rotation lock.
+    // Order, right -> left: quick menu (corner), osc mode, snap ratio (when
+    // visible), gyro, rotation lock.
     CGFloat snapW = VoidFixedToggleWidth(_snapRatioButton, @[@"16:9", @"FULL"]);
     CGFloat oscW  = VoidFixedToggleWidth(_oscModeButton,  @[@"AUTO·GAME", @"AUTO·DESK", @"GAME", @"DESK"]);
     CGFloat rotationW = VoidFixedToggleWidth(_rotationLockToggleButton, @[@"ROT LOCK", @"ROT FREE"]);
@@ -966,6 +987,13 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     CGFloat gap = 8;
 
     CGFloat rightEdge = self.view.bounds.size.width - 24;
+
+    CGFloat menuW = round(btnH * 1.5);
+    CGFloat menuX = rightEdge - menuW;
+    _quickMenuButton.frame = CGRectMake(menuX, baseY - btnH, menuW, btnH);
+    _quickMenuButton.layer.cornerRadius = btnH / 2.0f;
+    rightEdge = menuX - gap;
+    [self quickMenu_layoutPanel];
 
     CGFloat oscX = rightEdge - oscW;
     _oscModeButton.frame = CGRectMake(oscX, baseY - btnH, oscW, btnH);
@@ -983,6 +1011,172 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
     CGFloat rotationX = gyroX - gap - rotationW;
     _rotationLockToggleButton.frame = CGRectMake(rotationX, baseY - btnH, rotationW, btnH);
+}
+
+#pragma mark - Quick menu (bottom-right corner)
+
+static const CGFloat kQuickMenuItemDiameter = 40;
+static const CGFloat kQuickMenuPadding = 8;
+static const CGFloat kQuickMenuSpacing = 12;
+
+- (UIButton *)quickMenu_itemWithSymbol:(NSString *)symbol
+                              fallback:(NSString *)fallback
+                                 label:(NSString *)label
+                                action:(SEL)action {
+    UIButton *item = [UIButton buttonWithType:UIButtonTypeCustom];
+    UIImageSymbolConfiguration *config =
+        [UIImageSymbolConfiguration configurationWithPointSize:kQuickMenuItemDiameter weight:UIImageSymbolWeightRegular];
+    UIImage *image = [UIImage systemImageNamed:symbol withConfiguration:config];
+    if (!image && fallback) image = [UIImage systemImageNamed:fallback withConfiguration:config];
+    [item setImage:[image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
+    // The *.circle.fill glyph is the button itself: stretch it to the
+    // circular frame so all four read as same-size discs.
+    item.contentHorizontalAlignment = UIControlContentHorizontalAlignmentFill;
+    item.contentVerticalAlignment = UIControlContentVerticalAlignmentFill;
+    item.imageView.contentMode = UIViewContentModeScaleAspectFit;
+    item.tintColor = [UIColor colorWithWhite:1 alpha:0.85];
+    item.layer.cornerRadius = kQuickMenuItemDiameter / 2.0f;
+    item.accessibilityLabel = label;
+    [item addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    return item;
+}
+
+- (void)quickMenu_buildPanelIfNeeded {
+    if (_quickMenuPanel) return;
+
+    // Full-screen catcher under the panel: a touch anywhere else just closes
+    // the menu instead of leaking into the stream as a click.
+    _quickMenuDismissCatcher = [[UIControl alloc] initWithFrame:CGRectZero];
+    _quickMenuDismissCatcher.backgroundColor = [UIColor clearColor];
+    [_quickMenuDismissCatcher addTarget:self action:@selector(quickMenu_catcherTouched) forControlEvents:UIControlEventTouchDown];
+
+    _quickMenuPanel = [[UIView alloc] initWithFrame:CGRectZero];
+    _quickMenuPanel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.8];
+    _quickMenuPanel.layer.cornerRadius = 16;
+    _quickMenuPanel.clipsToBounds = YES;
+    // Anchored at its bottom-right corner: layout pins that corner above the
+    // menu button, and the open/close scale grows out of it.
+    _quickMenuPanel.layer.anchorPoint = CGPointMake(1, 1);
+
+    NSArray<UIButton *> *items = @[
+        [self quickMenu_itemWithSymbol:@"1.circle.fill" fallback:nil label:@"模拟器 1" action:@selector(quickMenu_sendEmulatorOne)],
+        [self quickMenu_itemWithSymbol:@"2.circle.fill" fallback:nil label:@"模拟器 2" action:@selector(quickMenu_sendEmulatorTwo)],
+        [self quickMenu_itemWithSymbol:@"rectangle.on.rectangle.circle.fill" fallback:@"arrow.left.arrow.right.circle.fill" label:@"切换屏幕" action:@selector(quickMenu_sendDisplaySwitch)],
+        [self quickMenu_itemWithSymbol:@"ellipsis.circle.fill" fallback:nil label:@"命令管理器" action:@selector(quickMenu_openCommandManager)],
+    ];
+    CGFloat x = kQuickMenuPadding;
+    for (UIButton *item in items) {
+        item.frame = CGRectMake(x, kQuickMenuPadding, kQuickMenuItemDiameter, kQuickMenuItemDiameter);
+        [_quickMenuPanel addSubview:item];
+        x += kQuickMenuItemDiameter + kQuickMenuSpacing;
+    }
+    CGFloat w = x - kQuickMenuSpacing + kQuickMenuPadding;
+    _quickMenuPanel.bounds = CGRectMake(0, 0, w, kQuickMenuItemDiameter + 2 * kQuickMenuPadding);
+}
+
+- (BOOL)quickMenu_isOpen {
+    return _quickMenuOpen;
+}
+
+// Other chrome (countdown hit area, re-added widgets, ...) gets raised on its
+// own refreshes; while the menu is attached it must stay above all of it so
+// an outside touch lands on the catcher. Order: catcher, capsule, panel.
+- (void)quickMenu_raiseToFront {
+    if (!_quickMenuPanel.superview) return;
+    [self.view bringSubviewToFront:_quickMenuDismissCatcher];
+    [self.view bringSubviewToFront:_quickMenuButton];
+    [self.view bringSubviewToFront:_quickMenuPanel];
+}
+
+// Panel sits above the menu button, right edges aligned. With the layer
+// anchored at (1, 1), center is the panel's bottom-right corner.
+- (void)quickMenu_layoutPanel {
+    if (!_quickMenuPanel.superview) return;
+    _quickMenuDismissCatcher.frame = self.view.bounds;
+    CGRect anchor = _quickMenuButton.frame;
+    _quickMenuPanel.center = CGPointMake(CGRectGetMaxX(anchor), CGRectGetMinY(anchor) - 8);
+    [self quickMenu_raiseToFront];
+}
+
+- (void)quickMenu_toggle {
+    if ([self quickMenu_isOpen]) {
+        [self quickMenu_dismissAnimated:YES];
+        return;
+    }
+    if (self->_streamView.widgetToolOpened) return;
+    [self quickMenu_buildPanelIfNeeded];
+    _quickMenuOpen = YES;
+    _quickMenuToken++; // a close fade still running must not detach us
+    BOOL wasAttached = (_quickMenuPanel.superview != nil);
+    [self.view addSubview:_quickMenuDismissCatcher];
+    [self.view addSubview:_quickMenuPanel];
+    [self quickMenu_layoutPanel]; // also orders catcher < capsule < panel
+
+    if (!wasAttached) {
+        _quickMenuPanel.alpha = 0;
+        _quickMenuPanel.transform = CGAffineTransformMakeScale(0.85, 0.85);
+    }
+    // Reopening mid-fade continues from where the fade is.
+    [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+        self->_quickMenuPanel.alpha = 1;
+        self->_quickMenuPanel.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+
+- (void)quickMenu_detach {
+    [_quickMenuDismissCatcher removeFromSuperview];
+    [_quickMenuPanel removeFromSuperview];
+    _quickMenuPanel.alpha = 1;
+    _quickMenuPanel.transform = CGAffineTransformIdentity;
+}
+
+- (void)quickMenu_dismissAnimated:(BOOL)animated {
+    if (!_quickMenuPanel.superview) return;
+    BOOL wasOpen = _quickMenuOpen;
+    _quickMenuOpen = NO;
+    NSUInteger token = ++_quickMenuToken;
+    if (!animated) {
+        [_quickMenuPanel.layer removeAllAnimations];
+        [self quickMenu_detach];
+        return;
+    }
+    if (!wasOpen) return; // already fading out
+    // The catcher stays attached for the whole fade so touches meanwhile
+    // still don't leak into the stream; the capsule above it can reopen.
+    [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionBeginFromCurrentState animations:^{
+        self->_quickMenuPanel.alpha = 0;
+        self->_quickMenuPanel.transform = CGAffineTransformMakeScale(0.85, 0.85);
+    } completion:^(BOOL finished) {
+        if (token != self->_quickMenuToken) return; // reopened or force-closed since
+        [self quickMenu_detach];
+    }];
+}
+
+- (void)quickMenu_catcherTouched {
+    [self quickMenu_dismissAnimated:YES];
+}
+
+// Host-side AutoHotkey bindings (mac-keyboard-ahk-v2):
+//   Win+Ctrl+Alt+Shift+1 / +2  toggle the two emulators
+//   F13 (short press)          extended <-> second-screen-only display mode
+- (void)quickMenu_sendEmulatorOne {
+    [self quickMenu_dismissAnimated:YES];
+    [CommandManager.shared sendKeyComboCommandWithKeyboardCmdStrings:@[@"WIN", @"CTRL", @"ALT", @"SHIFT", @"1"]];
+}
+
+- (void)quickMenu_sendEmulatorTwo {
+    [self quickMenu_dismissAnimated:YES];
+    [CommandManager.shared sendKeyComboCommandWithKeyboardCmdStrings:@[@"WIN", @"CTRL", @"ALT", @"SHIFT", @"2"]];
+}
+
+- (void)quickMenu_sendDisplaySwitch {
+    [self quickMenu_dismissAnimated:YES];
+    [CommandManager.shared sendKeyComboCommandWithKeyboardCmdStrings:@[@"F13"]];
+}
+
+- (void)quickMenu_openCommandManager {
+    [self quickMenu_dismissAnimated:NO];
+    [self presentToolboxViewController];
 }
 
 #pragma mark - OSC mode button: tap cycles the hide mode, hold suspends
@@ -1481,6 +1675,7 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     if (_countdownHitAreaView) {
         [self.view bringSubviewToFront:_countdownHitAreaView];
     }
+    [self quickMenu_raiseToFront];
 }
 
 - (void)streamCountdownTapped:(UITapGestureRecognizer *)recognizer {
@@ -2636,6 +2831,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     [self->_streamView clearOnScreenWidgets]; // clear all onScreenKeyboardButtons before entering edit mode
     _layoutOnScreenControlsVC.toolbarStackView.hidden = false;
     _layoutOnScreenControlsVC.toolbarRootView.hidden = false;
+    [self quickMenu_dismissAnimated:NO];
     [self presentViewController:_layoutOnScreenControlsVC animated:YES completion:nil];
 }
 
