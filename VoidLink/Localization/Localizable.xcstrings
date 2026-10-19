@@ -5911,29 +5911,6 @@
         }
       }
     },
-    "Keep toolbox open" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "保持工具箱打开"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "保持工具箱開啟"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "保持工具箱開啟"
-          }
-        }
-      }
-    },
     "Search SF Symbols or type a name" : {
       "extractionState" : "manual",
       "localizations" : {

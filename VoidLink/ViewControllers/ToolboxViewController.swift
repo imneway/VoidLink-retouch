@@ -25,9 +25,7 @@ import UIKit
     private let deleteButton = UIButton(type: .system)
     private let editButton = UIButton(type: .system)
     private let exitButton = UIButton(type: .system)
-    private let pinButton = UIButton(type: .system)
     private let viewBackgroundColor = UIColor(white: 0.2, alpha: 0.8);
-    private let highlightColor = UIColor(white: 0.55, alpha: 0.8);
     private let titleLabel = UILabel()
     @objc public var specialEntries : NSMutableArray = ["widgetLayoutTool", "bringUpSoftKeyboard", "enterPip", "toggleStatsOverlay", "disconnectAndQuitApp"]
     private let specialEntryAliasDic : [String:String] = [
@@ -40,8 +38,6 @@ import UIKit
     // Only show whitelisted special entries without deleting others, so they can be restored later
     private let allowedSpecialEntries: Set<String> = ["toggleStatsOverlay"]
     
-    private var viewPinned: Bool = false
-    @objc public var isPinned: Bool { return viewPinned }
     private var isEditingMode: Bool = false {
         didSet {
             updateEditingMode()
@@ -104,9 +100,6 @@ import UIKit
         deleteButton.setTitle(SwiftLocalizationHelper.localizedString(forKey: "Delete"), for: .normal)
         editButton.setTitle(SwiftLocalizationHelper.localizedString(forKey: "Edit"), for: .normal)
         exitButton.setTitle(SwiftLocalizationHelper.localizedString(forKey: "Exit"), for: .normal)
-        // Keeps the toolbox open after sending (lock), distinct from pinning a
-        // command to the quick menu.
-        updatePinButton()
         addButton.titleLabel?.font = UIFont.systemFont(ofSize: 20) // Adjust the size as needed
         deleteButton.titleLabel?.font = UIFont.systemFont(ofSize: 20)
         editButton.titleLabel?.font = UIFont.systemFont(ofSize: 20)
@@ -118,15 +111,12 @@ import UIKit
         view.addSubview(deleteButton)
         view.addSubview(editButton)
         view.addSubview(exitButton)
-        view.addSubview(pinButton)
         
         // Setup button targets
         addButton.addTarget(self, action: #selector(addButtonTapped), for: .touchUpInside)
         deleteButton.addTarget(self, action: #selector(deleteButtonTapped), for: .touchUpInside)
         editButton.addTarget(self, action: #selector(editButtonTapped), for: .touchUpInside)
         exitButton.addTarget(self, action: #selector(exitButtonTapped), for: .touchUpInside)
-        pinButton.addTarget(self, action: #selector(pinButtonTapped), for: .touchUpInside)
-        pinButton.contentEdgeInsets = UIEdgeInsets(top: 7, left: 20, bottom: 7, right: 20)
 
     }
     
@@ -154,7 +144,6 @@ import UIKit
         deleteButton.translatesAutoresizingMaskIntoConstraints = false
         editButton.translatesAutoresizingMaskIntoConstraints = false
         exitButton.translatesAutoresizingMaskIntoConstraints = false
-        pinButton.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         
         NSLayoutConstraint.activate([
@@ -197,10 +186,6 @@ import UIKit
             // DeleteButton constraints
             deleteButton.trailingAnchor.constraint(equalTo: addButton.leadingAnchor, constant: -25),
             deleteButton.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
-            
-            // DeleteButton constraints
-            pinButton.trailingAnchor.constraint(equalTo: deleteButton.leadingAnchor, constant: -25),
-            pinButton.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
         ])
     }
 
@@ -211,20 +196,6 @@ import UIKit
         if(isEditingMode){ editButton.setTitle(SwiftLocalizationHelper.localizedString(forKey: "Done"), for: .normal) }
         else{ editButton.setTitle(SwiftLocalizationHelper.localizedString(forKey: "Edit"), for: .normal) }
         tableView.setEditing(isEditingMode, animated: true)
-    }
-    
-    @objc private func pinButtonTapped() {
-        viewPinned = !viewPinned
-        updatePinButton()
-    }
-
-    private func updatePinButton() {
-        pinButton.setTitle(nil, for: .normal)
-        pinButton.setImage(UIImage(systemName: viewPinned ? "lock.fill" : "lock.open",
-                                   withConfiguration: UIImage.SymbolConfiguration(pointSize: 18)), for: .normal)
-        pinButton.tintColor = .white
-        pinButton.backgroundColor = viewPinned ? highlightColor : .clear
-        pinButton.accessibilityLabel = SwiftLocalizationHelper.localizedString(forKey: "Keep toolbox open")
     }
     
     @objc private func addButtonTapped() {
@@ -412,7 +383,7 @@ import UIKit
                 let command = CommandManager.shared.getAllCommands()[indexPath.row-specialEntries.count]
                 sendKeyboardCommand(command)
             }
-            if !viewPinned { dismiss(animated: true, completion: nil) } // dimiss the view in sending mode & the view is not pinned
+            dismiss(animated: true, completion: nil) // sending mode: one command per visit
         }
         else {
             let specialEntrySelected = indexPath.row < specialEntries.count

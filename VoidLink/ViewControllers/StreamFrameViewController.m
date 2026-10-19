@@ -609,9 +609,6 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
 }
 
 - (void)_toolboxOverlayTapped {
-    if (toolBoxViewController && [toolBoxViewController isPinned]) {
-        return;
-    }
     [UIView animateWithDuration:0.2 animations:^{ self->_toolboxOverlay.alpha = 0.0; }];
     [self dismissViewControllerAnimated:YES completion:nil];
 }
