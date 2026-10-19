@@ -38,6 +38,7 @@
 		848F456A2DDCD12500581E36 /* HostCardView.m in Sources */ = {isa = PBXBuildFile; fileRef = 848F45692DDCD12500581E36 /* HostCardView.m */; };
 		84E1CDEC2C4F67D300547904 /* CommandManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84E1CDEB2C4F67D300547904 /* CommandManager.swift */; };
 		84E1CDEF2C4F688E00547904 /* ToolboxViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84E1CDEE2C4F688E00547904 /* ToolboxViewController.swift */; };
+		A1B2C3D401CMDEDITORBF0001 /* CommandEditorViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D401CMDEDITORFR0001 /* CommandEditorViewController.swift */; };
 		84E1CDFA2C4FE83400547904 /* SwiftLocalizationHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84E1CDF92C4FE83400547904 /* SwiftLocalizationHelper.swift */; };
 		84FD0B512C31338D006B5BE5 /* LocalizationHelper.m in Sources */ = {isa = PBXBuildFile; fileRef = 84FD0B502C31338D006B5BE5 /* LocalizationHelper.m */; };
 		84FD0B542C3134A6006B5BE5 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 84FD0B532C3134A6006B5BE5 /* Localizable.xcstrings */; };
@@ -210,6 +211,7 @@
 		84D8EB932C5146AD00FC10A9 /* VoidLink-Bridging-Header.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = "VoidLink-Bridging-Header.h"; sourceTree = "<group>"; };
 		84E1CDEB2C4F67D300547904 /* CommandManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandManager.swift; sourceTree = "<group>"; };
 		84E1CDEE2C4F688E00547904 /* ToolboxViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxViewController.swift; sourceTree = "<group>"; };
+		A1B2C3D401CMDEDITORFR0001 /* CommandEditorViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandEditorViewController.swift; sourceTree = "<group>"; };
 		84E1CDF92C4FE83400547904 /* SwiftLocalizationHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftLocalizationHelper.swift; sourceTree = "<group>"; };
 		84FD0B4F2C313343006B5BE5 /* LocalizationHelper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LocalizationHelper.h; sourceTree = "<group>"; };
 		84FD0B502C31338D006B5BE5 /* LocalizationHelper.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LocalizationHelper.m; sourceTree = "<group>"; };
@@ -786,6 +788,7 @@
 				FB4A23B61A9D3637004D2EF2 /* LoadingFrameViewController.h */,
 				FB4A23B71A9D3637004D2EF2 /* LoadingFrameViewController.m */,
 				84E1CDEE2C4F688E00547904 /* ToolboxViewController.swift */,
+				A1B2C3D401CMDEDITORFR0001 /* CommandEditorViewController.swift */,
 			);
 			path = ViewControllers;
 			sourceTree = "<group>";
@@ -1062,6 +1065,7 @@
 				9827E7A32514366900F25707 /* HapticContext.m in Sources */,
 				9832D1361BBCD5C50036EF48 /* TemporaryApp.m in Sources */,
 				84E1CDEF2C4F688E00547904 /* ToolboxViewController.swift in Sources */,
+				A1B2C3D401CMDEDITORBF0001 /* CommandEditorViewController.swift in Sources */,
 				844CD0EB2C7F8500004861A7 /* PureNativeTouchHandler.m in Sources */,
 				84351B102C29ACCB00A77989 /* OSCProfile.m in Sources */,
 				97E20DCF2E21647A000D5DCA /* Shaders.metal in Sources */,

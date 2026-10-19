@@ -104,12 +104,13 @@ import UIKit
         deleteButton.setTitle(SwiftLocalizationHelper.localizedString(forKey: "Delete"), for: .normal)
         editButton.setTitle(SwiftLocalizationHelper.localizedString(forKey: "Edit"), for: .normal)
         exitButton.setTitle(SwiftLocalizationHelper.localizedString(forKey: "Exit"), for: .normal)
-        pinButton.setTitle("📌", for: .normal)
+        // Keeps the toolbox open after sending (lock), distinct from pinning a
+        // command to the quick menu.
+        updatePinButton()
         addButton.titleLabel?.font = UIFont.systemFont(ofSize: 20) // Adjust the size as needed
         deleteButton.titleLabel?.font = UIFont.systemFont(ofSize: 20)
         editButton.titleLabel?.font = UIFont.systemFont(ofSize: 20)
         exitButton.titleLabel?.font = UIFont.systemFont(ofSize: 20)
-        pinButton.titleLabel?.font = UIFont.systemFont(ofSize: 20)
 
         // Add subviews
         view.addSubview(tableView)
@@ -214,56 +215,61 @@ import UIKit
     
     @objc private func pinButtonTapped() {
         viewPinned = !viewPinned
-        if viewPinned {
-            pinButton.backgroundColor = highlightColor
-        }
-        else{
-            pinButton.backgroundColor = .clear
-        }
+        updatePinButton()
+    }
+
+    private func updatePinButton() {
+        pinButton.setTitle(nil, for: .normal)
+        pinButton.setImage(UIImage(systemName: viewPinned ? "lock.fill" : "lock.open",
+                                   withConfiguration: UIImage.SymbolConfiguration(pointSize: 18)), for: .normal)
+        pinButton.tintColor = .white
+        pinButton.backgroundColor = viewPinned ? highlightColor : .clear
+        pinButton.accessibilityLabel = SwiftLocalizationHelper.localizedString(forKey: "Keep toolbox open")
     }
     
     @objc private func addButtonTapped() {
-        let previouslySelectedIndexPath = tableView.indexPathForSelectedRow //memorize selected indexpath
-        let alert = UIAlertController(title: SwiftLocalizationHelper.localizedString(forKey: "New Command"), message: SwiftLocalizationHelper.localizedString(forKey: "Enter a new command and alias"), preferredStyle: .alert)
-        alert.addTextField { $0.placeholder = SwiftLocalizationHelper.localizedString(forKey:"Command") }
-        alert.addTextField { $0.placeholder = SwiftLocalizationHelper.localizedString(forKey: "Alias (optional)") }
-        alert.textFields?[0].keyboardType = .asciiCapable
-        alert.textFields?[0].autocorrectionType = .no
-        alert.textFields?[0].spellCheckingType = .no
-        alert.textFields?[1].keyboardType = .asciiCapable
-        alert.textFields?[1].autocorrectionType = .no
-        alert.textFields?[1].spellCheckingType = .no
-
-        let submitAction = UIAlertAction(title: SwiftLocalizationHelper.localizedString(forKey: "Add"), style: .default) { [unowned alert] _ in
-            let keyboardCmdString = alert.textFields?[0].text ?? ""
-            let alias = alert.textFields?[1].text ?? keyboardCmdString
-            let newCommand = RemoteCommand(cmdString: keyboardCmdString, alias: alias)
-            let addCommandSuceeded = CommandManager.shared.addCommand(newCommand)
-            //self.reloadTableView() // don't know why but this reload has to be called from the CommandManager, it doesn't work here.
-            
-            //if previouslySelectedIndexPath == nil { return }
-            if addCommandSuceeded {
-                let lastRow = self.tableView.numberOfRows(inSection: 0) - 1  //for now there's only 1 section for the tableview, just use setion 0
-                let newEntryIndexPath = IndexPath(row: lastRow, section: 0)
-                self.tableView.selectRow(at: newEntryIndexPath, animated: true, scrollPosition: .middle) // shift the highlight to the newly added entry
-            }
-            else {
-                self.tableView.selectRow(at: previouslySelectedIndexPath, animated: true, scrollPosition: .middle) // keep the highlight on the previous entry if failed to add command
-            }
-        }
-        
-        let cancelAction = UIAlertAction(title: SwiftLocalizationHelper.localizedString(forKey:"Cancel"), style: .cancel)
-        alert.addAction(submitAction)
-        alert.addAction(cancelAction)
-        
+        // Duplicate: prefill the selected command's string (alias left empty).
+        var prefill: String? = nil
         if let selectedIndexPath = self.tableView.indexPathForSelectedRow {
             if isSpecialEntrySelected() {return}
-            let selectedCommand = CommandManager.shared.getAllCommands()[selectedIndexPath.row-specialEntries.count]
-            alert.textFields?[0].text = selectedCommand.cmdString // load selected keyboard cmd string
-            //alert.textFields?[1].text = selectedCommand.alias // leave the alias input field empty
+            prefill = CommandManager.shared.getAllCommands()[selectedIndexPath.row-specialEntries.count].cmdString
         }
-        
-        self.present(alert, animated: true)
+        presentCommandEditor(editIndex: nil, prefill: prefill)
+    }
+
+    private func presentCommandEditor(editIndex: Int?, prefill: String? = nil) {
+        let editor = CommandEditorViewController(editIndex: editIndex, prefillCommand: prefill)
+        editor.onFinish = { [weak self] commandIndex in
+            guard let self = self else { return }
+            self.reloadTableView()
+            let row = commandIndex + self.specialEntries.count
+            if row < self.tableView.numberOfRows(inSection: 0) {
+                self.tableView.selectRow(at: IndexPath(row: row, section: 0), animated: true, scrollPosition: .middle)
+            }
+        }
+        let nav = UINavigationController(rootViewController: editor)
+        nav.modalPresentationStyle = .formSheet
+        nav.overrideUserInterfaceStyle = .dark
+        present(nav, animated: true)
+    }
+
+    private func commandIndex(for indexPath: IndexPath) -> Int? {
+        let index = indexPath.row - specialEntries.count
+        return index >= 0 && index < CommandManager.shared.getAllCommands().count ? index : nil
+    }
+
+    private func togglePinned(commandIndex index: Int) {
+        let command = CommandManager.shared.getAllCommands()[index]
+        if !command.pinned && CommandManager.shared.pinnedCount() >= CommandManager.maxPinnedCommands {
+            let alert = UIAlertController(title: SwiftLocalizationHelper.localizedString(forKey: "Quick menu is full"),
+                                          message: SwiftLocalizationHelper.localizedString(forKey: "Up to %d commands can be pinned. Unpin one first.", CommandManager.maxPinnedCommands),
+                                          preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: SwiftLocalizationHelper.localizedString(forKey: "OK"), style: .default))
+            present(alert, animated: true)
+            return
+        }
+        _ = CommandManager.shared.updateCommand(at: index, cmdString: command.cmdString, alias: command.alias,
+                                                pinned: !command.pinned, iconName: command.iconName)
     }
     
     
@@ -346,12 +352,50 @@ import UIKit
         
         if indexPath.row < specialEntries.count {
             cell.textLabel?.text = specialEntryAliasDic[specialEntries[indexPath.row] as! String]
+            cell.imageView?.image = nil
+            cell.accessoryView = nil
+            cell.editingAccessoryType = .none
         }
         else {
             let command = CommandManager.shared.getAllCommands()[indexPath.row-specialEntries.count]
             cell.textLabel?.text = command.alias
+            cell.imageView?.image = QuickMenuIcon.image(for: command, diameter: 28)
+            cell.imageView?.tintColor = UIColor(white: 1, alpha: 0.6)
+            if command.pinned {
+                let pin = UIImageView(image: UIImage(systemName: "pin.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14)))
+                pin.tintColor = UIColor(white: 1, alpha: 0.45)
+                cell.accessoryView = pin
+            } else {
+                cell.accessoryView = nil
+            }
+            cell.editingAccessoryType = .detailButton // edit mode: (i) opens the editor
         }
         return cell
+    }
+
+    // Normal mode: swipe left on a command to edit it or (un)pin it to the
+    // quick menu.
+    public func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard let index = commandIndex(for: indexPath) else { return nil }
+        let pinned = CommandManager.shared.getAllCommands()[index].pinned
+        let edit = UIContextualAction(style: .normal, title: SwiftLocalizationHelper.localizedString(forKey: "Edit")) { [weak self] _, _, done in
+            self?.presentCommandEditor(editIndex: index)
+            done(true)
+        }
+        edit.backgroundColor = .systemBlue
+        let pin = UIContextualAction(style: .normal, title: SwiftLocalizationHelper.localizedString(forKey: pinned ? "Unpin" : "Pin")) { [weak self] _, _, done in
+            self?.togglePinned(commandIndex: index)
+            done(true)
+        }
+        pin.backgroundColor = .systemOrange
+        let config = UISwipeActionsConfiguration(actions: [pin, edit])
+        config.performsFirstActionWithFullSwipe = false
+        return config
+    }
+
+    public func tableView(_ tableView: UITableView, accessoryButtonTappedForRowWith indexPath: IndexPath) {
+        guard let index = commandIndex(for: indexPath) else { return }
+        presentCommandEditor(editIndex: index)
     }
     
     // UITableViewDelegate

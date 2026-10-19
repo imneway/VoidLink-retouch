@@ -268,6 +268,7 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // the token invalidates a stale close-animation completion on reopen.
     BOOL _quickMenuOpen;
     NSUInteger _quickMenuToken;
+    NSArray<RemoteCommand *> *_quickMenuCommands; // snapshot behind the panel's items
     // OSC mode button hold: while the finger is down (and the OSC is on) the
     // OSC is suspended so the other hand can drive the PC. A quick release with
     // no stream touch in between is still the plain mode-cycling tap.
@@ -1192,18 +1193,13 @@ static const CGFloat kQuickMenuItemDiameter = 52;
 static const CGFloat kQuickMenuPadding = 8;
 static const CGFloat kQuickMenuSpacing = 12;
 
-- (UIButton *)quickMenu_itemWithSymbol:(NSString *)symbol
-                              fallback:(NSString *)fallback
-                                 label:(NSString *)label
-                                action:(SEL)action {
+- (UIButton *)quickMenu_itemWithImage:(UIImage *)image
+                                label:(NSString *)label
+                               action:(SEL)action {
     UIButton *item = [UIButton buttonWithType:UIButtonTypeCustom];
-    UIImageSymbolConfiguration *config =
-        [UIImageSymbolConfiguration configurationWithPointSize:kQuickMenuItemDiameter weight:UIImageSymbolWeightRegular];
-    UIImage *image = [UIImage systemImageNamed:symbol withConfiguration:config];
-    if (!image && fallback) image = [UIImage systemImageNamed:fallback withConfiguration:config];
-    [item setImage:[image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
-    // The *.circle.fill glyph is the button itself: stretch it to the
-    // circular frame so all four read as same-size discs.
+    [item setImage:image forState:UIControlStateNormal];
+    // QuickMenuIcon draws a full disc: stretch it to the circular frame so
+    // every item reads as a same-size disc.
     item.contentHorizontalAlignment = UIControlContentHorizontalAlignmentFill;
     item.contentVerticalAlignment = UIControlContentVerticalAlignmentFill;
     item.imageView.contentMode = UIViewContentModeScaleAspectFit;
@@ -1215,8 +1211,12 @@ static const CGFloat kQuickMenuSpacing = 12;
 }
 
 - (void)quickMenu_buildPanelIfNeeded {
-    if (_quickMenuPanel) return;
+    if (!_quickMenuPanel) [self quickMenu_createPanel];
+    // Still attached = reopened mid-fade: keep the items the user is looking at.
+    if (!_quickMenuPanel.superview) [self quickMenu_populatePanel];
+}
 
+- (void)quickMenu_createPanel {
     // Full-screen catcher under the panel: a touch anywhere else just closes
     // the menu instead of leaking into the stream as a click.
     _quickMenuDismissCatcher = [[UIControl alloc] initWithFrame:CGRectZero];
@@ -1230,14 +1230,25 @@ static const CGFloat kQuickMenuSpacing = 12;
     // Anchored at its bottom-right corner: layout pins that corner above the
     // menu button, and the open/close scale grows out of it.
     _quickMenuPanel.layer.anchorPoint = CGPointMake(1, 1);
+}
 
-    // Left -> right; "1" ends up nearest the corner button.
-    NSArray<UIButton *> *items = @[
-        [self quickMenu_itemWithSymbol:@"ellipsis.circle.fill" fallback:nil label:@"命令管理器" action:@selector(quickMenu_openCommandManager)],
-        [self quickMenu_itemWithSymbol:@"rectangle.on.rectangle.circle.fill" fallback:@"arrow.left.arrow.right.circle.fill" label:@"切换屏幕" action:@selector(quickMenu_sendDisplaySwitch)],
-        [self quickMenu_itemWithSymbol:@"2.circle.fill" fallback:nil label:@"模拟器 2" action:@selector(quickMenu_sendEmulatorTwo)],
-        [self quickMenu_itemWithSymbol:@"1.circle.fill" fallback:nil label:@"模拟器 1" action:@selector(quickMenu_sendEmulatorOne)],
-    ];
+// Items come from the command manager's pinned commands, rebuilt on every
+// open. Left -> right: the command-manager entry, then the pinned commands in
+// reverse list order, so the first pinned one sits nearest the corner button.
+- (void)quickMenu_populatePanel {
+    for (UIView *v in [_quickMenuPanel.subviews copy]) [v removeFromSuperview];
+    _quickMenuCommands = [[[CommandManager.shared pinnedCommands] reverseObjectEnumerator] allObjects];
+
+    NSMutableArray<UIButton *> *items = [NSMutableArray array];
+    UIImage *more = [QuickMenuIcon imageWithSymbolName:@"ellipsis.circle.fill" alias:@"" diameter:kQuickMenuItemDiameter];
+    [items addObject:[self quickMenu_itemWithImage:more label:@"命令管理器" action:@selector(quickMenu_openCommandManager)]];
+    [_quickMenuCommands enumerateObjectsUsingBlock:^(RemoteCommand *command, NSUInteger idx, BOOL *stop) {
+        UIButton *item = [self quickMenu_itemWithImage:[QuickMenuIcon imageFor:command diameter:kQuickMenuItemDiameter]
+                                                 label:command.alias
+                                                action:@selector(quickMenu_sendPinnedCommand:)];
+        item.tag = (NSInteger)idx;
+        [items addObject:item];
+    }];
     CGFloat x = kQuickMenuPadding;
     for (UIButton *item in items) {
         item.frame = CGRectMake(x, kQuickMenuPadding, kQuickMenuItemDiameter, kQuickMenuItemDiameter);
@@ -1332,22 +1343,12 @@ static const CGFloat kQuickMenuSpacing = 12;
     [self quickMenu_dismissAnimated:YES];
 }
 
-// Host-side AutoHotkey bindings (mac-keyboard-ahk-v2):
-//   Win+Ctrl+Alt+Shift+1 / +2  toggle the two emulators
-//   F13 (short press)          extended <-> second-screen-only display mode
-- (void)quickMenu_sendEmulatorOne {
+- (void)quickMenu_sendPinnedCommand:(UIButton *)sender {
+    if (sender.tag < 0 || (NSUInteger)sender.tag >= _quickMenuCommands.count) return;
+    RemoteCommand *command = _quickMenuCommands[(NSUInteger)sender.tag];
     [self quickMenu_dismissAnimated:YES];
-    [CommandManager.shared sendKeyComboCommandWithKeyboardCmdStrings:@[@"WIN", @"CTRL", @"ALT", @"SHIFT", @"1"]];
-}
-
-- (void)quickMenu_sendEmulatorTwo {
-    [self quickMenu_dismissAnimated:YES];
-    [CommandManager.shared sendKeyComboCommandWithKeyboardCmdStrings:@[@"WIN", @"CTRL", @"ALT", @"SHIFT", @"2"]];
-}
-
-- (void)quickMenu_sendDisplaySwitch {
-    [self quickMenu_dismissAnimated:YES];
-    [CommandManager.shared sendKeyComboCommandWithKeyboardCmdStrings:@[@"F13"]];
+    NSArray<NSString *> *keys = [CommandManager.shared extractKeyStringsFromComboCommandFrom:command.cmdString];
+    if (keys.count > 0) [CommandManager.shared sendKeyComboCommandWithKeyboardCmdStrings:keys];
 }
 
 - (void)quickMenu_openCommandManager {

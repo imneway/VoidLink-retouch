@@ -21,12 +21,19 @@ import UIKit
     
     @objc var cmdString: String
     @objc var alias: String
+    // Shown in the bottom-right quick menu (list order, at most
+    // CommandManager.maxPinnedCommands).
+    @objc var pinned: Bool = false
+    // SF Symbol name; nil draws the alias initials instead.
+    @objc var iconName: String?
     
     // MARK: - Initialization
 
-    init(cmdString: String, alias: String) {
+    init(cmdString: String, alias: String, pinned: Bool = false, iconName: String? = nil) {
         self.cmdString = cmdString
         self.alias = alias
+        self.pinned = pinned
+        self.iconName = iconName
     }
 
     // MARK: - NSSecureCoding
@@ -38,11 +45,17 @@ import UIKit
         }
         self.cmdString = cmdString
         self.alias = alias
+        // Absent in archives written before quick-menu pinning: unpinned, no icon.
+        self.pinned = coder.decodeBool(forKey: "pinned")
+        self.iconName = coder.decodeObject(of: NSString.self, forKey: "iconName") as String?
     }
 
+    // Extra keys are ignored by older builds, so a downgrade keeps the list.
     public func encode(with coder: NSCoder) {
         coder.encode(cmdString, forKey: "keyboardCmdString")
         coder.encode(alias, forKey: "alias")
+        coder.encode(pinned, forKey: "pinned")
+        if let iconName = iconName { coder.encode(iconName, forKey: "iconName") }
     }
 }
 
@@ -493,6 +506,12 @@ import UIKit
     private var commands: [RemoteCommand] = []
     
     public weak var viewController: ToolboxViewController?
+
+    @objc public static let maxPinnedCommands = 8
+    private static let savedCommandsKey = "savedCommands"
+    private static let savedCommandsBackupKey = "savedCommands.backupV1"
+    private static let savedCommandsUnreadableKey = "savedCommands.unreadable"
+    private static let quickMenuSeededKey = "quickMenuSeededV1"
     
     private override init() {
         super.init()
@@ -854,12 +873,39 @@ import UIKit
         if(command.alias.trimmingCharacters(in: .whitespacesAndNewlines).count == 0) {command.alias = command.cmdString} // copy cmd string as alias when alias is empty
         let keyStrings = extractKeyStringsFromComboCommand(from: command.cmdString)
         if (keyStrings == nil) {return false}  // in case of non-keyboard command strings, return false
+        if command.pinned && pinnedCount() >= CommandManager.maxPinnedCommands { command.pinned = false }
         commands.append(command)
         saveCommands()
         viewController?.reloadTableView() // don't know why but this reload has to be called from the CommandManager, doesn't work by calling it in the viewcontroller, probably related with the dialog box.
         return true
     }
     
+    // Normalizes like addCommand. Returns false (and changes nothing) for a
+    // non-keyboard command string, or for pinning past maxPinnedCommands.
+    @objc public func updateCommand(at index: Int, cmdString: String, alias: String, pinned: Bool, iconName: String?) -> Bool {
+        guard index >= 0 && index < commands.count else { return false }
+        let cmd = cmdString.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard extractKeyStringsFromComboCommand(from: cmd) != nil else { return false }
+        if pinned && !commands[index].pinned && pinnedCount() >= CommandManager.maxPinnedCommands { return false }
+        let command = commands[index]
+        command.cmdString = cmd
+        command.alias = alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? cmd : alias
+        command.pinned = pinned
+        command.iconName = iconName
+        saveCommands()
+        viewController?.reloadTableView()
+        return true
+    }
+
+    @objc public func pinnedCount() -> Int {
+        return commands.filter { $0.pinned }.count
+    }
+
+    // Quick-menu order: list order, first pinned sits nearest the corner.
+    @objc public func pinnedCommands() -> [RemoteCommand] {
+        return Array(commands.filter { $0.pinned }.prefix(CommandManager.maxPinnedCommands))
+    }
+
     @objc public func deleteCommand(at index: Int) {
         guard index >= 0 && index < commands.count else {
             return
@@ -873,13 +919,16 @@ import UIKit
     }
     
     private func loadCommands() {
-        if let savedCommandsData = UserDefaults.standard.data(forKey: "savedCommands") {
+        var loaded = true
+        if let savedCommandsData = UserDefaults.standard.data(forKey: CommandManager.savedCommandsKey) {
+            loaded = false
             do {
                 // Attempt to unarchive the data into an array of RemoteCommand
                 if let savedCommands = try NSKeyedUnarchiver.unarchivedObject(ofClasses: [NSArray.self, RemoteCommand.self], from: savedCommandsData) as? [RemoteCommand] {
                     // Assign the unarchived commands to your property
                     print(" Assign the unarchived commands to your property ")
                     commands = savedCommands
+                    loaded = true
                 } else {
                     // Handle the case where the data could not be unarchived into the expected type
                     print("Data could not be unarchived into [RemoteCommand]")
@@ -889,12 +938,49 @@ import UIKit
                 print("Failed to unarchive savedCommands with error: \(error)")
             }
         }
+        // Never migrate an archive we could not read; park its raw bytes before
+        // any later save (add / edit) replaces it.
+        if loaded {
+            seedQuickMenuCommandsIfNeeded()
+        } else if let raw = UserDefaults.standard.data(forKey: CommandManager.savedCommandsKey),
+                  UserDefaults.standard.data(forKey: CommandManager.savedCommandsUnreadableKey) == nil {
+            UserDefaults.standard.set(raw, forKey: CommandManager.savedCommandsUnreadableKey)
+        }
+    }
+
+    // One-time: the quick menu used to hard-code these three host shortcuts
+    // (AHK: Win+Ctrl+Alt+Shift+1/2 toggle the emulators, F13 flips the
+    // display mode). Turn them into ordinary pinned commands: an existing
+    // command with the same string is pinned in place (alias untouched),
+    // anything missing is appended. The pre-migration archive is kept once.
+    private func seedQuickMenuCommandsIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: CommandManager.quickMenuSeededKey) else { return }
+        if let raw = defaults.data(forKey: CommandManager.savedCommandsKey),
+           defaults.data(forKey: CommandManager.savedCommandsBackupKey) == nil {
+            defaults.set(raw, forKey: CommandManager.savedCommandsBackupKey)
+        }
+        let seeds: [(String, String, String)] = [
+            ("WIN+CTRL+ALT+SHIFT+1", "Eden", "1.circle.fill"),
+            ("WIN+CTRL+ALT+SHIFT+2", "Azahar", "2.circle.fill"),
+            ("F13", "切换屏幕 (F13)", "rectangle.on.rectangle.circle.fill"),
+        ]
+        for (cmd, alias, icon) in seeds {
+            if let existing = commands.first(where: { $0.cmdString.uppercased() == cmd }) {
+                if !existing.pinned && pinnedCount() < CommandManager.maxPinnedCommands { existing.pinned = true }
+                if existing.iconName == nil { existing.iconName = icon }
+            } else if pinnedCount() < CommandManager.maxPinnedCommands {
+                commands.append(RemoteCommand(cmdString: cmd, alias: alias, pinned: true, iconName: icon))
+            }
+        }
+        saveCommands()
+        defaults.set(true, forKey: CommandManager.quickMenuSeededKey)
     }
     
     
     private func saveCommands() {
         if let data = try? NSKeyedArchiver.archivedData(withRootObject: commands, requiringSecureCoding: false) {
-            UserDefaults.standard.set(data, forKey: "savedCommands")
+            UserDefaults.standard.set(data, forKey: CommandManager.savedCommandsKey)
         }
     }
 
