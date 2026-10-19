@@ -7,6 +7,7 @@
 //
 
 #import "Logger.h"
+#import <os/log.h>
 
 #if defined(NDEBUG)
 static LogLevel LoggerLogLevel = LOG_I;
@@ -47,7 +48,15 @@ void LogTagv(LogLevel level, NSString* tag, NSString* fmt, va_list args) {
     } else {
         prefixedString = [NSString stringWithFormat:@"%@ %@", levelPrefix, fmt];
     }
-    NSLogv(prefixedString, args);
+    // Through NSLog every %@ / %s argument is redacted to <private> in the
+    // device syslog, which hides the whole message once the format itself is
+    // built at runtime. Format here and log the result public, so a sideloaded
+    // build can be diagnosed from a Mac without the logging profile.
+    NSString* message = [[NSString alloc] initWithFormat:prefixedString arguments:args];
+    os_log_type_t type = OS_LOG_TYPE_DEFAULT;
+    if (level == LOG_D) type = OS_LOG_TYPE_DEBUG;
+    else if (level >= LOG_W) type = OS_LOG_TYPE_ERROR;
+    os_log_with_type(OS_LOG_DEFAULT, type, "%{public}@", message);
 }
 
 void LogTag(LogLevel level, NSString* tag, NSString* fmt, ...) {
