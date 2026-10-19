@@ -978,8 +978,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         _quickMenuButton.accessibilityLabel = @"快捷菜单";
         [_quickMenuButton addTarget:self action:@selector(quickMenu_toggle) forControlEvents:UIControlEventTouchUpInside];
         _quickMenuBackdrop = [[VoidBackdropCapsuleView alloc] initWithFrame:CGRectZero];
-        // Solid #222: the menu capsule reads as a button, not a translucent chip.
-        [_quickMenuBackdrop setFillColor:[UIColor colorWithRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1]];
+        // #222 at 8% opacity: the menu capsule stays barely there over the video.
+        [_quickMenuBackdrop setFillColor:[UIColor colorWithRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:0.08]];
         _quickMenuBackdrop.backdropEnabled = NO;
         [self.view addSubview:_quickMenuBackdrop];
         [self.view addSubview:_quickMenuButton];
