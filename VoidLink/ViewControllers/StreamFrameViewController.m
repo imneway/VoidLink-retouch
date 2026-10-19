@@ -978,8 +978,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         _quickMenuButton.accessibilityLabel = @"快捷菜单";
         [_quickMenuButton addTarget:self action:@selector(quickMenu_toggle) forControlEvents:UIControlEventTouchUpInside];
         _quickMenuBackdrop = [[VoidBackdropCapsuleView alloc] initWithFrame:CGRectZero];
-        // #222 at 8% opacity: the menu capsule stays barely there over the video.
-        [_quickMenuBackdrop setFillColor:[UIColor colorWithRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:0.08]];
+        // #B3B3B3 at 16% opacity: a faint marker; the hit area does the work.
+        [_quickMenuBackdrop setFillColor:[UIColor colorWithRed:0xB3/255.0 green:0xB3/255.0 blue:0xB3/255.0 alpha:0.16]];
         _quickMenuBackdrop.backdropEnabled = NO;
         [self.view addSubview:_quickMenuBackdrop];
         [self.view addSubview:_quickMenuButton];
@@ -1058,15 +1058,22 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     CGFloat gap = 8;
     CGFloat rowPad = 4; // capsule overhang past the outermost toggles
 
-    CGFloat menuW = round(btnH * 1.5) - 2;
-    CGFloat menuX = self.view.bounds.size.width - 13 - menuW;
-    _quickMenuButton.frame = CGRectMake(menuX, baseY - btnH, menuW, btnH);
-    _quickMenuBackdrop.frame = _quickMenuButton.frame;
-    [self quickMenu_layoutPanel];
-
     // The toggle row keeps its own anchor (where the menu's left edge used to
     // be) so menu size/inset tweaks don't drag it around.
     CGFloat rowRight = self.view.bounds.size.width - 15 - round(btnH * 1.5) - gap;
+
+    // The capsule is only the visual; the button covers the whole corner
+    // (halfway to the toggle row, a bit above the capsule, out to the right
+    // and bottom screen edges) so it can be hit blind.
+    CGFloat menuW = round(btnH * 1.5) - 2;
+    CGFloat menuX = self.view.bounds.size.width - 13 - menuW;
+    _quickMenuBackdrop.frame = CGRectMake(menuX, baseY - btnH, menuW, btnH);
+    CGFloat hitX = round((rowRight + menuX) / 2.0);
+    CGFloat hitY = baseY - btnH - gap;
+    _quickMenuButton.frame = CGRectMake(hitX, hitY,
+                                        self.view.bounds.size.width - hitX,
+                                        self.view.bounds.size.height - hitY);
+    [self quickMenu_layoutPanel];
     CGFloat rightEdge = rowRight - rowPad;
 
     CGFloat oscX = rightEdge - oscW;
@@ -1262,7 +1269,7 @@ static const CGFloat kQuickMenuSpacing = 12;
 - (void)quickMenu_layoutPanel {
     if (!_quickMenuPanel.superview) return;
     _quickMenuDismissCatcher.frame = self.view.bounds;
-    CGRect anchor = _quickMenuButton.frame;
+    CGRect anchor = _quickMenuBackdrop.frame; // the visible capsule, not the hit area
     _quickMenuPanel.center = CGPointMake(self.view.bounds.size.width - 8, CGRectGetMinY(anchor) - 15);
     [self quickMenu_raiseToFront];
 }
