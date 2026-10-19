@@ -20,10 +20,13 @@ static const CFTimeInterval kSampleInterval = 0.2;
 static const int kDebounceSamples = 3;
 static const CFTimeInterval kDebounceInterval = 1.2;
 
-// Luma (8-bit scale) at or below this counts as black. Limited-range black is 16;
-// a little headroom absorbs encoder noise. Kept tight so dim game content
-// (dark blue skies etc.) is not swallowed as "bar".
-static const int kBlackLumaMax = 20;
+// Luma (8-bit scale) at or below this counts as black: black itself plus a
+// little headroom for encoder noise. Kept tight so dim game content (dark blue
+// skies etc.) is not swallowed as "bar". Limited range puts black at 16; full
+// range at 0, where the same 20 would also swallow a dark window theme
+// (#121212 is luma 18 there), so each range gets its own ceiling.
+static const int kBlackLumaMaxVideoRange = 20;
+static const int kBlackLumaMaxFullRange = 6;
 // A line is "black" when at most this many of its samples are non-black.
 static const int kLineMaxNonBlack = 2;
 // Samples taken along each scanned line (columns of a row / rows of a column).
@@ -185,6 +188,19 @@ static BOOL PixelFormatIsWide(OSType fmt) {
     }
 }
 
+static BOOL PixelFormatIsFullRange(OSType fmt) {
+    switch (fmt) {
+        case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+        case kCVPixelFormatType_420YpCbCr8PlanarFullRange:
+        case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
+        case kCVPixelFormatType_422YpCbCr10BiPlanarFullRange:
+        case kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:
+            return YES;
+        default:
+            return NO;
+    }
+}
+
 // Reads one luma sample as an 8-bit value. 10-bit biplanar formats (x420 etc.)
 // keep their 10 bits in the MSBs of a 16-bit little-endian word.
 static inline int LumaAt(const uint8_t *row, size_t x, BOOL wide) {
@@ -195,23 +211,23 @@ static inline int LumaAt(const uint8_t *row, size_t x, BOOL wide) {
     return row[x];
 }
 
-static BOOL RowIsBlack(const uint8_t *base, size_t bytesPerRow, size_t width, size_t y, BOOL wide) {
+static BOOL RowIsBlack(const uint8_t *base, size_t bytesPerRow, size_t width, size_t y, BOOL wide, int blackMax) {
     const uint8_t *row = base + y * bytesPerRow;
     int nonBlack = 0;
     size_t step = width / kLineSamples;
     if (step == 0) step = 1;
     for (size_t x = step / 2; x < width; x += step) {
-        if (LumaAt(row, x, wide) > kBlackLumaMax && ++nonBlack > kLineMaxNonBlack) return NO;
+        if (LumaAt(row, x, wide) > blackMax && ++nonBlack > kLineMaxNonBlack) return NO;
     }
     return YES;
 }
 
-static BOOL ColumnIsBlack(const uint8_t *base, size_t bytesPerRow, size_t height, size_t x, BOOL wide) {
+static BOOL ColumnIsBlack(const uint8_t *base, size_t bytesPerRow, size_t height, size_t x, BOOL wide, int blackMax) {
     int nonBlack = 0;
     size_t step = height / kLineSamples;
     if (step == 0) step = 1;
     for (size_t y = step / 2; y < height; y += step) {
-        if (LumaAt(base + y * bytesPerRow, x, wide) > kBlackLumaMax && ++nonBlack > kLineMaxNonBlack) return NO;
+        if (LumaAt(base + y * bytesPerRow, x, wide) > blackMax && ++nonBlack > kLineMaxNonBlack) return NO;
     }
     return YES;
 }
@@ -341,13 +357,14 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
     // else we can receive is 8-bit. Decided from the format, not from the row
     // stride, which may carry alignment padding.
     BOOL wide = PixelFormatIsWide(fmt);
+    int blackMax = PixelFormatIsFullRange(fmt) ? kBlackLumaMaxFullRange : kBlackLumaMaxVideoRange;
 
     size_t maxScanV = (size_t)(height * kMaxScanFraction);
     size_t maxScanH = (size_t)(width * kMaxScanFraction);
-    size_t topRaw = ScanBar(maxScanV, ^BOOL(size_t i) { return RowIsBlack(base, bytesPerRow, width, i, wide); });
-    size_t bottomRaw = ScanBar(maxScanV, ^BOOL(size_t i) { return RowIsBlack(base, bytesPerRow, width, height - 1 - i, wide); });
-    size_t leftRaw = ScanBar(maxScanH, ^BOOL(size_t i) { return ColumnIsBlack(base, bytesPerRow, height, i, wide); });
-    size_t rightRaw = ScanBar(maxScanH, ^BOOL(size_t i) { return ColumnIsBlack(base, bytesPerRow, height, width - 1 - i, wide); });
+    size_t topRaw = ScanBar(maxScanV, ^BOOL(size_t i) { return RowIsBlack(base, bytesPerRow, width, i, wide, blackMax); });
+    size_t bottomRaw = ScanBar(maxScanV, ^BOOL(size_t i) { return RowIsBlack(base, bytesPerRow, width, height - 1 - i, wide, blackMax); });
+    size_t leftRaw = ScanBar(maxScanH, ^BOOL(size_t i) { return ColumnIsBlack(base, bytesPerRow, height, i, wide, blackMax); });
+    size_t rightRaw = ScanBar(maxScanH, ^BOOL(size_t i) { return ColumnIsBlack(base, bytesPerRow, height, width - 1 - i, wide, blackMax); });
     CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
 
     // A frame that is black to the scan limit on every edge says nothing on its
@@ -405,9 +422,9 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
         _lastDiagRaw = raw;
         _lastDiagFits = fits;
         _lastDiagLogTime = now;
-        Log(LOG_I, @"[Letterbox] raw=%@ fits16:9=%d tb=%zu/%zu (now %zu/%zu) lr=%zu/%zu (now %zu/%zu) of %zux%zu fmt=%c%c%c%c wide=%d",
+        Log(LOG_I, @"[Letterbox] raw=%@ fits16:9=%d tb=%zu/%zu (now %zu/%zu) lr=%zu/%zu (now %zu/%zu) of %zux%zu fmt=%c%c%c%c wide=%d black<=%d",
             raw == StreamContentClassGame ? @"game" : (raw == StreamContentClassDesktop ? @"desktop" : @"black"),
-            fits, top, bottom, topRaw, bottomRaw, left, right, leftRaw, rightRaw, width, height, FOURCC_CHARS(fmt), wide);
+            fits, top, bottom, topRaw, bottomRaw, left, right, leftRaw, rightRaw, width, height, FOURCC_CHARS(fmt), wide, blackMax);
     }
 
     if (raw == StreamContentClassUnknown) {
