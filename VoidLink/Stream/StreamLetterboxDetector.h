@@ -2,12 +2,16 @@
 //  StreamLetterboxDetector.h
 //  VoidLink
 //
-//  Classifies the decoded video as "game" or "desktop" by looking for
-//  letterbox bars baked into the host's frames. On a host display that matches
-//  the iPad's aspect ratio, a borderless-fullscreen 16:9 game gets padded with
-//  black bars by Windows, while the desktop fills the whole display. The host
-//  VC uses the verdict to decide what "hide the OSC" means (translucent but
-//  tappable for games, fully off so touch becomes the mouse on the desktop).
+//  Classifies the decoded video as "game", "desktop" or "ambiguous" by looking
+//  for letterbox bars baked into the host's frames, and for the Windows
+//  taskbar along the bottom edge. On a host display that matches the iPad's
+//  aspect ratio, a borderless-fullscreen 16:9 game gets padded with black bars
+//  by Windows, while the desktop fills the whole display with the taskbar
+//  showing. Content with neither (a game that fills the display, a fullscreen
+//  window) is ambiguous. The host VC uses the verdict to decide what "hide the
+//  OSC" means (translucent but tappable for games, fully off so touch becomes
+//  the mouse otherwise) and treats only a taskbar-confirmed desktop as a real
+//  change of scene that may override the user's manual OSC choices.
 //
 
 #import <Foundation/Foundation.h>
@@ -15,8 +19,9 @@
 
 typedef NS_ENUM(NSInteger, StreamContentClass) {
     StreamContentClassUnknown = 0,
-    StreamContentClassDesktop,
-    StreamContentClassGame,
+    StreamContentClassDesktop,      // no bars, Windows taskbar seen at the bottom
+    StreamContentClassGame,         // letterbox bars
+    StreamContentClassAmbiguous,    // no bars, no taskbar
 };
 
 @class StreamLetterboxDetector;

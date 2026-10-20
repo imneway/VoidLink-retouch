@@ -30,7 +30,7 @@ static const int kBlackLumaMaxFullRange = 6;
 // A line is "black" when at most this many of its samples are non-black.
 static const int kLineMaxNonBlack = 2;
 // Samples taken along each scanned line (columns of a row / rows of a column).
-static const int kLineSamples = 256;
+#define kLineSamples 256
 // Dark content can only make a measured bar LARGER (its rows pass the black
 // test), never smaller, so the bar estimate is the minimum over the last few
 // samples. A sprite or firefly touching the content edge once in this window
@@ -232,6 +232,86 @@ static BOOL ColumnIsBlack(const uint8_t *base, size_t bytesPerRow, size_t height
     return YES;
 }
 
+// Windows taskbar signature, from the luma plane alone. Looking up from the
+// bottom edge: a run of uniform, non-black rows (the strip under the icons),
+// then rows on the same background level carrying a minority of high-contrast
+// samples (the icons), seen both in the right 15% of the width (tray, clock)
+// and further left (Start, pinned apps), all within the bottom 7% of the
+// frame. A letterboxed game fails at the first step (black), a game that
+// fills the display at the icon steps unless it draws a full-width uniform
+// HUD strip with elements at both ends.
+static const float kTaskbarMaxFraction = 0.07f; // 48 px at 200% scale is 96 of 1668
+static const int kTaskbarQuietRowsMin = 4;      // margin under the icons
+static const int kTaskbarIconRowsMin = 10;      // icons are ~24 px tall at 100%
+static const int kTaskbarBusyDelta = 40;        // sample vs row median
+static const int kTaskbarBusyRowMin = 3;        // fewer: an indicator line / noise
+static const int kTaskbarBgTolerance = 12;      // acrylic blur drifts the level a little
+static const int kTaskbarBgAboveBlack = 6;      // the strip must not read as a bar
+
+typedef struct { int median; int busy; int busyRight; int busyLeft; } RowProfile;
+
+static RowProfile ProfileRow(const uint8_t *base, size_t bytesPerRow, size_t width, size_t y, BOOL wide) {
+    const uint8_t *row = base + y * bytesPerRow;
+    // Spread evenly over the full width (an integer step would leave the
+    // right end, where the clock sits, unsampled) and split left/right by x.
+    int n = (width < (size_t)kLineSamples) ? (int)width : kLineSamples;
+    int samples[kLineSamples];
+    size_t xs[kLineSamples];
+    for (int i = 0; i < n; i++) {
+        xs[i] = ((size_t)(2 * i + 1) * width) / (size_t)(2 * n);
+        samples[i] = LumaAt(row, xs[i], wide);
+    }
+    int hist[256] = {0};
+    for (int i = 0; i < n; i++) hist[samples[i]]++;
+    int median = 0, acc = 0;
+    for (int v = 0; v < 256; v++) { acc += hist[v]; if (acc * 2 >= n) { median = v; break; } }
+    RowProfile p = { median, 0, 0, 0 };
+    size_t rightStart = (width * 85) / 100;
+    for (int i = 0; i < n; i++) {
+        if (abs(samples[i] - median) <= kTaskbarBusyDelta) continue;
+        p.busy++;
+        if (xs[i] >= rightStart) p.busyRight++; else p.busyLeft++;
+    }
+    return p;
+}
+
+static BOOL TaskbarAtBottom(const uint8_t *base, size_t bytesPerRow, size_t width, size_t height, BOOL wide, int blackMax) {
+    size_t maxRows = (size_t)(height * kTaskbarMaxFraction);
+    if (maxRows < (size_t)(kTaskbarQuietRowsMin + kTaskbarIconRowsMin)) return NO;
+    // 1. Uniform, non-black strip at the very bottom.
+    int bg = -1;
+    size_t y = 0;
+    for (; y < maxRows; y++) {
+        RowProfile p = ProfileRow(base, bytesPerRow, width, height - 1 - y, wide);
+        if (p.busy > kLineMaxNonBlack || p.median <= blackMax + kTaskbarBgAboveBlack) break;
+        if (bg < 0) bg = p.median;
+        else if (abs(p.median - bg) > kTaskbarBgTolerance) break;
+    }
+    if (y < (size_t)kTaskbarQuietRowsMin) return NO;
+    // 2. Icon rows on the same background, until the background changes or a
+    //    row is mostly foreground (content above the bar).
+    int iconRows = 0;
+    BOOL sawRight = NO, sawLeft = NO;
+    for (; y < maxRows; y++) {
+        RowProfile p = ProfileRow(base, bytesPerRow, width, height - 1 - y, wide);
+        if (abs(p.median - bg) > kTaskbarBgTolerance || p.busy > kLineSamples / 2) break;
+        if (p.busy < kTaskbarBusyRowMin) continue; // gap between icon and indicator, or margin
+        iconRows++;
+        if (p.busyRight > 0) sawRight = YES;
+        if (p.busyLeft > 0) sawLeft = YES;
+    }
+    return iconRows >= kTaskbarIconRowsMin && sawRight && sawLeft;
+}
+
+static NSString *ContentClassName(StreamContentClass c) {
+    switch (c) {
+        case StreamContentClassGame: return @"game";
+        case StreamContentClassDesktop: return @"desktop";
+        case StreamContentClassAmbiguous: return @"ambiguous";
+        default: return @"black";
+    }
+}
+
 // Bar height from one edge: the extent of the leading run of black rows, where
 // up to kMaxBarGapRows non-black rows in a row are skipped over. Returns the
 // index just past the last black row seen (0 when the edge row isn't black and
@@ -365,6 +445,9 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
     size_t bottomRaw = ScanBar(maxScanV, ^BOOL(size_t i) { return RowIsBlack(base, bytesPerRow, width, height - 1 - i, wide, blackMax); });
     size_t leftRaw = ScanBar(maxScanH, ^BOOL(size_t i) { return ColumnIsBlack(base, bytesPerRow, height, i, wide, blackMax); });
     size_t rightRaw = ScanBar(maxScanH, ^BOOL(size_t i) { return ColumnIsBlack(base, bytesPerRow, height, width - 1 - i, wide, blackMax); });
+    // Only meaningful without a bottom bar; the first step fails on one anyway.
+    BOOL taskbar = (bottomRaw < (size_t)(height * kMinSingleBarFraction))
+        && TaskbarAtBottom(base, bytesPerRow, width, height, wide, blackMax);
     CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
 
     // A frame that is black to the scan limit on every edge says nothing on its
@@ -395,7 +478,7 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
     } else if (v == AxisClassBlack || h == AxisClassBlack) {
         raw = StreamContentClassUnknown;     // hold
     } else {
-        raw = StreamContentClassDesktop;
+        raw = taskbar ? StreamContentClassDesktop : StreamContentClassAmbiguous;
     }
 
     // Does the content sit inside the centred 16:9 region? Ideal 16:9 bars are
@@ -422,9 +505,8 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
         _lastDiagRaw = raw;
         _lastDiagFits = fits;
         _lastDiagLogTime = now;
-        Log(LOG_I, @"[Letterbox] raw=%@ fits16:9=%d tb=%zu/%zu (now %zu/%zu) lr=%zu/%zu (now %zu/%zu) of %zux%zu fmt=%c%c%c%c wide=%d black<=%d",
-            raw == StreamContentClassGame ? @"game" : (raw == StreamContentClassDesktop ? @"desktop" : @"black"),
-            fits, top, bottom, topRaw, bottomRaw, left, right, leftRaw, rightRaw, width, height, FOURCC_CHARS(fmt), wide, blackMax);
+        Log(LOG_I, @"[Letterbox] raw=%@ fits16:9=%d taskbar=%d tb=%zu/%zu (now %zu/%zu) lr=%zu/%zu (now %zu/%zu) of %zux%zu fmt=%c%c%c%c wide=%d black<=%d",
+            ContentClassName(raw), fits, taskbar, top, bottom, topRaw, bottomRaw, left, right, leftRaw, rightRaw, width, height, FOURCC_CHARS(fmt), wide, blackMax);
     }
 
     if (raw == StreamContentClassUnknown) {
@@ -480,7 +562,7 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
     _pending = StreamContentClassUnknown;
     StreamContentClass committed = _current;
     BOOL committedFits = _currentFits;
-    Log(LOG_I, @"[Letterbox] verdict -> %@ fits16:9=%d", committed == StreamContentClassGame ? @"game" : @"desktop", committedFits);
+    Log(LOG_I, @"[Letterbox] verdict -> %@ fits16:9=%d", ContentClassName(committed), committedFits);
     dispatch_async(dispatch_get_main_queue(), ^{
         // A reset/disable that raced the hop to main must not deliver a verdict
         // from the previous configuration.

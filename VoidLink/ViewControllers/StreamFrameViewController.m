@@ -277,6 +277,7 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // OSC visibility model — see "OSC visibility & hide mode".
     BOOL _oscHidden;                         // right-edge swipe / detector
     OscHideMode _oscModeOverride;            // Auto unless the mode button was tapped this session
+    BOOL _oscManualVisibility;               // right-edge swipe used since the last real scene change
     StreamContentClass _oscDetectedContent;  // last debounced detector verdict
     // YES from viewDidLoad until osc_configureForStream: the OSC stays fully
     // Off (not translucent) while connecting, whatever the hide mode says.
@@ -2357,6 +2358,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
 
 - (void)setOscHidden:(BOOL)hidden {
     _oscHidden = hidden;
+    _oscManualVisibility = YES;
     if (!_oscAutoDetectApplicable) {
         [[NSUserDefaults standardUserDefaults] setBool:hidden forKey:kOscHiddenKey];
     }
@@ -2370,15 +2372,22 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     [self setOscHidden:!_oscHidden];
 }
 
-// Mode button tap: AUTO -> GAME -> DESK -> AUTO. Overrides last for this stream
-// session and are dropped the moment the detector's verdict flips (the user
-// corrected a misdetection; once the content really changes, auto resumes).
+// Mode button tap: AUTO -> GAME -> DESK -> AUTO. An override lasts until the
+// user cycles back to AUTO or the detector sees the real desktop (taskbar);
+// see letterboxDetector:didChangeContentClass:. Choosing AUTO hands visibility
+// back to the detector as well.
 - (void)cycleOscHideMode {
     if (self->_streamView.widgetToolOpened) return;
     switch (_oscModeOverride) {
         case OscHideModeAuto: _oscModeOverride = OscHideModeGame; break;
         case OscHideModeGame: _oscModeOverride = OscHideModeDesk; break;
         case OscHideModeDesk: _oscModeOverride = OscHideModeAuto; break;
+    }
+    if (_oscModeOverride == OscHideModeAuto && _oscAutoDetectApplicable) {
+        _oscManualVisibility = NO;
+        if (_oscDetectedContent != StreamContentClassUnknown) {
+            _oscHidden = (_oscDetectedContent != StreamContentClassGame);
+        }
     }
     [self osc_applyPresentation];
 }
@@ -2389,6 +2398,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
 - (void)osc_configureForStream {
     _oscAwaitingStream = NO;
     _oscModeOverride = OscHideModeAuto;
+    _oscManualVisibility = NO;
     _oscDetectedContent = StreamContentClassUnknown;
     _snapRatioOverride = SnapRatioOverrideNone;
     _snapDetectedFits = NO;
@@ -2444,6 +2454,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     _snapDetectedFits = NO;
     _snapRatioOverride = SnapRatioOverrideNone;
     _oscModeOverride = OscHideModeAuto;
+    _oscManualVisibility = NO;
     if (!applicable) {
         // Back on a non-matching screen: the old manual visibility applies again.
         _oscHidden = [[NSUserDefaults standardUserDefaults] boolForKey:kOscHiddenKey];
@@ -2454,20 +2465,48 @@ static NSString * const kOscHiddenKey = @"oscHidden";
 
 #pragma mark StreamLetterboxDetectorDelegate
 
+static NSString *OscContentClassName(StreamContentClass c) {
+    switch (c) {
+        case StreamContentClassGame: return @"game";
+        case StreamContentClassDesktop: return @"desktop";
+        case StreamContentClassAmbiguous: return @"ambiguous";
+        default: return @"unknown";
+    }
+}
+
 - (void)letterboxDetector:(StreamLetterboxDetector *)detector
     didChangeContentClass:(StreamContentClass)contentClass
           fitsSixteenNine:(BOOL)fitsSixteenNine {
     if (detector != self->_streamMan.videoRenderer.letterboxDetector) return; // stale session
-    BOOL classChanged = (contentClass != _oscDetectedContent);
+    StreamContentClass previous = _oscDetectedContent;
+    BOOL classChanged = (contentClass != previous);
     BOOL fitChanged = (fitsSixteenNine != _snapDetectedFits);
     _oscDetectedContent = contentClass;
     _snapDetectedFits = fitsSixteenNine;
-    Log(LOG_I, @"OSC auto hide-mode: content is now %@, fits 16:9 %d",
-        contentClass == StreamContentClassGame ? @"game" : @"desktop", fitsSixteenNine);
     if (classChanged) {
-        _oscModeOverride = OscHideModeAuto;
-        // Game -> bring the OSC up; desktop -> put it away so touch drives the mouse.
-        _oscHidden = (contentClass != StreamContentClassGame);
+        // Only a taskbar-confirmed desktop proves the scene really changed. A
+        // game that fills the display reads as "ambiguous", and it flips to
+        // "game" and back whenever letterbox-like black appears (cutscenes,
+        // loading screens), so those flips must not undo what the user set:
+        //   -> desktop:            real change; drop the mode override and any
+        //                          manual visibility, put the OSC away.
+        //   from desktop/unknown:  real change too (a game just started):
+        //                          visibility follows the content; an override
+        //                          chosen on the desktop was chosen for this
+        //                          and only keeps its hide flavour.
+        //   game <-> ambiguous:    possibly a flap; auto applies only while
+        //                          nothing manual is in force.
+        BOOL confirmedDesktop = (contentClass == StreamContentClassDesktop);
+        BOOL realChange = confirmedDesktop
+            || previous == StreamContentClassDesktop || previous == StreamContentClassUnknown;
+        if (confirmedDesktop) _oscModeOverride = OscHideModeAuto;
+        if (realChange) _oscManualVisibility = NO;
+        BOOL manual = !realChange && ((_oscModeOverride != OscHideModeAuto) || _oscManualVisibility);
+        // Game -> bring the OSC up; otherwise put it away so touch drives the mouse.
+        if (!manual) _oscHidden = (contentClass != StreamContentClassGame);
+        Log(LOG_I, @"OSC auto hide-mode: content %@ -> %@, fits 16:9 %d, %@",
+            OscContentClassName(previous), OscContentClassName(contentClass), fitsSixteenNine,
+            manual ? @"manual settings kept" : @"applied");
     }
     if (fitChanged) {
         _snapRatioOverride = SnapRatioOverrideNone;
@@ -3047,6 +3086,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
         _snapRatioOverride = SnapRatioOverrideNone;
         if (wasApplicable && !_oscAutoDetectApplicable) {
             _oscModeOverride = OscHideModeAuto;
+            _oscManualVisibility = NO;
             _oscHidden = NO;
         }
         if (!self->_streamView.widgetToolOpened) {
