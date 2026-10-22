@@ -14,6 +14,7 @@
 #import "MainFrameViewController.h"
 #import "VideoDecoderRenderer.h"
 #import "StreamLetterboxDetector.h"
+#import "HostStateClient.h"
 #import "FrameQueue.h"
 #import "StreamManager.h"
 #import "SceneDelegate.h"
@@ -57,7 +58,7 @@
 #endif
 
 
-@interface StreamFrameViewController () <StreamLetterboxDetectorDelegate>
+@interface StreamFrameViewController () <StreamLetterboxDetectorDelegate, HostStateClientDelegate>
 @end
 
 // What "hide the OSC" means. Auto follows the letterbox detector (game ->
@@ -278,6 +279,9 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     BOOL _oscHidden;                         // right-edge swipe / detector
     OscHideMode _oscModeOverride;            // Auto unless the mode button was tapped this session
     BOOL _oscManualVisibility;               // right-edge swipe used since the last real scene change
+    HostStateClient *_hostStateClient;       // host agent link; outranks the pixel detector while live
+    BOOL _hostAgentLive;
+    BOOL _detectorFits;                      // detector's own 16:9 verdict, kept apart from the applied one
     StreamContentClass _oscDetectedContent;  // last debounced detector verdict
     // YES from viewDidLoad until osc_configureForStream: the OSC stays fully
     // Off (not translucent) while connecting, whatever the hide mode says.
@@ -1153,7 +1157,7 @@ enum { kBackdropSlotToggleRow = 0, kBackdropSlotQuickMenu = 1 };
         };
     }
 
-    BOOL letterboxed = (_oscDetectedContent == StreamContentClassGame);
+    BOOL letterboxed = (self->_streamMan.videoRenderer.letterboxDetector.currentContentClass == StreamContentClassGame);
     BOOL onScreen = [UIApplication sharedApplication].applicationState != UIApplicationStateBackground;
     CGRect video = [self backdrop_videoRectInView];
     BOOL anyActive = NO;
@@ -2328,9 +2332,15 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
 // like before.
 static NSString * const kOscHiddenKey = @"oscHidden";
 
+// Auto mode has a verdict source: the pixel detector (needs decoded frames
+// and a matching aspect) or the host agent (any stream, once connected).
+- (BOOL)osc_autoActive {
+    return _oscAutoDetectApplicable || _hostAgentLive;
+}
+
 - (OscHideMode)osc_effectiveHideMode {
     if (_oscModeOverride != OscHideModeAuto) return _oscModeOverride;
-    if (!_oscAutoDetectApplicable) return OscHideModeGame;
+    if (![self osc_autoActive]) return OscHideModeGame;
     return (_oscDetectedContent == StreamContentClassGame) ? OscHideModeGame : OscHideModeDesk;
 }
 
@@ -2359,7 +2369,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
 - (void)setOscHidden:(BOOL)hidden {
     _oscHidden = hidden;
     _oscManualVisibility = YES;
-    if (!_oscAutoDetectApplicable) {
+    if (![self osc_autoActive]) {
         [[NSUserDefaults standardUserDefaults] setBool:hidden forKey:kOscHiddenKey];
     }
     [self osc_applyPresentation];
@@ -2383,7 +2393,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
         case OscHideModeGame: _oscModeOverride = OscHideModeDesk; break;
         case OscHideModeDesk: _oscModeOverride = OscHideModeAuto; break;
     }
-    if (_oscModeOverride == OscHideModeAuto && _oscAutoDetectApplicable) {
+    if (_oscModeOverride == OscHideModeAuto && [self osc_autoActive]) {
         _oscManualVisibility = NO;
         if (_oscDetectedContent != StreamContentClassUnknown) {
             _oscHidden = (_oscDetectedContent != StreamContentClassGame);
@@ -2402,10 +2412,12 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     _oscDetectedContent = StreamContentClassUnknown;
     _snapRatioOverride = SnapRatioOverrideNone;
     _snapDetectedFits = NO;
+    _detectorFits = NO;
 
     CGFloat streamAspect = (_streamConfig.height > 0) ? (CGFloat)_streamConfig.width / (CGFloat)_streamConfig.height : 0;
     self->_streamMan.videoRenderer.letterboxDetector.delegate = self;
     [self osc_updateAutoDetectApplicabilityForStreamAspect:streamAspect];
+    [self hostAgent_startForHost:_streamConfig.host];
 
     if (_oscAutoDetectApplicable) {
         // Desktop until the detector says game: touch drives the mouse from the
@@ -2478,6 +2490,18 @@ static NSString *OscContentClassName(StreamContentClass c) {
     didChangeContentClass:(StreamContentClass)contentClass
           fitsSixteenNine:(BOOL)fitsSixteenNine {
     if (detector != self->_streamMan.videoRenderer.letterboxDetector) return; // stale session
+    // While the host agent is live it owns the class; the detector still
+    // supplies the 16:9 fit (bars are the only way to know where to snap).
+    _detectorFits = fitsSixteenNine;
+    if (_hostAgentLive) {
+        BOOL fits = (_oscDetectedContent == StreamContentClassGame) ? fitsSixteenNine : NO;
+        [self osc_applyContentClass:_oscDetectedContent fits:fits source:@"detector(fit only)"];
+    } else {
+        [self osc_applyContentClass:contentClass fits:fitsSixteenNine source:@"detector"];
+    }
+}
+
+- (void)osc_applyContentClass:(StreamContentClass)contentClass fits:(BOOL)fitsSixteenNine source:(NSString *)source {
     StreamContentClass previous = _oscDetectedContent;
     BOOL classChanged = (contentClass != previous);
     BOOL fitChanged = (fitsSixteenNine != _snapDetectedFits);
@@ -2504,8 +2528,8 @@ static NSString *OscContentClassName(StreamContentClass c) {
         BOOL manual = !realChange && ((_oscModeOverride != OscHideModeAuto) || _oscManualVisibility);
         // Game -> bring the OSC up; otherwise put it away so touch drives the mouse.
         if (!manual) _oscHidden = (contentClass != StreamContentClassGame);
-        Log(LOG_I, @"OSC auto hide-mode: content %@ -> %@, fits 16:9 %d, %@",
-            OscContentClassName(previous), OscContentClassName(contentClass), fitsSixteenNine,
+        Log(LOG_I, @"OSC auto hide-mode [%@]: content %@ -> %@, fits 16:9 %d, %@",
+            source, OscContentClassName(previous), OscContentClassName(contentClass), fitsSixteenNine,
             manual ? @"manual settings kept" : @"applied");
     }
     if (fitChanged) {
@@ -2517,6 +2541,64 @@ static NSString *OscContentClassName(StreamContentClass c) {
     if (self->_streamView.widgetToolOpened) return;
     if (classChanged) [self osc_applyPresentation];
     if (fitChanged || classChanged) [self applySnapToTopAnimated:YES];
+}
+
+#pragma mark Host agent (HostStateClientDelegate)
+
+// The agent (utilities/pc/voidlink-host-agent) reports game/desk from the
+// window on top of the streamed display. Its desktop is always confirmed, so
+// it never says "ambiguous"; its game needs no bars, which is what the pixel
+// detector cannot tell from a taskbar-less desktop.
+- (void)hostAgent_startForHost:(NSString *)host {
+    [self hostAgent_stop];
+    if (host.length == 0) return;
+    _hostStateClient = [[HostStateClient alloc] initWithHost:host port:HostStateClientDefaultPort];
+    _hostStateClient.delegate = self;
+    [_hostStateClient start];
+}
+
+- (void)hostAgent_stop {
+    _hostStateClient.delegate = nil;
+    [_hostStateClient stop];
+    _hostStateClient = nil;
+    _hostAgentLive = NO;
+}
+
+- (StreamContentClass)hostAgent_classForState:(HostState *)state {
+    return state.game ? StreamContentClassGame : StreamContentClassDesktop;
+}
+
+- (void)hostStateClient:(HostStateClient *)client didReceiveState:(HostState *)state {
+    if (client != _hostStateClient || !_hostAgentLive) return;
+    StreamContentClass cls = [self hostAgent_classForState:state];
+    if (cls == _oscDetectedContent) return; // heartbeat
+    Log(LOG_I, @"[HostAgent] %@: %@ (%@) taskbar=%d primary=%d", state.mode, state.process ?: @"-",
+        state.title ?: @"", state.taskbarOnDisplay, state.displayPrimary);
+    BOOL fits = (cls == StreamContentClassGame) ? _detectorFits : NO;
+    [self osc_applyContentClass:cls fits:fits source:@"agent"];
+}
+
+- (void)hostStateClient:(HostStateClient *)client liveChanged:(BOOL)live {
+    if (client != _hostStateClient) return;
+    _hostAgentLive = live;
+    if (live) {
+        HostState *state = client.lastState;
+        if (!state) return;
+        StreamContentClass cls = [self hostAgent_classForState:state];
+        Log(LOG_I, @"[HostAgent] live, %@: %@", state.mode, state.process ?: @"-");
+        BOOL fits = (cls == StreamContentClassGame) ? _detectorFits : NO;
+        [self osc_applyContentClass:cls fits:fits source:@"agent"];
+        [self osc_applyPresentation]; // auto may have just become available
+        return;
+    }
+    // Back to the pixel detector's own view of the content, if it has one.
+    StreamLetterboxDetector *detector = self->_streamMan.videoRenderer.letterboxDetector;
+    StreamContentClass cls = _oscAutoDetectApplicable ? detector.currentContentClass : StreamContentClassUnknown;
+    Log(LOG_I, @"[HostAgent] stale, falling back to %@", OscContentClassName(cls));
+    if (cls != StreamContentClassUnknown) {
+        [self osc_applyContentClass:cls fits:detector.currentFitsSixteenNine source:@"detector(fallback)"];
+    }
+    [self osc_applyPresentation];
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -3346,6 +3428,7 @@ static NSString *OscContentClassName(StreamContentClass c) {
     // in-flight probe could revive the stream on a popped view controller.
     _hasLeftStreamPage = YES;
     [self stopSelfHealReconnectLoop];
+    [self hostAgent_stop];
 
     [self prepareAutoEnterStateForReturnToMainFrameAllowingBackgroundResume:allowBackgroundResume];
     [self.navigationController popToRootViewControllerAnimated:NO];
