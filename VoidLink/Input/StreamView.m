@@ -54,7 +54,11 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 // down, the first few points of wobble are not sent as moves either.
 #define PENCIL_DOUBLE_CLICK_DEAD_ZONE_DELAY 0.300
 #define PENCIL_DOUBLE_CLICK_DEAD_ZONE_DELTA 0.025f
-#define PENCIL_CONTACT_MOVE_SLOP 3.0f
+// A tap at an angle wanders several points before it lifts; under this much
+// travel a contact is still a click (sent at the landing point), beyond it a
+// drag that presses at the landing point and moves from there. Windows' own
+// drag threshold is 4px, so anything above it would turn a tap into a nudge.
+#define PENCIL_CONTACT_MOVE_SLOP 8.0f
 // Withheld-contact indicator at the tip: a faint dot that grows with force
 // and/or time inside a thin ring that marks the trigger point; reaching the
 // ring is the right button, shown as one ripple that dissipates. Hidden for a
@@ -392,9 +396,17 @@ static __weak UIView *sMultiTouchExemptView = nil;
     
 #if defined(__IPHONE_16_1) || defined(__TVOS_16_1)
     if (@available(iOS 16.1, *)) {
-        UIHoverGestureRecognizer *stylusHoverRecognizer = [[UIHoverGestureRecognizer alloc] initWithTarget:self action:@selector(sendStylusHoverEvent:)];
-        stylusHoverRecognizer.allowedTouchTypes = @[@(UITouchTypePencil)];
-        [self addGestureRecognizer:stylusHoverRecognizer];
+        // One recognizer for the life of the view. Replacing it on every
+        // reconfigure (the host VC strips the view's recognizers and this
+        // runs again) would drop an in-progress hover: the new recognizer
+        // only picks the pencil up once it leaves and re-enters hover range.
+        if (!stylusHoverRecognizer) {
+            stylusHoverRecognizer = [[UIHoverGestureRecognizer alloc] initWithTarget:self action:@selector(sendStylusHoverEvent:)];
+            stylusHoverRecognizer.allowedTouchTypes = @[@(UITouchTypePencil)];
+        }
+        if (stylusHoverRecognizer.view != self) {
+            [self addGestureRecognizer:stylusHoverRecognizer];
+        }
     }
 #endif
     // Apple Pencil hardware gestures: double tap toggles the Windows touch

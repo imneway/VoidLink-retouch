@@ -736,6 +736,9 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
         [self->_streamView endRightEdgeGestureSuppression];
     }
     for (UIGestureRecognizer *recognizer in _streamView.gestureRecognizers) {
+        // The pencil hover recognizer lives for the whole stream: removing it
+        // mid-hover loses the hover until the pencil leaves and re-enters range.
+        if ([recognizer isKindOfClass:[UIHoverGestureRecognizer class]]) continue;
         [_streamView removeGestureRecognizer:recognizer];
     }
     for (UIGestureRecognizer *recognizer in self.view.gestureRecognizers) {
