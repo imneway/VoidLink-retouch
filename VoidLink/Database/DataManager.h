@@ -37,12 +37,17 @@ typedef NS_ENUM(NSInteger, PencilRollMode) {
 // What a stationary Apple Pencil contact becomes (NSUserDefaults @"pencilHoldMode").
 // Off: the left button goes down on contact (hold = left hold). Otherwise the
 // press is withheld until the contact declares itself: move = left drag,
-// lift = left click, held past pencilHoldDelay = right button (LongPress) or
-// left button (LongPressHardPress, where pressing hard is the right button).
+// lift = left click, and a contact that stays put is
+//   LongPress:          right button after pencilHoldDelay
+//   LongPressHardPress: right button after pencilHoldDelay, or at once when
+//                       pressed past pencilHardPressThreshold
+//   HardPressOnly:      right button only when pressed hard; after the delay
+//                       a light hold is a held LEFT button
 typedef NS_ENUM(NSInteger, PencilHoldMode) {
     PencilHoldModeOff = 0,
     PencilHoldModeLongPress = 1,
     PencilHoldModeLongPressHardPress = 2,
+    PencilHoldModeHardPressOnly = 3,
 };
 #define PencilHoldDelayDefault 500.0f   // ms
 #define PencilHoldDelayMin 300.0f

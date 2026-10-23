@@ -2342,7 +2342,7 @@ BOOL isCustomResolution(int resolutionSelected) {
 }
 
 // Stationary pencil contact. NSUserDefaults @"pencilHoldMode", persisted
-// immediately. Order matches PencilHoldMode: Off=0, LongPress=1, LongPress+HardPress=2.
+// immediately. Order matches PencilHoldMode: Off=0, LongPress=1, LongPress+HardPress=2, HardPressOnly=3.
 - (void) installPencilHoldModeControl {
     UILabel *label = [[UILabel alloc] init];
     label.text = [LocalizationHelper localizedStringForKey:@"Pencil Hold"];
@@ -2352,11 +2352,12 @@ BOOL isCustomResolution(int resolutionSelected) {
     self.pencilHoldModeSelector = [[UISegmentedControl alloc] initWithItems:@[
         [LocalizationHelper localizedStringForKey:@"Off"],
         [LocalizationHelper localizedStringForKey:@"Long Press"],
-        [LocalizationHelper localizedStringForKey:@"+ Hard Press"],
+        [LocalizationHelper localizedStringForKey:@"Long + Hard"],
+        [LocalizationHelper localizedStringForKey:@"Hard Only"],
     ]];
     id saved = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilHoldMode"];
     NSInteger savedIndex = saved ? [saved integerValue] : PencilHoldModeLongPressHardPress;
-    if (savedIndex < 0 || savedIndex > 2) savedIndex = PencilHoldModeLongPressHardPress;
+    if (savedIndex < 0 || savedIndex > 3) savedIndex = PencilHoldModeLongPressHardPress;
     self.pencilHoldModeSelector.selectedSegmentIndex = savedIndex;
     [self.pencilHoldModeSelector setTitleTextAttributes:@{ NSForegroundColorAttributeName: [UIColor whiteColor] } forState:UIControlStateNormal];
     [self.pencilHoldModeSelector addTarget:self action:@selector(pencilHoldModeChanged:) forControlEvents:UIControlEventValueChanged];

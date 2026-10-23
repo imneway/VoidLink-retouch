@@ -55,6 +55,14 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 #define PENCIL_DOUBLE_CLICK_DEAD_ZONE_DELAY 0.300
 #define PENCIL_DOUBLE_CLICK_DEAD_ZONE_DELTA 0.025f
 #define PENCIL_CONTACT_MOVE_SLOP 3.0f
+// Withheld-contact indicator (ring at the tip): hidden for a plain tap, shown
+// once the contact has lasted this long or the force has reached this share
+// of the hard-press threshold. Ring radius grows with force, the arc with
+// time; it fills and pulses the moment the contact becomes the right button.
+#define PENCIL_INDICATOR_REVEAL_DELAY 0.12
+#define PENCIL_INDICATOR_REVEAL_FORCE_SHARE 0.3f
+#define PENCIL_INDICATOR_RADIUS_MIN 5.0f
+#define PENCIL_INDICATOR_RADIUS_MAX 14.0f
 
 static BOOL RSPADALT2ValueNear(CGFloat value, CGFloat target, CGFloat tolerance) {
     return fabs(value - target) < tolerance;
@@ -117,6 +125,15 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     BOOL pencilContactActive;        // tip on glass (a host button may or may not be held yet, see pencilContactButton)
     int pencilContactButton;         // 0 = none yet (press withheld), BUTTON_LEFT or BUTTON_RIGHT held on the host
     NSTimer *pencilHoldTimer;        // fires when a withheld contact has stayed put for pencilHoldDelay
+    NSTimeInterval pencilContactStartTime; // UITouch timestamp of the current contact
+    CGFloat pencilContactForceRatio; // last force / maximumPossibleForce of the current contact
+    // Withheld-contact indicator, see pencilIndicator*
+    UIView *pencilIndicatorView;     // on streamFrameTopLayerView (above the video), never interactive
+    CAShapeLayer *pencilIndicatorRing;
+    NSTimer *pencilIndicatorRevealTimer;
+    BOOL pencilIndicatorShown;
+    NSUInteger pencilIndicatorGeneration; // bumps on every reveal/hide so stale animation completions do nothing
+    UIWindow *pencilHapticWindow;    // window the haptic generator was bound to
     CGPoint pencilContactDownLocation; // where the current contact started
     BOOL pencilContactMoved;         // contact travelled past PENCIL_CONTACT_MOVE_SLOP: it is a drag
     NSTimeInterval pencilLastLiftTime; // for the double-click dead zone
@@ -140,7 +157,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     CGFloat pencilRollLastAngle;     // radians, last hover sample
     CGFloat pencilRollAccumulated;   // degrees since the last step / dead-zone start
     CGPoint pencilRollLastLocation;  // tip position at the last hover sample
-    UISelectionFeedbackGenerator *pencilRollFeedback; // view-bound (iOS 17.5) so Pencil Pro plays it: one tick per step
+    UISelectionFeedbackGenerator *pencilRollFeedback; // view-bound (iOS 17.5) so Pencil Pro plays it; built lazily by pencilHapticTick
     NSMutableSet* keysDown;
     float streamAspectRatio;
 
@@ -384,16 +401,6 @@ static __weak UIView *sMultiTouchExemptView = nil;
         pencilInteraction.delegate = self;
         [self addInteraction:pencilInteraction];
     }
-#if defined(__IPHONE_17_5)
-    if (@available(iOS 17.5, *)) {
-        if (!pencilRollFeedback) {
-            // A view-bound generator plays on Apple Pencil Pro while the pencil
-            // is in use over that view. UICanvasFeedbackGenerator (alignment
-            // ticks) stayed silent on device; the selection tick does not.
-            pencilRollFeedback = [UISelectionFeedbackGenerator feedbackGeneratorForView:self];
-        }
-    }
-#endif
 #endif
     
     x1mouse = [[X1Mouse alloc] init];
@@ -1150,19 +1157,35 @@ static __weak UIView *sMultiTouchExemptView = nil;
                 pencilLastLiftTime = 0; // this tap moved the cursor: it cannot pair with the previous lift
             }
             pencilContactDownLocation = viewLocation;
+            pencilContactStartTime = event.timestamp;
+            pencilContactForceRatio = [self pencilForceRatio:event];
             pencilContactMoved = NO;
             pencilContactActive = YES;
             pencilContactButton = 0;
+            BOOL hardPressIsRight = (holdMode == PencilHoldModeLongPressHardPress || holdMode == PencilHoldModeHardPressOnly);
             if (holdMode == PencilHoldModeOff) {
                 [self commitPencilContactButton:BUTTON_LEFT];
-            } else if (holdMode == PencilHoldModeLongPressHardPress
-                       && [self pencilForceRatio:event] >= MAX(PencilHardPressThresholdMin, settings.pencilHardPressThreshold.floatValue) / 100.0) {
+            } else if (hardPressIsRight
+                       && pencilContactForceRatio >= MAX(PencilHardPressThresholdMin, settings.pencilHardPressThreshold.floatValue) / 100.0) {
                 // Already pressing hard on landing: no move may follow to notice it.
                 Log(LOG_I, @"Pencil hard press on contact: right button");
                 [self commitPencilContactButton:BUTTON_RIGHT];
             } else {
                 // Withhold the press until the contact declares itself: move →
                 // left drag, lift → left click, stay put → see onPencilHoldTimeout.
+                // The indicator stays hidden for a plain tap: it appears only
+                // once the contact outlasts a tap or starts pressing hard.
+                [pencilIndicatorRevealTimer invalidate];
+                pencilIndicatorRevealTimer = [NSTimer timerWithTimeInterval:PENCIL_INDICATOR_REVEAL_DELAY
+                                                                     target:self
+                                                                   selector:@selector(onPencilIndicatorRevealTimer:)
+                                                                   userInfo:nil
+                                                                    repeats:NO];
+                [[NSRunLoop mainRunLoop] addTimer:pencilIndicatorRevealTimer forMode:NSRunLoopCommonModes];
+                if (hardPressIsRight
+                    && pencilContactForceRatio >= MAX(PencilHardPressThresholdMin, settings.pencilHardPressThreshold.floatValue) / 100.0 * PENCIL_INDICATOR_REVEAL_FORCE_SHARE) {
+                    [self pencilIndicatorReveal]; // landing already firm: show at once
+                }
                 [pencilHoldTimer invalidate];
                 pencilHoldTimer = [NSTimer timerWithTimeInterval:MAX(PencilHoldDelayMin, settings.pencilHoldDelay.floatValue) / 1000.0
                                                           target:self
@@ -1188,14 +1211,21 @@ static __weak UIView *sMultiTouchExemptView = nil;
                 || hypot(viewLocation.x - pencilContactDownLocation.x, viewLocation.y - pencilContactDownLocation.y) >= PENCIL_CONTACT_MOVE_SLOP;
             if (pencilContactButton == 0) {
                 // Still withheld. (Force changes arrive as moves too.)
+                pencilContactForceRatio = [self pencilForceRatio:event];
+                CGFloat threshold = MAX(PencilHardPressThresholdMin, settings.pencilHardPressThreshold.floatValue) / 100.0;
+                BOOL hardPressIsRight = (holdMode == PencilHoldModeLongPressHardPress || holdMode == PencilHoldModeHardPressOnly);
                 if (pastSlop) {
                     [self commitPencilContactButton:BUTTON_LEFT]; // a drag: press at the origin, then move
-                } else if (holdMode == PencilHoldModeLongPressHardPress
-                           && [self pencilForceRatio:event] >= MAX(PencilHardPressThresholdMin, settings.pencilHardPressThreshold.floatValue) / 100.0) {
+                } else if (hardPressIsRight && pencilContactForceRatio >= threshold) {
                     Log(LOG_I, @"Pencil hard press: right button");
                     [self commitPencilContactButton:BUTTON_RIGHT];
                     break;
                 } else {
+                    if (hardPressIsRight && pencilContactForceRatio >= threshold * PENCIL_INDICATOR_REVEAL_FORCE_SHARE) {
+                        [self pencilIndicatorReveal];
+                    }
+                    [self pencilIndicatorApplyForce:pencilContactForceRatio];
+                    [self pencilIndicatorMoveTo:viewLocation];
                     break;
                 }
             }
@@ -1209,6 +1239,7 @@ static __weak UIView *sMultiTouchExemptView = nil;
             if (pencilContactActive) {
                 [pencilHoldTimer invalidate];
                 pencilHoldTimer = nil;
+                [self pencilIndicatorHide];
                 if (pencilContactButton == 0) {
                     // Short stationary contact: one clean left click at the
                     // origin (the cursor is already there). A cancel sends nothing.
@@ -1251,8 +1282,10 @@ static __weak UIView *sMultiTouchExemptView = nil;
     pencilContactButton = button;
     LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, button);
     if (button == BUTTON_RIGHT) {
-        [pencilRollFeedback selectionChanged]; // felt confirmation: this contact is the right button now
-        [pencilRollFeedback prepare];
+        [self pencilIndicatorTriggered];
+        [self pencilHapticTick]; // felt confirmation: this contact is the right button now
+    } else {
+        [self pencilIndicatorHide];
     }
 }
 
@@ -1268,15 +1301,184 @@ static __weak UIView *sMultiTouchExemptView = nil;
     pencilHoldTimer = nil;
     if (!pencilContactActive || pencilContactButton != 0) return;
     NSInteger holdMode = settings.pencilHoldMode.integerValue;
-    if (holdMode == PencilHoldModeLongPress) {
+    if (holdMode == PencilHoldModeLongPress || holdMode == PencilHoldModeLongPressHardPress) {
         Log(LOG_I, @"Pencil long press: right button");
         [self commitPencilContactButton:BUTTON_RIGHT];
-    } else if (holdMode == PencilHoldModeLongPressHardPress) {
+    } else if (holdMode == PencilHoldModeHardPressOnly) {
         // Light hold: a held left button (hard press would have been the
         // right button before now).
         Log(LOG_I, @"Pencil long press (light): left button held");
         [self commitPencilContactButton:BUTTON_LEFT];
     }
+}
+
+// One haptic tick on the Apple Pencil Pro. The generator is bound to this
+// view's WINDOW, so it is built lazily the first time it is needed while the
+// view is on screen (a generator made before the view had a window never
+// plays) and rebuilt if the window changes.
+- (void)pencilHapticTick {
+#if defined(__IPHONE_17_5)
+    if (@available(iOS 17.5, *)) {
+        UIWindow *window = self.window;
+        if (!window) {
+            Log(LOG_W, @"Pencil haptic: no window, skipped");
+            return;
+        }
+        if (!pencilRollFeedback || pencilHapticWindow != window) {
+            pencilRollFeedback = [UISelectionFeedbackGenerator feedbackGeneratorForView:self];
+            pencilHapticWindow = window;
+            [pencilRollFeedback prepare];
+            Log(LOG_I, @"Pencil haptic: generator bound to window %p", window);
+        }
+        [pencilRollFeedback selectionChanged];
+        [pencilRollFeedback prepare];
+    }
+#endif
+}
+
+#pragma mark - Withheld-contact indicator
+
+- (void)pencilIndicatorEnsureView {
+    UIView *host = self.streamFrameTopLayerView ?: self;
+    if (!pencilIndicatorView) {
+        pencilIndicatorView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, PENCIL_INDICATOR_RADIUS_MAX * 2 + 8, PENCIL_INDICATOR_RADIUS_MAX * 2 + 8)];
+        pencilIndicatorView.userInteractionEnabled = NO;
+        pencilIndicatorView.backgroundColor = [UIColor clearColor];
+        pencilIndicatorRing = [CAShapeLayer layer];
+        pencilIndicatorRing.frame = pencilIndicatorView.bounds;
+        pencilIndicatorRing.strokeColor = [UIColor colorWithWhite:1 alpha:0.9].CGColor;
+        pencilIndicatorRing.fillColor = [UIColor clearColor].CGColor;
+        pencilIndicatorRing.lineWidth = 2;
+        pencilIndicatorRing.lineCap = kCALineCapRound;
+        pencilIndicatorRing.shadowColor = [UIColor blackColor].CGColor;
+        pencilIndicatorRing.shadowOpacity = 0.6;
+        pencilIndicatorRing.shadowRadius = 1.5;
+        pencilIndicatorRing.shadowOffset = CGSizeZero;
+        [pencilIndicatorView.layer addSublayer:pencilIndicatorRing];
+    }
+    if (pencilIndicatorView.superview != host) {
+        [pencilIndicatorView removeFromSuperview];
+        [host addSubview:pencilIndicatorView];
+    }
+    [host bringSubviewToFront:pencilIndicatorView];
+}
+
+- (void)pencilIndicatorSetRadius:(CGFloat)radius {
+    CGPoint c = CGPointMake(CGRectGetMidX(pencilIndicatorView.bounds), CGRectGetMidY(pencilIndicatorView.bounds));
+    // Arc starts at 12 o'clock so the time progress reads like a clock.
+    UIBezierPath *path = [UIBezierPath bezierPathWithArcCenter:c radius:radius startAngle:-M_PI_2 endAngle:M_PI_2 * 3 clockwise:YES];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    pencilIndicatorRing.path = path.CGPath;
+    [CATransaction commit];
+}
+
+- (void)pencilIndicatorMoveTo:(CGPoint)viewLocation {
+    UIView *host = pencilIndicatorView.superview;
+    if (!host) return;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    pencilIndicatorView.center = [self convertPoint:viewLocation toView:host];
+    [CATransaction commit];
+}
+
+// Shows the ring for the current withheld contact (idempotent). The arc runs
+// from the elapsed share of the hold delay to full over what is left of it,
+// but only when the delay ends in a right click; otherwise the ring is a
+// plain circle that only grows with force.
+- (void)pencilIndicatorReveal {
+    [self pencilIndicatorRevealForce:NO];
+}
+
+// force: also reveal a ring for a contact that has already become the right
+// button (a fast hard press commits before the 120ms reveal), so the fill +
+// pulse confirmation is never skipped.
+- (void)pencilIndicatorRevealForce:(BOOL)force {
+    if (pencilIndicatorShown || !pencilContactActive) return;
+    if (pencilContactButton != 0 && !(force && pencilContactButton == BUTTON_RIGHT)) return;
+    [pencilIndicatorRevealTimer invalidate];
+    pencilIndicatorRevealTimer = nil;
+    pencilIndicatorShown = YES;
+    pencilIndicatorGeneration++;
+    [self pencilIndicatorEnsureView];
+    [pencilIndicatorView.layer removeAllAnimations];
+    [pencilIndicatorRing removeAllAnimations];
+    pencilIndicatorView.alpha = 1;
+    pencilIndicatorView.transform = CGAffineTransformIdentity;
+    pencilIndicatorRing.fillColor = [UIColor clearColor].CGColor;
+    [self pencilIndicatorMoveTo:pencilContactDownLocation];
+    [self pencilIndicatorApplyForce:pencilContactForceRatio];
+
+    NSInteger holdMode = settings.pencilHoldMode.integerValue;
+    BOOL delayEndsInRightClick = (holdMode == PencilHoldModeLongPress || holdMode == PencilHoldModeLongPressHardPress);
+    NSTimeInterval delay = MAX(PencilHoldDelayMin, settings.pencilHoldDelay.floatValue) / 1000.0;
+    NSTimeInterval elapsed = [NSProcessInfo processInfo].systemUptime - pencilContactStartTime;
+    CGFloat progress = MIN(1.0, MAX(0.0, elapsed / delay));
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    pencilIndicatorRing.strokeStart = 0;
+    pencilIndicatorRing.strokeEnd = delayEndsInRightClick ? progress : 1;
+    [CATransaction commit];
+    if (delayEndsInRightClick && progress < 1) {
+        CABasicAnimation *arc = [CABasicAnimation animationWithKeyPath:@"strokeEnd"];
+        arc.fromValue = @(progress);
+        arc.toValue = @(1);
+        arc.duration = delay - elapsed;
+        arc.fillMode = kCAFillModeForwards;
+        arc.removedOnCompletion = NO;
+        [pencilIndicatorRing addAnimation:arc forKey:@"arc"];
+    }
+}
+
+- (void)pencilIndicatorApplyForce:(CGFloat)ratio {
+    if (!pencilIndicatorShown) return;
+    CGFloat threshold = MAX(PencilHardPressThresholdMin, settings.pencilHardPressThreshold.floatValue) / 100.0;
+    CGFloat share = MIN(1.0, MAX(0.0, ratio / threshold));
+    [self pencilIndicatorSetRadius:PENCIL_INDICATOR_RADIUS_MIN + (PENCIL_INDICATOR_RADIUS_MAX - PENCIL_INDICATOR_RADIUS_MIN) * share];
+}
+
+// The contact just became the right button: fill the ring and pulse once.
+- (void)pencilIndicatorTriggered {
+    [self pencilIndicatorRevealForce:YES];
+    if (!pencilIndicatorShown) return;
+    [pencilIndicatorRing removeAnimationForKey:@"arc"];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    pencilIndicatorRing.strokeEnd = 1;
+    pencilIndicatorRing.fillColor = [UIColor colorWithWhite:1 alpha:0.85].CGColor;
+    [CATransaction commit];
+    [self pencilIndicatorSetRadius:PENCIL_INDICATOR_RADIUS_MAX];
+    NSUInteger generation = pencilIndicatorGeneration;
+    [UIView animateWithDuration:0.12 animations:^{
+        self->pencilIndicatorView.transform = CGAffineTransformMakeScale(1.5, 1.5);
+    } completion:^(BOOL finished) {
+        // A hide or a new contact in the meantime owns the transform now.
+        if (!finished || generation != self->pencilIndicatorGeneration) return;
+        [UIView animateWithDuration:0.18 animations:^{
+            self->pencilIndicatorView.transform = CGAffineTransformMakeScale(0.8, 0.8);
+        }];
+    }];
+}
+
+- (void)pencilIndicatorHide {
+    [pencilIndicatorRevealTimer invalidate];
+    pencilIndicatorRevealTimer = nil;
+    if (!pencilIndicatorShown) return;
+    pencilIndicatorShown = NO;
+    pencilIndicatorGeneration++;
+    [pencilIndicatorRing removeAllAnimations];
+    [pencilIndicatorView.layer removeAllAnimations];
+    [UIView animateWithDuration:0.15 animations:^{
+        self->pencilIndicatorView.alpha = 0;
+    } completion:^(BOOL finished) {
+        if (!self->pencilIndicatorShown) self->pencilIndicatorView.transform = CGAffineTransformIdentity;
+    }];
+}
+
+- (void)onPencilIndicatorRevealTimer:(NSTimer *)timer {
+    if (timer != pencilIndicatorRevealTimer) return;
+    pencilIndicatorRevealTimer = nil;
+    [self pencilIndicatorReveal];
 }
 
 // Routes every pencil touch in `touches` through sendStylusEvent and returns
@@ -1298,6 +1500,7 @@ static __weak UIView *sMultiTouchExemptView = nil;
 - (void)resetPencilState {
     [pencilHoldTimer invalidate];
     pencilHoldTimer = nil;
+    [self pencilIndicatorHide];
     if (pencilContactActive) {
         pencilContactActive = NO;
         [self releasePencilContactButton];
@@ -1319,7 +1522,6 @@ static __weak UIView *sMultiTouchExemptView = nil;
             isPencilHovering = YES;
             CGPoint location = [gesture locationInView:self];
             pencilHoverLocation = location;
-            if (gesture.state == UIGestureRecognizerStateBegan) [pencilRollFeedback prepare];
             BOOL rollFrozeCursor = [self handlePencilRoll:gesture atLocation:location];
             // Between the two taps of a double click the hover briefly resumes;
             // a cursor move there would split the clicks just like a tap would.
@@ -1422,8 +1624,7 @@ static __weak UIView *sMultiTouchExemptView = nil;
     Log(LOG_D, @"Pencil roll step %+d (mode %ld)", direction, (long)mode);
 #if defined(__IPHONE_17_5)
     if (@available(iOS 17.5, *)) {
-        [pencilRollFeedback selectionChanged];
-        [pencilRollFeedback prepare]; // keep the pencil's haptic engine warm for the next step
+        [self pencilHapticTick];
     }
 #endif
 }
@@ -1516,8 +1717,7 @@ static __weak UIView *sMultiTouchExemptView = nil;
         }
         notches -= clicks;
     }
-    [pencilRollFeedback selectionChanged];
-    [pencilRollFeedback prepare];
+    [self pencilHapticTick];
 }
 
 - (void)startPencilScrollLink {

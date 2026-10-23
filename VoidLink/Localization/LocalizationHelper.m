@@ -24,8 +24,9 @@
     dispatch_once(&onceToken, ^{
         zhDict = @{
             @"Pencil Hold": @"Pencil 长按",
-            @"Long Press": @"长按右键",
-            @"+ Hard Press": @"长按 + 重按",
+            @"Long Press": @"长按",
+            @"Long + Hard": @"长按+重按",
+            @"Hard Only": @"仅重按",
             @"Pencil Hold Delay": @"Pencil 长按时长",
             @"Pencil Hard Press Threshold": @"Pencil 重按阈值",
             @"Pencil Roll": @"Pencil 滚转",
