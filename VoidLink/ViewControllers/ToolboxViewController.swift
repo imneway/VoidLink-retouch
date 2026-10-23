@@ -13,7 +13,6 @@ import UIKit
     @objc optional func bringUpSoftKeyboard()
     @objc optional func enterPip()
     @objc optional func toggleStatsOverlay()
-    @objc optional func toggleStreamTouchBlock()
     @objc optional func disconnectAndQuitApp()
 }
 
@@ -33,18 +32,16 @@ import UIKit
     private let exitButton = UIButton(type: .system)
     private let viewBackgroundColor = UIColor(white: 0.2, alpha: 0.8);
     private let titleLabel = UILabel()
-    @objc public var specialEntries : NSMutableArray = ["widgetLayoutTool", "bringUpSoftKeyboard", "enterPip", "toggleStatsOverlay", "toggleStreamTouchBlock", "disconnectAndQuitApp"]
-    @objc public static let streamTouchBlockDefaultsKey = "blockStreamTouchWhileOscActive"
+    @objc public var specialEntries : NSMutableArray = ["widgetLayoutTool", "bringUpSoftKeyboard", "enterPip", "toggleStatsOverlay", "disconnectAndQuitApp"]
     private let specialEntryAliasDic : [String:String] = [
         "widgetLayoutTool":SwiftLocalizationHelper.localizedString(forKey: "[ On-screen widget tool ]"),
         "bringUpSoftKeyboard":SwiftLocalizationHelper.localizedString(forKey: "[ Bring up soft keyboard ]"),
         "enterPip":SwiftLocalizationHelper.localizedString(forKey: "[ Enter picture-in-picture mode ]"),
         "toggleStatsOverlay":SwiftLocalizationHelper.localizedString(forKey: "[ Toggle stats overlay & graphs ]"),
-        "toggleStreamTouchBlock":SwiftLocalizationHelper.localizedString(forKey: "[ Block stream touch while OSC is on ]"),
         "disconnectAndQuitApp":SwiftLocalizationHelper.localizedString(forKey: "[ Disconnect & quit app ]")
     ]
     // Only show whitelisted special entries without deleting others, so they can be restored later
-    private let allowedSpecialEntries: Set<String> = ["toggleStatsOverlay", "toggleStreamTouchBlock"]
+    private let allowedSpecialEntries: Set<String> = ["toggleStatsOverlay"]
     
     private var isEditingMode: Bool = false {
         didSet {
@@ -330,14 +327,7 @@ import UIKit
         cell.selectedBackgroundView = selectedBackgroundView
         
         if indexPath.row < specialEntries.count {
-            let key = specialEntries[indexPath.row] as! String
-            var title = specialEntryAliasDic[key] ?? key
-            if key == "toggleStreamTouchBlock" {
-                // Current state in the title: the toggle has no other indicator.
-                let on = UserDefaults.standard.bool(forKey: ToolboxViewController.streamTouchBlockDefaultsKey)
-                title += on ? " ✓" : ""
-            }
-            cell.textLabel?.text = title
+            cell.textLabel?.text = specialEntryAliasDic[specialEntries[indexPath.row] as! String]
             cell.imageView?.image = nil
             cell.accessoryView = nil
             cell.editingAccessoryType = .none
@@ -464,8 +454,6 @@ import UIKit
             specialEntryDelegate?.enterPip?()
         case "toggleStatsOverlay":
             specialEntryDelegate?.toggleStatsOverlay?()
-        case "toggleStreamTouchBlock":
-            specialEntryDelegate?.toggleStreamTouchBlock?()
         case "disconnectAndQuitApp":
             specialEntryDelegate?.disconnectAndQuitApp?()
         default: break

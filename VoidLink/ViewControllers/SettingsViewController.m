@@ -22,8 +22,10 @@
 #import <AVFoundation/AVFoundation.h>
 
 #import "LocalizationHelper.h"
+#import "StreamView.h"
 
 @implementation SettingsViewController {
+    UISwitch *_streamTouchBlockSwitch;
     NSLayoutConstraint *parentStackLeadingConstraint;
     NSLayoutConstraint *parentStackWidthConstraint;
     
@@ -635,6 +637,39 @@ BOOL isCustomResolution(int resolutionSelected) {
     self.swapAbaxyStack.spacing = 8;
     [self.swapAbaxyStack addArrangedSubview:swapAbRow];
     [self.swapAbaxyStack addArrangedSubview:swapXyRow];
+}
+
+// "Block stream touch while OSC is on": lives in NSUserDefaults (not the
+// Settings entity) and applies live via reConfigStreamViewRealtime when the
+// sidebar closes. Sits right under the touch-mode controls.
+- (void)installStreamTouchBlockControl {
+    if (_streamTouchBlockSwitch || !self.enableOswSwitchStack) return;
+    UIStackView *parent = (UIStackView *)self.enableOswSwitchStack.superview;
+    if (![parent isKindOfClass:[UIStackView class]]) return;
+
+    UILabel *reference = nil;
+    for (UIView *view in self.enableOswSwitchStack.arrangedSubviews) {
+        if ([view isKindOfClass:[UILabel class]]) { reference = (UILabel *)view; break; }
+    }
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.font = reference ? reference.font : [UIFont systemFontOfSize:17];
+    label.textColor = reference ? reference.textColor : [UIColor labelColor];
+    label.textAlignment = reference ? reference.textAlignment : NSTextAlignmentLeft;
+    label.text = [LocalizationHelper localizedStringForKey:@"Block stream touch while OSC is on"];
+
+    _streamTouchBlockSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    _streamTouchBlockSwitch.onTintColor = self.enableOswForNativeTouchSwitch.onTintColor;
+    [_streamTouchBlockSwitch setOn:[[NSUserDefaults standardUserDefaults] boolForKey:StreamViewBlockStreamTouchDefaultsKey]];
+    [_streamTouchBlockSwitch addTarget:self action:@selector(streamTouchBlockSwitchFlipped:) forControlEvents:UIControlEventValueChanged];
+
+    UIStackView *row = [self swapButtonRowWithLabel:label switch:_streamTouchBlockSwitch];
+    NSUInteger index = [parent.arrangedSubviews indexOfObject:self.enableOswSwitchStack];
+    if (index == NSNotFound) [parent addArrangedSubview:row];
+    else [parent insertArrangedSubview:row atIndex:index + 1];
+}
+
+- (void)streamTouchBlockSwitchFlipped:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:StreamViewBlockStreamTouchDefaultsKey];
 }
 
 - (NSMutableArray<NSMutableDictionary*> *)physicalControllerComboMappings {
@@ -1972,6 +2007,7 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self.enableOswForNativeTouchSwitch setOn:currentSettings.touchMode.intValue != NativeTouchOnly];
     [self.enableOswForNativeTouchSwitch addTarget:self action:@selector(enableOswForNativeTouchSwitchFlipped:) forControlEvents:UIControlEventValueChanged];
     [self enableOswForNativeTouchSwitchFlipped:self.enableOswForNativeTouchSwitch];
+    [self installStreamTouchBlockControl];
 
     [self.externalDisplayModeSelector setSelectedSegmentIndex:currentSettings.externalDisplayMode.integerValue];
     [self.localMousePointerModeSelector setSelectedSegmentIndex:currentSettings.localMousePointerMode.integerValue];

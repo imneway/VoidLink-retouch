@@ -751,6 +751,7 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
         _settings = [[[DataManager alloc] init] getSettings];  //StreamFrameViewController retrieve the settings here.
     }
     overlayLevel = _settings.statsOverlayLevel.intValue;
+    self->_streamView.blockStreamTouchesWhileOscActive = VoidStreamTouchBlockEnabled(); // sidebar switch
     if(viewIsBeingResized) viewIsBeingResized = false;
     else [self configOscLayoutTool];
     [self updateToolboxSpecialEntries];
@@ -901,7 +902,7 @@ static BOOL VoidGyroToggleEnabled(void) {
 }
 
 static BOOL VoidStreamTouchBlockEnabled(void) {
-    return [[NSUserDefaults standardUserDefaults] boolForKey:[ToolboxViewController streamTouchBlockDefaultsKey]];
+    return [[NSUserDefaults standardUserDefaults] boolForKey:StreamViewBlockStreamTouchDefaultsKey];
 }
 
 static BOOL VoidStreamOrientationLockEnabled(void) {
@@ -4453,13 +4454,6 @@ static NSString *OscContentClassName(StreamContentClass c) {
         [self setNeedsUpdateOfHomeIndicatorAutoHidden];
     }
 #endif
-}
-
-- (void)toggleStreamTouchBlock {
-    BOOL on = !VoidStreamTouchBlockEnabled();
-    [[NSUserDefaults standardUserDefaults] setBool:on forKey:[ToolboxViewController streamTouchBlockDefaultsKey]];
-    self->_streamView.blockStreamTouchesWhileOscActive = on;
-    Log(LOG_I, @"Stream touch block while OSC active: %@", on ? @"on" : @"off");
 }
 
 - (void)toggleStatsOverlay{

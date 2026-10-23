@@ -6118,25 +6118,25 @@
         }
       }
     },
-    "[ Block stream touch while OSC is on ]" : {
+    "Block stream touch while OSC is on" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[ OSC 显示时屏蔽串流触摸 ]"
+            "value" : "OSC 显示时屏蔽串流触摸"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[ OSC 顯示時屏蔽串流觸控 ]"
+            "value" : "OSC 顯示時屏蔽串流觸控"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[ OSC 顯示時屏蔽串流觸控 ]"
+            "value" : "OSC 顯示時屏蔽串流觸控"
           }
         }
       }

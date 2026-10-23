@@ -96,6 +96,8 @@ typedef NS_ENUM(NSInteger, OscPresentation) {
 // still get their touches; pencil, trackpad and mouse are unaffected. For
 // games that flip to a keyboard+mouse UI on any stray mouse event.
 @property (nonatomic) BOOL blockStreamTouchesWhileOscActive;
+// NSUserDefaults key behind it (settings sidebar switch).
+extern NSString * const StreamViewBlockStreamTouchDefaultsKey;
 // YES when the legacy OSC level is on or any widget is attached — i.e. there is
 // something for a hold to suspend.
 - (BOOL)hasAnyOnScreenControls;
