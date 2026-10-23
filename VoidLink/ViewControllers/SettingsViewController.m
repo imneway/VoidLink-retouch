@@ -895,6 +895,8 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self installGyroInvertControls];
     [self addSetting:self.gyroInvertPitchStack ofId:@"gyroInvertPitchStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self addSetting:self.gyroInvertYawStack ofId:@"gyroInvertYawStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
+    [self installPencilRollModeControl];
+    [self addSetting:self.pencilRollModeStack ofId:@"pencilRollModeStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [touchAndControlSection addToParentStack:_parentStack];
     [touchAndControlSection setExpanded:YES];
 
@@ -2225,6 +2227,38 @@ BOOL isCustomResolution(int resolutionSelected) {
     self.mapGyroToStack.spacing = 4;
     self.mapGyroToStack.alignment = UIStackViewAlignmentFill;
     self.mapGyroToStack.translatesAutoresizingMaskIntoConstraints = NO;
+}
+
+// Apple Pencil Pro barrel roll while hovering. NSUserDefaults @"pencilRollMode",
+// persisted immediately; StreamView reads it through TemporarySettings on
+// every (re)configure. Order matches PencilRollMode: Off=0, ArrowKeys=1, Wheel=2.
+- (void) installPencilRollModeControl {
+    UILabel *label = [[UILabel alloc] init];
+    label.text = [LocalizationHelper localizedStringForKey:@"Pencil Roll"];
+    label.font = [UIFont systemFontOfSize:18];
+    label.textColor = [UIColor whiteColor];
+
+    self.pencilRollModeSelector = [[UISegmentedControl alloc] initWithItems:@[
+        [LocalizationHelper localizedStringForKey:@"Off"],
+        [LocalizationHelper localizedStringForKey:@"Arrow Keys"],
+        [LocalizationHelper localizedStringForKey:@"Wheel"],
+    ]];
+    id saved = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilRollMode"];
+    NSInteger savedIndex = saved ? [saved integerValue] : PencilRollModeArrowKeys;
+    if (savedIndex < 0 || savedIndex > 2) savedIndex = PencilRollModeArrowKeys;
+    self.pencilRollModeSelector.selectedSegmentIndex = savedIndex;
+    [self.pencilRollModeSelector setTitleTextAttributes:@{ NSForegroundColorAttributeName: [UIColor whiteColor] } forState:UIControlStateNormal];
+    [self.pencilRollModeSelector addTarget:self action:@selector(pencilRollModeChanged:) forControlEvents:UIControlEventValueChanged];
+
+    self.pencilRollModeStack = [[UIStackView alloc] initWithArrangedSubviews:@[label, self.pencilRollModeSelector]];
+    self.pencilRollModeStack.axis = UILayoutConstraintAxisVertical;
+    self.pencilRollModeStack.spacing = 4;
+    self.pencilRollModeStack.alignment = UIStackViewAlignmentFill;
+    self.pencilRollModeStack.translatesAutoresizingMaskIntoConstraints = NO;
+}
+
+- (void) pencilRollModeChanged:(UISegmentedControl* )sender {
+    [[NSUserDefaults standardUserDefaults] setInteger:sender.selectedSegmentIndex forKey:@"pencilRollMode"];
 }
 
 - (void) mapGyroToChanged:(UISegmentedControl* )sender {

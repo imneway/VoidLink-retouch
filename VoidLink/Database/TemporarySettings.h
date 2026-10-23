@@ -36,6 +36,9 @@
 // Where iPad gyroscope sensor data is routed; see MapGyroTo enum.
 // Stored in NSUserDefaults under @"mapGyroTo".
 @property (nonatomic, retain) NSNumber * mapGyroTo;
+// What an Apple Pencil Pro barrel roll does while hovering; see PencilRollMode.
+// Stored in NSUserDefaults under @"pencilRollMode"; defaults to arrow keys.
+@property (nonatomic, retain) NSNumber * pencilRollMode;
 // Per-axis gyro direction flips (apply only when mapGyroTo != Motion).
 // Stored in NSUserDefaults under @"gyroInvertPitch" / @"gyroInvertYaw".
 @property (nonatomic, assign) BOOL gyroInvertPitch;

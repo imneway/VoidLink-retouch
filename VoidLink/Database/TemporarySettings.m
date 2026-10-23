@@ -11,6 +11,7 @@
 
 #import "TemporarySettings.h"
 #import "OnScreenControls.h"
+#import "DataManager.h"
 
 #if TARGET_OS_TV
 static BOOL BoolForUserDefaultKeyWithLegacyFallback(NSString *key, NSString *legacyKey) {
@@ -147,6 +148,8 @@ static BOOL BoolForUserDefaultKeyWithLegacyFallback(NSString *key, NSString *leg
     // mapGyroTo defaults to Motion (= 0), preserving legacy DS4-only behavior
     // for users upgrading without explicitly choosing a value.
     self.mapGyroTo = [NSNumber numberWithInteger:[[NSUserDefaults standardUserDefaults] integerForKey:@"mapGyroTo"]];
+    id pencilRoll = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilRollMode"];
+    self.pencilRollMode = pencilRoll ? @([pencilRoll integerValue]) : @(PencilRollModeArrowKeys);
     self.gyroInvertPitch = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertPitch"];
     self.gyroInvertYaw = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertYaw"];
     self.forceGyroEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:@"forceGyroEnabled"];

@@ -28,6 +28,13 @@ typedef NS_ENUM(NSInteger, TouchMode) {
     NativeTouchOnly
 };
 
+// Apple Pencil Pro barrel roll while hovering (NSUserDefaults @"pencilRollMode").
+typedef NS_ENUM(NSInteger, PencilRollMode) {
+    PencilRollModeOff = 0,
+    PencilRollModeArrowKeys = 1, // one Up/Down key per step
+    PencilRollModeWheel = 2,     // one wheel notch per step
+};
+
 typedef NS_ENUM(NSInteger, TouchEventPriorityEnum) {
     AsyncNativeTouchOff,
     EqualPriority,

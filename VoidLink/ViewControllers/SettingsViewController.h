@@ -114,6 +114,10 @@
 @property (strong, nonatomic) UIStackView *mapGyroToStack;
 @property (strong, nonatomic) UILabel *mapGyroToLabel;
 @property (strong, nonatomic) UISegmentedControl *mapGyroToSelector;
+// Built programmatically. Apple Pencil Pro barrel roll while hovering:
+// off / arrow keys / wheel; persisted under NSUserDefaults @"pencilRollMode".
+@property (strong, nonatomic) UIStackView *pencilRollModeStack;
+@property (strong, nonatomic) UISegmentedControl *pencilRollModeSelector;
 // Per-axis invert toggles for stick / mouse mapping (DS4 motion path is
 // untouched). Persisted under @"gyroInvertPitch" / @"gyroInvertYaw".
 @property (strong, nonatomic) UIStackView *gyroInvertPitchStack;

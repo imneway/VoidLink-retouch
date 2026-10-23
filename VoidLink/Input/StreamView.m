@@ -38,6 +38,13 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 // point of movement is worth (120 = one notch).
 #define PENCIL_SQUEEZE_SCROLL_SLOP 6.0f
 #define PENCIL_SQUEEZE_SCROLL_UNITS_PER_POINT 8.0f
+// Barrel roll while hovering (Pencil Pro): degrees of roll before the roll
+// engages (grip noise), degrees per step once engaged, and how far (points)
+// the tip may travel between hover samples before the roll is dropped as an
+// ordinary move / regrip.
+#define PENCIL_ROLL_DEAD_ZONE_DEG 10.0f
+#define PENCIL_ROLL_STEP_DEG 15.0f
+#define PENCIL_ROLL_MAX_TIP_TRAVEL 3.0f
 
 static BOOL RSPADALT2ValueNear(CGFloat value, CGFloat target, CGFloat tolerance) {
     return fabs(value - target) < tolerance;
@@ -102,6 +109,13 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     BOOL pencilSqueezeHeld;          // between squeeze began and ended/cancelled
     BOOL pencilSqueezeScrolling;     // the held squeeze moved past the slop: it is a scroll, not a right click
     CGPoint pencilSqueezeAnchor;     // hover position the current scroll segment is measured from
+    // Barrel roll (Pencil Pro) while hovering, see handlePencilRoll:
+    BOOL pencilRollTracking;         // have a reference angle for this hover
+    BOOL pencilRollEngaged;          // past the dead zone: stepping, cursor frozen
+    CGFloat pencilRollLastAngle;     // radians, last hover sample
+    CGFloat pencilRollAccumulated;   // degrees since the last step / dead-zone start
+    CGPoint pencilRollLastLocation;  // tip position at the last hover sample
+    UIFeedbackGenerator *pencilRollFeedback; // UICanvasFeedbackGenerator (iOS 17.5): one tick per step
     NSMutableSet* keysDown;
     float streamAspectRatio;
 
@@ -345,6 +359,13 @@ static __weak UIView *sMultiTouchExemptView = nil;
         pencilInteraction.delegate = self;
         [self addInteraction:pencilInteraction];
     }
+#if defined(__IPHONE_17_5)
+    if (@available(iOS 17.5, *)) {
+        if (!pencilRollFeedback) {
+            pencilRollFeedback = [UICanvasFeedbackGenerator feedbackGeneratorForView:self];
+        }
+    }
+#endif
 #endif
     
     x1mouse = [[X1Mouse alloc] init];
@@ -1152,18 +1173,21 @@ static __weak UIView *sMultiTouchExemptView = nil;
             isPencilHovering = YES;
             CGPoint location = [gesture locationInView:self];
             pencilHoverLocation = location;
+            BOOL rollFrozeCursor = [self handlePencilRoll:gesture atLocation:location];
             if (pencilSqueezeHeld) {
                 // Squeeze held: movement is the scroll wheel and the cursor
                 // stays put, so the page under the pinned cursor scrolls.
                 // A hover that (re)starts mid-squeeze measures from here.
                 if (gesture.state == UIGestureRecognizerStateBegan) pencilSqueezeAnchor = location;
                 [self sendPencilSqueezeScrollTo:location];
-            } else if (!pencilContactActive) {
+            } else if (!pencilContactActive && !rollFrozeCursor) {
                 [self updateCursorLocation:location isMouse:NO];
             }
             break;
         }
         case UIGestureRecognizerStateEnded: {
+            pencilRollTracking = NO;
+            pencilRollEngaged = NO;
             // Hold the pencil-hover flag through one more frame so a trailing
             // pointerInteraction/touchesMoved update can't yank the host cursor
             // back and make it flicker (upstream adeb77cf).
@@ -1175,6 +1199,80 @@ static __weak UIView *sMultiTouchExemptView = nil;
         default:
             break;
     }
+}
+
+// Barrel roll while hovering → Up/Down keys or wheel notches, one per
+// PENCIL_ROLL_STEP_DEG once PENCIL_ROLL_DEAD_ZONE_DEG of roll has engaged it.
+// Returns YES while engaged, which freezes the cursor so the tip wobble that
+// comes with rolling does not drag the pointer around. Any real tip travel
+// (> PENCIL_ROLL_MAX_TIP_TRAVEL between samples), a squeeze or a contact
+// drops the roll: it is a regrip or a move, not a command.
+- (BOOL)handlePencilRoll:(UIHoverGestureRecognizer*)gesture atLocation:(CGPoint)location {
+#if defined(__IPHONE_17_5)
+    if (@available(iOS 17.5, *)) {
+        NSInteger mode = settings.pencilRollMode.integerValue;
+        if (mode == PencilRollModeOff) return NO;
+        CGFloat angle = gesture.rollAngle;
+        if (!pencilRollTracking || gesture.state == UIGestureRecognizerStateBegan) {
+            pencilRollTracking = YES;
+            pencilRollEngaged = NO;
+            pencilRollAccumulated = 0;
+            pencilRollLastAngle = angle;
+            pencilRollLastLocation = location;
+            return NO;
+        }
+        CGFloat tipTravel = hypot(location.x - pencilRollLastLocation.x, location.y - pencilRollLastLocation.y);
+        pencilRollLastLocation = location;
+        // Unwrap to (-180, 180]: the angle is periodic.
+        CGFloat deltaDeg = (angle - pencilRollLastAngle) * (180.0 / M_PI);
+        pencilRollLastAngle = angle;
+        while (deltaDeg > 180) deltaDeg -= 360;
+        while (deltaDeg <= -180) deltaDeg += 360;
+
+        if (tipTravel > PENCIL_ROLL_MAX_TIP_TRAVEL || pencilSqueezeHeld || pencilContactActive) {
+            pencilRollEngaged = NO;
+            pencilRollAccumulated = 0;
+            return NO;
+        }
+        pencilRollAccumulated += deltaDeg;
+        if (!pencilRollEngaged) {
+            if (fabs(pencilRollAccumulated) < PENCIL_ROLL_DEAD_ZONE_DEG) return NO;
+            // Engage: the dead zone itself is the first step; whatever was
+            // rolled past it in the same sample counts toward the next ones.
+            pencilRollEngaged = YES;
+            int direction = pencilRollAccumulated > 0 ? 1 : -1;
+            [self sendPencilRollStep:direction mode:mode atLocation:location];
+            pencilRollAccumulated -= direction * PENCIL_ROLL_DEAD_ZONE_DEG;
+        }
+        while (fabs(pencilRollAccumulated) >= PENCIL_ROLL_STEP_DEG) {
+            int direction = pencilRollAccumulated > 0 ? 1 : -1;
+            [self sendPencilRollStep:direction mode:mode atLocation:location];
+            pencilRollAccumulated -= direction * PENCIL_ROLL_STEP_DEG;
+        }
+        return YES;
+    }
+#endif
+    return NO;
+}
+
+// direction +1 = rolled "forward" → Down arrow / wheel down (content moves up).
+- (void)sendPencilRollStep:(int)direction mode:(NSInteger)mode atLocation:(CGPoint)location {
+    if (mode == PencilRollModeArrowKeys) {
+        short keyCode = direction > 0 ? 0x28 /* VK_DOWN */ : 0x26 /* VK_UP */;
+        LiSendKeyboardEvent(keyCode, KEY_ACTION_DOWN, 0);
+        LiSendKeyboardEvent(keyCode, KEY_ACTION_UP, 0);
+    } else if (mode == PencilRollModeWheel) {
+        signed char notch = direction > 0 ? -1 : 1;
+        if (settings.reverseMouseWheelDirection) notch = -notch;
+        LiSendScrollEvent(notch);
+    } else {
+        return;
+    }
+#if defined(__IPHONE_17_5)
+    if (@available(iOS 17.5, *)) {
+        [(UICanvasFeedbackGenerator *)pencilRollFeedback alignmentOccurredAtLocation:location];
+    }
+#endif
 }
 
 // Squeeze-and-move → wheel. The first PENCIL_SQUEEZE_SCROLL_SLOP points are

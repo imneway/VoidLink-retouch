@@ -23,6 +23,9 @@
     static NSDictionary *zhDict; static NSDictionary *enDict; static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         zhDict = @{
+            @"Pencil Roll": @"Pencil 滚转",
+            @"Arrow Keys": @"方向键",
+            @"Wheel": @"滚轮",
             @"PairingHelpTitle": @"配对布局说明",
             @"PairingHelpMessage": @"你可以提前创建好偏好的横屏和竖屏布局，在这里进行绑定。绑定后，旋转屏幕将在绑定的两个布局之间切换。\n注意：默认布局和模板布局不支持绑定。",
             @"Unpair": @"解除配对",
