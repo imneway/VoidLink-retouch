@@ -895,6 +895,8 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self installGyroInvertControls];
     [self addSetting:self.gyroInvertPitchStack ofId:@"gyroInvertPitchStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self addSetting:self.gyroInvertYawStack ofId:@"gyroInvertYawStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
+    [self installPencilHoldModeControl];
+    [self addSetting:self.pencilHoldModeStack ofId:@"pencilHoldModeStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self installPencilRollModeControl];
     [self addSetting:self.pencilRollModeStack ofId:@"pencilRollModeStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self installPencilSliderControls];
@@ -2265,6 +2267,8 @@ BOOL isCustomResolution(int resolutionSelected) {
 // table row per slider: defaults key, title key, unit suffix, min, max, default.
 - (void) installPencilSliderControls {
     NSArray<NSArray *> *rows = @[
+        @[@"pencilHoldDelay",        @"Pencil Hold Delay",           @"ms", @(PencilHoldDelayMin),        @(PencilHoldDelayMax),        @(PencilHoldDelayDefault)],
+        @[@"pencilHardPressThreshold", @"Pencil Hard Press Threshold", @"%", @(PencilHardPressThresholdMin), @(PencilHardPressThresholdMax), @(PencilHardPressThresholdDefault)],
         @[@"pencilRollStep",         @"Pencil Roll Step",            @"°", @(PencilRollStepMin),         @(PencilRollStepMax),         @(PencilRollStepDefault)],
         @[@"pencilScrollSpeed",      @"Pencil Squeeze Scroll Speed", @"",  @(PencilScrollSpeedMin),      @(PencilScrollSpeedMax),      @(PencilScrollSpeedDefault)],
         @[@"pencilScrollZoneRadius", @"Pencil Scroll Zone Radius",   @"pt", @(PencilScrollZoneRadiusMin), @(PencilScrollZoneRadiusMax), @(PencilScrollZoneRadiusDefault)],
@@ -2311,6 +2315,37 @@ BOOL isCustomResolution(int resolutionSelected) {
     sender.value = lroundf(sender.value); // whole units
     [[NSUserDefaults standardUserDefaults] setFloat:sender.value forKey:sender.accessibilityIdentifier];
     [self refreshPencilSliderLabel:sender];
+}
+
+// Stationary pencil contact. NSUserDefaults @"pencilHoldMode", persisted
+// immediately. Order matches PencilHoldMode: Off=0, LongPress=1, LongPress+HardPress=2.
+- (void) installPencilHoldModeControl {
+    UILabel *label = [[UILabel alloc] init];
+    label.text = [LocalizationHelper localizedStringForKey:@"Pencil Hold"];
+    label.font = [UIFont systemFontOfSize:18];
+    label.textColor = [UIColor whiteColor];
+
+    self.pencilHoldModeSelector = [[UISegmentedControl alloc] initWithItems:@[
+        [LocalizationHelper localizedStringForKey:@"Off"],
+        [LocalizationHelper localizedStringForKey:@"Long Press"],
+        [LocalizationHelper localizedStringForKey:@"+ Hard Press"],
+    ]];
+    id saved = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilHoldMode"];
+    NSInteger savedIndex = saved ? [saved integerValue] : PencilHoldModeLongPressHardPress;
+    if (savedIndex < 0 || savedIndex > 2) savedIndex = PencilHoldModeLongPressHardPress;
+    self.pencilHoldModeSelector.selectedSegmentIndex = savedIndex;
+    [self.pencilHoldModeSelector setTitleTextAttributes:@{ NSForegroundColorAttributeName: [UIColor whiteColor] } forState:UIControlStateNormal];
+    [self.pencilHoldModeSelector addTarget:self action:@selector(pencilHoldModeChanged:) forControlEvents:UIControlEventValueChanged];
+
+    self.pencilHoldModeStack = [[UIStackView alloc] initWithArrangedSubviews:@[label, self.pencilHoldModeSelector]];
+    self.pencilHoldModeStack.axis = UILayoutConstraintAxisVertical;
+    self.pencilHoldModeStack.spacing = 4;
+    self.pencilHoldModeStack.alignment = UIStackViewAlignmentFill;
+    self.pencilHoldModeStack.translatesAutoresizingMaskIntoConstraints = NO;
+}
+
+- (void) pencilHoldModeChanged:(UISegmentedControl* )sender {
+    [[NSUserDefaults standardUserDefaults] setInteger:sender.selectedSegmentIndex forKey:@"pencilHoldMode"];
 }
 
 - (void) pencilRollModeChanged:(UISegmentedControl* )sender {

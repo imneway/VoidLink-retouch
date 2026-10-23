@@ -23,6 +23,11 @@
     static NSDictionary *zhDict; static NSDictionary *enDict; static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         zhDict = @{
+            @"Pencil Hold": @"Pencil 长按",
+            @"Long Press": @"长按右键",
+            @"+ Hard Press": @"长按 + 重按",
+            @"Pencil Hold Delay": @"Pencil 长按时长",
+            @"Pencil Hard Press Threshold": @"Pencil 重按阈值",
             @"Pencil Roll": @"Pencil 滚转",
             @"Pencil Roll Step": @"Pencil 滚转步进",
             @"Pencil Squeeze Scroll Speed": @"Pencil 轻捏滚动速度",

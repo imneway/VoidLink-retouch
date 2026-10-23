@@ -110,7 +110,9 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     BOOL isPencilHovering;
 
     // Apple Pencil as a mouse
-    BOOL pencilContactActive;        // tip on glass: host left button is held
+    BOOL pencilContactActive;        // tip on glass (a host button may or may not be held yet, see pencilContactButton)
+    int pencilContactButton;         // 0 = none yet (press withheld), BUTTON_LEFT or BUTTON_RIGHT held on the host
+    NSTimer *pencilHoldTimer;        // fires when a withheld contact has stayed put for pencilHoldDelay
     CGPoint pencilContactDownLocation; // where the current contact started
     BOOL pencilContactMoved;         // contact travelled past PENCIL_CONTACT_MOVE_SLOP: it is a drag
     NSTimeInterval pencilLastLiftTime; // for the double-click dead zone
@@ -1122,8 +1124,16 @@ static __weak UIView *sMultiTouchExemptView = nil;
 // squeeze.
 - (BOOL)sendStylusEvent:(UITouch*)event {
     CGPoint viewLocation = [event locationInView:self];
+    NSInteger holdMode = settings.pencilHoldMode.integerValue;
     switch (event.phase) {
         case UITouchPhaseBegan: {
+            if (pencilContactActive) {
+                // Terminal event of the previous contact never came: let go of
+                // its button BEFORE the cursor moves, or it drags and drops here.
+                [pencilHoldTimer invalidate];
+                pencilHoldTimer = nil;
+                [self releasePencilContactButton];
+            }
             // Double-click dead zone: a quick second tap near the last lift
             // does not move the cursor first, so both clicks land on one spot.
             BOOL secondTap = (event.timestamp - pencilLastLiftTime) <= PENCIL_DOUBLE_CLICK_DEAD_ZONE_DELAY
@@ -1135,9 +1145,25 @@ static __weak UIView *sMultiTouchExemptView = nil;
             }
             pencilContactDownLocation = viewLocation;
             pencilContactMoved = NO;
-            if (!pencilContactActive) {
-                pencilContactActive = YES;
-                LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
+            pencilContactActive = YES;
+            pencilContactButton = 0;
+            if (holdMode == PencilHoldModeOff) {
+                [self commitPencilContactButton:BUTTON_LEFT];
+            } else if (holdMode == PencilHoldModeLongPressHardPress
+                       && [self pencilForceRatio:event] >= MAX(PencilHardPressThresholdMin, settings.pencilHardPressThreshold.floatValue) / 100.0) {
+                // Already pressing hard on landing: no move may follow to notice it.
+                Log(LOG_I, @"Pencil hard press on contact: right button");
+                [self commitPencilContactButton:BUTTON_RIGHT];
+            } else {
+                // Withhold the press until the contact declares itself: move →
+                // left drag, lift → left click, stay put → see onPencilHoldTimeout.
+                [pencilHoldTimer invalidate];
+                pencilHoldTimer = [NSTimer timerWithTimeInterval:MAX(PencilHoldDelayMin, settings.pencilHoldDelay.floatValue) / 1000.0
+                                                          target:self
+                                                        selector:@selector(onPencilHoldTimeout:)
+                                                        userInfo:nil
+                                                         repeats:NO];
+                [[NSRunLoop mainRunLoop] addTimer:pencilHoldTimer forMode:NSRunLoopCommonModes];
             }
             // A contact during a held squeeze means the squeeze is being used
             // as a modifier/grip, not a right click: never click on release.
@@ -1150,24 +1176,47 @@ static __weak UIView *sMultiTouchExemptView = nil;
             }
             break;
         }
-        case UITouchPhaseMoved:
-            if (pencilContactActive) {
-                if (!pencilContactMoved
-                    && hypot(viewLocation.x - pencilContactDownLocation.x, viewLocation.y - pencilContactDownLocation.y) < PENCIL_CONTACT_MOVE_SLOP) {
-                    break; // tap wobble, not a drag: keep the click where it landed
+        case UITouchPhaseMoved: {
+            if (!pencilContactActive) break;
+            BOOL pastSlop = pencilContactMoved
+                || hypot(viewLocation.x - pencilContactDownLocation.x, viewLocation.y - pencilContactDownLocation.y) >= PENCIL_CONTACT_MOVE_SLOP;
+            if (pencilContactButton == 0) {
+                // Still withheld. (Force changes arrive as moves too.)
+                if (pastSlop) {
+                    [self commitPencilContactButton:BUTTON_LEFT]; // a drag: press at the origin, then move
+                } else if (holdMode == PencilHoldModeLongPressHardPress
+                           && [self pencilForceRatio:event] >= MAX(PencilHardPressThresholdMin, settings.pencilHardPressThreshold.floatValue) / 100.0) {
+                    Log(LOG_I, @"Pencil hard press: right button");
+                    [self commitPencilContactButton:BUTTON_RIGHT];
+                    break;
+                } else {
+                    break;
                 }
-                pencilContactMoved = YES;
-                [self updateCursorLocation:viewLocation isMouse:NO];
             }
+            if (!pastSlop) break; // tap wobble, not a drag: keep the click where it landed
+            pencilContactMoved = YES;
+            [self updateCursorLocation:viewLocation isMouse:NO];
             break;
+        }
         case UITouchPhaseEnded:
         case UITouchPhaseCancelled:
             if (pencilContactActive) {
-                pencilContactActive = NO;
-                if (event.phase == UITouchPhaseEnded && pencilContactMoved) {
-                    [self updateCursorLocation:viewLocation isMouse:NO];
+                [pencilHoldTimer invalidate];
+                pencilHoldTimer = nil;
+                if (pencilContactButton == 0) {
+                    // Short stationary contact: one clean left click at the
+                    // origin (the cursor is already there). A cancel sends nothing.
+                    if (event.phase == UITouchPhaseEnded) {
+                        LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
+                        LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+                    }
+                } else {
+                    if (event.phase == UITouchPhaseEnded && pencilContactMoved) {
+                        [self updateCursorLocation:viewLocation isMouse:NO];
+                    }
+                    [self releasePencilContactButton];
                 }
-                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+                pencilContactActive = NO;
                 pencilLastLiftTime = event.timestamp;
                 pencilLastLiftLocation = viewLocation;
             }
@@ -1179,6 +1228,49 @@ static __weak UIView *sMultiTouchExemptView = nil;
             break;
     }
     return YES;
+}
+
+// Pencil force as a fraction of the maximum, NaN/garbage-safe.
+- (CGFloat)pencilForceRatio:(UITouch*)event {
+    if (!(event.maximumPossibleForce > 0)) return 0;
+    CGFloat ratio = event.force / event.maximumPossibleForce;
+    return (ratio > 0) ? MIN(ratio, 1.0) : 0;
+}
+
+// Presses the host button the current contact has been resolved to.
+- (void)commitPencilContactButton:(int)button {
+    [pencilHoldTimer invalidate];
+    pencilHoldTimer = nil;
+    if (pencilContactButton != 0) return;
+    pencilContactButton = button;
+    LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, button);
+    if (button == BUTTON_RIGHT) {
+        [pencilRollFeedback selectionChanged]; // felt confirmation: this contact is the right button now
+        [pencilRollFeedback prepare];
+    }
+}
+
+- (void)releasePencilContactButton {
+    if (pencilContactButton == 0) return;
+    LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, pencilContactButton);
+    pencilContactButton = 0;
+}
+
+// The withheld contact stayed put for the whole delay.
+- (void)onPencilHoldTimeout:(NSTimer*)timer {
+    if (timer != pencilHoldTimer) return; // stale timer that lost an invalidation race
+    pencilHoldTimer = nil;
+    if (!pencilContactActive || pencilContactButton != 0) return;
+    NSInteger holdMode = settings.pencilHoldMode.integerValue;
+    if (holdMode == PencilHoldModeLongPress) {
+        Log(LOG_I, @"Pencil long press: right button");
+        [self commitPencilContactButton:BUTTON_RIGHT];
+    } else if (holdMode == PencilHoldModeLongPressHardPress) {
+        // Light hold: a held left button (hard press would have been the
+        // right button before now).
+        Log(LOG_I, @"Pencil long press (light): left button held");
+        [self commitPencilContactButton:BUTTON_LEFT];
+    }
 }
 
 // Routes every pencil touch in `touches` through sendStylusEvent and returns
@@ -1198,9 +1290,11 @@ static __weak UIView *sMultiTouchExemptView = nil;
 // Releases every piece of in-flight pencil state: a held left button and a
 // held squeeze. Teardown backstop (view leaving the window, reconfigure).
 - (void)resetPencilState {
+    [pencilHoldTimer invalidate];
+    pencilHoldTimer = nil;
     if (pencilContactActive) {
         pencilContactActive = NO;
-        LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+        [self releasePencilContactButton];
     }
     pencilSqueezeHeld = NO;
     pencilSqueezeScrolling = NO;

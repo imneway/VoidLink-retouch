@@ -158,6 +158,12 @@ static BOOL BoolForUserDefaultKeyWithLegacyFallback(NSString *key, NSString *leg
     self.pencilScrollZoneRadius = pencilScrollZoneRadius ? @([pencilScrollZoneRadius floatValue]) : @(PencilScrollZoneRadiusDefault);
     id pencilScrollMaxRate = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollMaxRate"];
     self.pencilScrollMaxRate = pencilScrollMaxRate ? @([pencilScrollMaxRate floatValue]) : @(PencilScrollMaxRateDefault);
+    id pencilHoldMode = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilHoldMode"];
+    self.pencilHoldMode = pencilHoldMode ? @([pencilHoldMode integerValue]) : @(PencilHoldModeLongPressHardPress);
+    id pencilHoldDelay = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilHoldDelay"];
+    self.pencilHoldDelay = pencilHoldDelay ? @([pencilHoldDelay floatValue]) : @(PencilHoldDelayDefault);
+    id pencilHardPressThreshold = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilHardPressThreshold"];
+    self.pencilHardPressThreshold = pencilHardPressThreshold ? @([pencilHardPressThreshold floatValue]) : @(PencilHardPressThresholdDefault);
     self.gyroInvertPitch = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertPitch"];
     self.gyroInvertYaw = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertYaw"];
     self.forceGyroEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:@"forceGyroEnabled"];

@@ -34,6 +34,22 @@ typedef NS_ENUM(NSInteger, PencilRollMode) {
     PencilRollModeArrowKeys = 1, // one Up/Down key per step
     PencilRollModeWheel = 2,     // one wheel notch per step
 };
+// What a stationary Apple Pencil contact becomes (NSUserDefaults @"pencilHoldMode").
+// Off: the left button goes down on contact (hold = left hold). Otherwise the
+// press is withheld until the contact declares itself: move = left drag,
+// lift = left click, held past pencilHoldDelay = right button (LongPress) or
+// left button (LongPressHardPress, where pressing hard is the right button).
+typedef NS_ENUM(NSInteger, PencilHoldMode) {
+    PencilHoldModeOff = 0,
+    PencilHoldModeLongPress = 1,
+    PencilHoldModeLongPressHardPress = 2,
+};
+#define PencilHoldDelayDefault 500.0f   // ms
+#define PencilHoldDelayMin 300.0f
+#define PencilHoldDelayMax 1000.0f
+#define PencilHardPressThresholdDefault 65.0f // % of maximumPossibleForce
+#define PencilHardPressThresholdMin 40.0f
+#define PencilHardPressThresholdMax 90.0f
 // Pencil tuning (NSUserDefaults @"pencilScrollSpeed" / @"pencilRollStep").
 #define PencilScrollSpeedDefault 16.0f  // wheel units per point, 120 = one notch
 #define PencilScrollSpeedMin 4.0f

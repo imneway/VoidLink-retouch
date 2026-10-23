@@ -48,6 +48,11 @@
 // Squeeze scroll continuous zone, see DataManager.h PencilScrollZoneRadius* / PencilScrollMaxRate*.
 @property (nonatomic, retain) NSNumber * pencilScrollZoneRadius;
 @property (nonatomic, retain) NSNumber * pencilScrollMaxRate;
+// Stationary contact handling, see PencilHoldMode. NSUserDefaults
+// @"pencilHoldMode" / @"pencilHoldDelay" (ms) / @"pencilHardPressThreshold" (%).
+@property (nonatomic, retain) NSNumber * pencilHoldMode;
+@property (nonatomic, retain) NSNumber * pencilHoldDelay;
+@property (nonatomic, retain) NSNumber * pencilHardPressThreshold;
 // Per-axis gyro direction flips (apply only when mapGyroTo != Motion).
 // Stored in NSUserDefaults under @"gyroInvertPitch" / @"gyroInvertYaw".
 @property (nonatomic, assign) BOOL gyroInvertPitch;
