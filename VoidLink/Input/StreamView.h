@@ -90,6 +90,12 @@ typedef NS_ENUM(NSInteger, OscPresentation) {
 // that happens mid-hold (the reload re-applies the suspension).
 - (void)setOscTemporarilySuspended:(BOOL)suspended;
 - (BOOL)isOscTemporarilySuspended;
+// When set, finger touches that would reach the host (mouse / native touch)
+// are withheld for as long as the OSC is active (Shown or Translucent, not
+// held-suspended, not in the layout editor). OSC widgets and legacy layers
+// still get their touches; pencil, trackpad and mouse are unaffected. For
+// games that flip to a keyboard+mouse UI on any stray mouse event.
+@property (nonatomic) BOOL blockStreamTouchesWhileOscActive;
 // YES when the legacy OSC level is on or any widget is attached — i.e. there is
 // something for a hold to suspend.
 - (BOOL)hasAnyOnScreenControls;

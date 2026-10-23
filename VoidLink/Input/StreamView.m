@@ -210,6 +210,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 
     // OSC ON/OFF button hold — see setOscTemporarilySuspended:.
     BOOL oscTemporarilySuspended;
+    NSHashTable<UITouch *> *blockedStreamTouches; // began while withheld; their end/cancel stays withheld
     // Shown / Translucent / Off — see setOscPresentation:. The Off flavour
     // reuses the hold-suspend machinery (hidden + non-interactive).
     OscPresentation oscPresentation;
@@ -220,6 +221,12 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 // View whose touches are dropped from multi-finger counting (the OSC ON/OFF
 // button while held). Weak: the button belongs to the host VC.
 static __weak UIView *sMultiTouchExemptView = nil;
+// The live StreamView's withheld-touch table (see blockStreamTouchesWhileOscActive):
+// the touch handlers and the tap recognizers count fingers through
+// +streamTouchesFrom:, so a withheld finger must vanish there too, or a
+// withheld tap still completes a 2-finger right click / lets a release be
+// skipped as "another finger is still down".
+static __weak NSHashTable<UITouch *> *sWithheldStreamTouches = nil;
 
 // Canonical snap-to-top offset. This is the single source of truth shared by
 // applySnapToTopIfNeeded (StreamView shift) and liftMetalVideoViewIfNeeded
@@ -652,6 +659,7 @@ static __weak UIView *sMultiTouchExemptView = nil;
     if (oscPresentation == presentation) return;
     oscPresentation = presentation;
     [self osc_syncPresentationStateAnimated:YES];
+    [self osc_syncStreamTouchBlock];
 }
 
 - (OscPresentation)oscPresentation {
@@ -710,6 +718,56 @@ static __weak UIView *sMultiTouchExemptView = nil;
     oscTemporarilySuspended = suspended;
     oscSuspensionSawStreamTouch = NO;
     [self osc_syncSuspensionState];
+    [self osc_syncStreamTouchBlock];
+}
+
+#pragma mark - Stream touch block
+
+- (void)setBlockStreamTouchesWhileOscActive:(BOOL)block {
+    if (_blockStreamTouchesWhileOscActive == block) return;
+    _blockStreamTouchesWhileOscActive = block;
+    [self osc_syncStreamTouchBlock];
+}
+
+- (BOOL)stream_touchesBlocked {
+    return _blockStreamTouchesWhileOscActive
+        && oscPresentation != OscPresentationOff
+        && !oscTemporarilySuspended
+        && !self.widgetToolOpened;
+}
+
+- (void)osc_syncStreamTouchBlock {
+    OnScreenWidgetView.streamTouchBlocked = [self stream_touchesBlocked];
+}
+
+// Splits the finger touches of a began set into withheld and passed-through.
+// Everything a withheld touch does later (moved / ended / cancelled) is routed
+// by membership in blockedStreamTouches, so a block that ends mid-touch
+// doesn't hand the host an UP it never saw the DOWN for.
+- (NSSet *)stream_withholdBeganTouches:(NSSet *)touches {
+    if (![self stream_touchesBlocked]) return touches;
+    if (!blockedStreamTouches) blockedStreamTouches = [NSHashTable weakObjectsHashTable];
+    sWithheldStreamTouches = blockedStreamTouches;
+    NSMutableSet *passed = [NSMutableSet set];
+    for (UITouch *touch in touches) {
+        if (touch.type == UITouchTypeDirect) [blockedStreamTouches addObject:touch];
+        else [passed addObject:touch];
+    }
+    return passed;
+}
+
+- (NSSet *)stream_removeWithheldTouches:(NSSet *)touches {
+    if (blockedStreamTouches.count == 0) return touches;
+    NSMutableSet *passed = [NSMutableSet set];
+    for (UITouch *touch in touches) {
+        if ([blockedStreamTouches containsObject:touch]) continue;
+        [passed addObject:touch];
+    }
+    return passed;
+}
+
+- (void)stream_forgetWithheldTouches:(NSSet *)touches {
+    for (UITouch *touch in touches) [blockedStreamTouches removeObject:touch];
 }
 
 // Push the effective suspension (mode-button hold OR the Off presentation) onto
@@ -757,11 +815,15 @@ static __weak UIView *sMultiTouchExemptView = nil;
 
 + (NSSet<UITouch *> *)streamTouchesFrom:(NSSet<UITouch *> *)touches {
     UIView *exempt = sMultiTouchExemptView;
-    if (exempt == nil || touches.count == 0) return touches;
+    NSHashTable<UITouch *> *withheld = sWithheldStreamTouches;
+    BOOL anyWithheld = withheld.count > 0;
+    if ((exempt == nil && !anyWithheld) || touches.count == 0) return touches;
     NSMutableSet<UITouch *> *filtered = nil;
     for (UITouch *touch in touches) {
         UIView *touchView = touch.view;
-        if (touchView != nil && [touchView isDescendantOfView:exempt]) {
+        BOOL drop = (exempt != nil && touchView != nil && [touchView isDescendantOfView:exempt])
+                 || (anyWithheld && [withheld containsObject:touch]);
+        if (drop) {
             if (filtered == nil) filtered = [touches mutableCopy];
             [filtered removeObject:touch];
         }
@@ -1983,6 +2045,14 @@ static __weak UIView *sMultiTouchExemptView = nil;
     // handlers. Fingers sharing the same touches set still must.
     touches = [self consumePencilTouches:touches];
     if (touches.count == 0) return;
+    // Withheld touches still drive the legacy OSC layers (the OSC is what the
+    // user is touching for); only the host side is skipped.
+    NSSet *hostTouches = [self stream_withholdBeganTouches:touches];
+    if (hostTouches.count < touches.count && settings.touchMode.intValue != NativeTouchOnly) {
+        [self->onScreenControls handleTouchDownEvent:touches];
+    }
+    touches = hostTouches;
+    if (touches.count == 0) return;
     if (settings.touchMode.intValue == NativeTouchOnly) {
         [touchHandler touchesBegan:touches withEvent:event];
         return; //This is a native touch oriented fork, in pure native touch mode, this call back method deals with native touch only.
@@ -2139,6 +2209,12 @@ static __weak UIView *sMultiTouchExemptView = nil;
     
     touches = [self consumePencilTouches:touches];
     if (touches.count == 0) return;
+    NSSet *hostTouches = [self stream_removeWithheldTouches:touches];
+    if (hostTouches.count < touches.count && settings.touchMode.intValue != NativeTouchOnly) {
+        [self->onScreenControls handleTouchMovedEvent:touches];
+    }
+    touches = hostTouches;
+    if (touches.count == 0) return;
     if (settings.touchMode.intValue == NativeTouchOnly) {
         [touchHandler touchesMoved:touches withEvent:event];
         return; //This is a native touch oriented fork, in pure native touch mode, this call back method deals with native touch only.
@@ -2246,6 +2322,13 @@ static __weak UIView *sMultiTouchExemptView = nil;
 
     touches = [self consumePencilTouches:touches];
     if (touches.count == 0) return;
+    NSSet *hostTouches = [self stream_removeWithheldTouches:touches];
+    if (hostTouches.count < touches.count) {
+        if (settings.touchMode.intValue != NativeTouchOnly) [self->onScreenControls handleTouchUpEvent:touches];
+        [self stream_forgetWithheldTouches:touches];
+    }
+    touches = hostTouches;
+    if (touches.count == 0) return;
     if (settings.touchMode.intValue == NativeTouchOnly) {
         [touchHandler touchesEnded:touches withEvent:event];
         return; //This is a native touch oriented fork, in pure native touch mode, this call back method deals with native touch only.
@@ -2285,6 +2368,20 @@ static __weak UIView *sMultiTouchExemptView = nil;
     // could release an unrelated active touch.
     nonStylusTouches = [self consumePencilTouches:touches];
 #endif
+    // Withheld touches never reached touchHandler; release them on the OSC
+    // side only (same reasoning as the pencil above).
+    NSSet *withheld = nil;
+    if (blockedStreamTouches.count > 0 && nonStylusTouches.count > 0) {
+        NSSet *passed = [self stream_removeWithheldTouches:nonStylusTouches];
+        if (passed.count < nonStylusTouches.count) {
+            NSMutableSet *w = [nonStylusTouches mutableCopy];
+            [w minusSet:passed];
+            withheld = w;
+            [self->onScreenControls handleTouchUpEvent:withheld];
+            [self stream_forgetWithheldTouches:withheld];
+            nonStylusTouches = passed;
+        }
+    }
     if (nonStylusTouches.count > 0) {
         [touchHandler touchesCancelled:nonStylusTouches withEvent:event];
         // iOS cancels (not ends) touches on system interruptions — edge gestures for

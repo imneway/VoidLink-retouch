@@ -261,6 +261,8 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // Bottom-right quick menu: a blank capsule in the corner that pops a
     // horizontal panel of host shortcuts above itself.
     UIButton *_quickMenuButton;
+    UIButton *_modeSwitchButton;                 // bottom-left corner: GAME <-> DESK in one tap
+    VoidBackdropCapsuleView *_modeSwitchBackdrop;
     VoidBackdropCapsuleView *_toggleRowBackground; // one capsule behind OSC/snap/gyro/rot
     VoidBackdropCapsuleView *_quickMenuBackdrop;   // behind the quick menu button
     UIView *_quickMenuPanel;
@@ -898,6 +900,10 @@ static BOOL VoidGyroToggleEnabled(void) {
     return storedValue == nil ? YES : [storedValue boolValue];
 }
 
+static BOOL VoidStreamTouchBlockEnabled(void) {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:[ToolboxViewController streamTouchBlockDefaultsKey]];
+}
+
 static BOOL VoidStreamOrientationLockEnabled(void) {
     return [[NSUserDefaults standardUserDefaults] boolForKey:kStreamOrientationLockEnabledKey];
 }
@@ -979,6 +985,17 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         [self.view addSubview:_oscModeButton];
     }
 
+    if (!_modeSwitchButton) {
+        _modeSwitchButton = [UIButton buttonWithType:UIButtonTypeCustom];
+        _modeSwitchButton.accessibilityLabel = @"切换手柄 / 键鼠模式";
+        [_modeSwitchButton addTarget:self action:@selector(modeSwitch_tapped) forControlEvents:UIControlEventTouchUpInside];
+        _modeSwitchBackdrop = [[VoidBackdropCapsuleView alloc] initWithFrame:CGRectZero];
+        [_modeSwitchBackdrop setFillColor:[UIColor colorWithRed:0xB3/255.0 green:0xB3/255.0 blue:0xB3/255.0 alpha:0.16]];
+        _modeSwitchBackdrop.backdropEnabled = NO;
+        [self.view addSubview:_modeSwitchBackdrop];
+        [self.view addSubview:_modeSwitchButton];
+    }
+
     if (!_quickMenuButton) {
         _quickMenuButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _quickMenuButton.accessibilityLabel = @"快捷菜单";
@@ -1040,9 +1057,11 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     _rotationLockToggleButton.hidden = chromeHidden;
     _gyroToggleButton.hidden = chromeHidden;
     _toggleRowBackground.hidden = chromeHidden;
-    // The quick menu is the one control that stays put whatever the OSC does.
+    // The two corner capsules stay put whatever the OSC does.
     _quickMenuButton.hidden = !isPad;
     _quickMenuBackdrop.hidden = !isPad;
+    _modeSwitchButton.hidden = !isPad;
+    _modeSwitchBackdrop.hidden = !isPad;
     if (!isPad) [self quickMenu_dismissAnimated:NO];
 
     if (!isPad) {
@@ -1080,6 +1099,13 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
                                         self.view.bounds.size.width - hitX,
                                         self.view.bounds.size.height - hitY);
     [self quickMenu_layoutPanel];
+
+    // Mirror capsule at bottom-left; its hit area runs from the screen's left
+    // and bottom edges to halfway toward the time label.
+    _modeSwitchBackdrop.frame = CGRectMake(13, baseY - btnH, menuW, btnH);
+    CGFloat switchHitRight = round((CGRectGetMaxX(_modeSwitchBackdrop.frame) + [self stream_bottomLeftLabelsX]) / 2.0);
+    _modeSwitchButton.frame = CGRectMake(0, hitY, switchHitRight, self.view.bounds.size.height - hitY);
+    [self layoutTimeBatteryCountdownDisplay];
     CGFloat rightEdge = rowRight - rowPad;
 
     CGFloat oscX = rightEdge - oscW;
@@ -1823,11 +1849,10 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     _batteryLabel.hidden = _oscHidden;
     _countdownHitAreaView.hidden = _oscHidden;
 
-    // Layout labels at bottom-left
-    CGFloat leftMargin = 24.0f;
+    // Layout labels at bottom-left, to the right of the mode-switch capsule.
     CGFloat spacing = 16.0f;
     
-    CGFloat timeX = leftMargin;
+    CGFloat timeX = [self stream_bottomLeftLabelsX];
     CGFloat batteryX = timeX + _timeLabel.frame.size.width + spacing;
     CGFloat y = round([self stream_bottomRowCenterY] - _timeLabel.frame.size.height / 2.0f);
     
@@ -1857,6 +1882,26 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
         [self.view bringSubviewToFront:_countdownHitAreaView];
     }
     [self quickMenu_raiseToFront];
+}
+
+// Where the bottom-left labels start: past the mode-switch capsule on iPad.
+- (CGFloat)stream_bottomLeftLabelsX {
+    if (UIDevice.currentDevice.userInterfaceIdiom != UIUserInterfaceIdiomPad) return 24.0f;
+    CGFloat menuW = round([self stream_bottomRowHeight] * 1.5) - 2;
+    return 13 + menuW + 16;
+}
+
+// Bottom-left capsule: one tap flips between the two manual modes. GAME shows
+// the OSC (gamepad play), DESK puts it away so touch drives the mouse. Both
+// count as manual choices; a taskbar-confirmed desktop clears them.
+- (void)modeSwitch_tapped {
+    if (self->_streamView.widgetToolOpened) return;
+    BOOL toDesk = ([self osc_effectiveHideMode] == OscHideModeGame);
+    _oscModeOverride = toDesk ? OscHideModeDesk : OscHideModeGame;
+    _oscHidden = toDesk;
+    _oscManualVisibility = YES;
+    Log(LOG_I, @"OSC mode switch -> %@", toDesk ? @"DESK" : @"GAME");
+    [self osc_applyPresentation];
 }
 
 - (void)streamCountdownTapped:(UITapGestureRecognizer *)recognizer {
@@ -2421,6 +2466,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     self->_streamMan.videoRenderer.letterboxDetector.delegate = self;
     [self osc_updateAutoDetectApplicabilityForStreamAspect:streamAspect];
     [self hostAgent_startForHost:_streamConfig.host];
+    self->_streamView.blockStreamTouchesWhileOscActive = VoidStreamTouchBlockEnabled();
 
     if (_oscAutoDetectApplicable) {
         // Desktop until the detector says game: touch drives the mouse from the
@@ -4407,6 +4453,13 @@ static NSString *OscContentClassName(StreamContentClass c) {
         [self setNeedsUpdateOfHomeIndicatorAutoHidden];
     }
 #endif
+}
+
+- (void)toggleStreamTouchBlock {
+    BOOL on = !VoidStreamTouchBlockEnabled();
+    [[NSUserDefaults standardUserDefaults] setBool:on forKey:[ToolboxViewController streamTouchBlockDefaultsKey]];
+    self->_streamView.blockStreamTouchesWhileOscActive = on;
+    Log(LOG_I, @"Stream touch block while OSC active: %@", on ? @"on" : @"off");
 }
 
 - (void)toggleStatsOverlay{

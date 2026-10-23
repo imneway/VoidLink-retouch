@@ -1339,9 +1339,15 @@ import UIKit
         attachedFullscreenGestureToSuperview = nil
     }
 
+    // Set by StreamView while stream touches are being withheld from the host
+    // (OSC active + the block option): the invisible double-tap trigger counts
+    // as stream touch, so it must go quiet too.
+    @objc public static var streamTouchBlocked: Bool = false
+
     @objc private func handleFullscreenDoubleTap(_ gesture: UITapGestureRecognizer) {
         guard !OnScreenWidgetView.editMode else { return }
         guard !OnScreenWidgetView.gesturesSuppressed else { return }
+        guard !OnScreenWidgetView.streamTouchBlocked else { return }
         guard !suspendedByOscHold else { return }
         if vibrationOn {
             vibrationGenerator.prepare()
