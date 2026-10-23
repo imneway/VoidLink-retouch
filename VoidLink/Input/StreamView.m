@@ -131,6 +131,8 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     UIPanGestureRecognizer *continuousMouseWheelRecognizer;
 #if defined(__IPHONE_16_1) || defined(__TVOS_16_1)
     UIHoverGestureRecognizer *stylusHoverRecognizer;
+    // Apple Pencil hardware gestures (double tap / squeeze), see pencilInteraction*
+    UIPencilInteraction *pencilInteraction;
 #endif
     CGFloat HeightViewLiftedTo;
     UILabel* keyboardToggleTip;
@@ -334,6 +336,14 @@ static __weak UIView *sMultiTouchExemptView = nil;
         [self addGestureRecognizer:stylusHoverRecognizer];
     }
 #endif
+    // Apple Pencil hardware gestures: double tap toggles the Windows touch
+    // keyboard, squeeze (Pencil Pro) right-clicks. Interactions are not torn
+    // down by the host VC's gesture reset, so add exactly once.
+    if (!pencilInteraction) {
+        pencilInteraction = [[UIPencilInteraction alloc] init];
+        pencilInteraction.delegate = self;
+        [self addInteraction:pencilInteraction];
+    }
 #endif
     
     x1mouse = [[X1Mouse alloc] init];
@@ -1286,6 +1296,77 @@ static __weak UIView *sMultiTouchExemptView = nil;
     
     LiSendPenEvent(type, LI_TOOL_TYPE_PEN, 0, location.x / videoSize.width, location.y / videoSize.height,
                    distance, 0.0f, 0.0f, rotationAngle, tiltAngle);
+}
+
+#pragma mark - Apple Pencil hardware gestures (UIPencilInteractionDelegate)
+
+// Double tap on the pencil barrel → show/hide the Windows touch keyboard.
+// Goes through the host agent (ITipInvocation, the real Win11 touch
+// keyboard); without a live agent it falls back to Win+Ctrl+O, which toggles
+// the classic On-Screen Keyboard instead — still a keyboard, still a toggle.
+// iOS 15–17.4 entry point; on 17.5+ UIKit calls the didReceiveTap: variant instead.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-implementations"
+- (void)pencilInteractionDidTap:(UIPencilInteraction *)interaction {
+    [self handlePencilDoubleTap];
+}
+#pragma clang diagnostic pop
+
+#if defined(__IPHONE_17_5)
+- (void)pencilInteraction:(UIPencilInteraction *)interaction didReceiveTap:(UIPencilInteractionTap *)tap API_AVAILABLE(ios(17.5)) {
+    [self handlePencilDoubleTap];
+}
+#endif
+
+- (void)handlePencilDoubleTap {
+    if (UIPencilInteraction.preferredTapAction == UIPencilPreferredActionIgnore) {
+        return; // user turned pencil double tap off system-wide
+    }
+    if ([interactionDelegate respondsToSelector:@selector(requestHostTouchKeyboardToggle)]
+        && [interactionDelegate requestHostTouchKeyboardToggle]) {
+        Log(LOG_I, @"Pencil double tap: toggling host touch keyboard via agent");
+        return;
+    }
+    Log(LOG_I, @"Pencil double tap: no agent, sending Win+Ctrl+O");
+    [self sendHostKeyChord:0x4F withModifierKeys:@[@(0x5B), @(0x11)] modifiers:MODIFIER_META | MODIFIER_CTRL];
+}
+
+#if defined(__IPHONE_17_5)
+// Squeeze (Apple Pencil Pro) → one right click at the pencil's hover spot.
+// Fires on the END phase so a squeeze that is cancelled never clicks. Skipped
+// while a pencil contact is being held or already converted into a right
+// drag — the long-press path owns the right button then.
+- (void)pencilInteraction:(UIPencilInteraction *)interaction didReceiveSqueeze:(UIPencilInteractionSqueeze *)squeeze API_AVAILABLE(ios(17.5)) {
+    if (squeeze.phase != UIPencilInteractionPhaseEnded) return;
+    if (UIPencilInteraction.preferredSqueezeAction == UIPencilPreferredActionIgnore) {
+        return; // user turned pencil squeeze off system-wide
+    }
+    if (pencilPenDownDeferred || pencilRightClickActive) return;
+
+    // Pin the host cursor to where the tip hovers (the hover stream already
+    // keeps it there, but the pose is authoritative at the moment of release).
+    UIPencilHoverPose *pose = squeeze.hoverPose; // location is in this view's coordinates
+    if (pose && CGRectContainsPoint(self.bounds, pose.location)) {
+        [self updateCursorLocation:pose.location isMouse:NO];
+    }
+    Log(LOG_I, @"Pencil squeeze: right click");
+    LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
+    usleep(30 * 1000);
+    LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+}
+#endif
+
+// Presses `modifierKeys` in order, taps `keyCode`, releases in reverse.
+- (void)sendHostKeyChord:(short)keyCode withModifierKeys:(NSArray<NSNumber *> *)modifierKeys modifiers:(char)modifiers {
+    for (NSNumber *key in modifierKeys) {
+        LiSendKeyboardEvent(key.shortValue, KEY_ACTION_DOWN, modifiers);
+    }
+    LiSendKeyboardEvent(keyCode, KEY_ACTION_DOWN, modifiers);
+    usleep(50 * 1000);
+    LiSendKeyboardEvent(keyCode, KEY_ACTION_UP, modifiers);
+    for (NSNumber *key in modifierKeys.reverseObjectEnumerator) {
+        LiSendKeyboardEvent(key.shortValue, KEY_ACTION_UP, modifiers);
+    }
 }
 
 #endif

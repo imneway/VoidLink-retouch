@@ -24,13 +24,16 @@
 - (void)toggleStatsOverlay;
 - (void)toggleMouseCapture;
 - (void)toggleMouseVisible;
+// Ask the host agent to show/hide the Windows touch keyboard. Returns NO when
+// no agent link is live, so the caller can fall back to a keystroke.
+- (BOOL)requestHostTouchKeyboardToggle;
 
 @end
 
 #if TARGET_OS_TV
 @interface StreamView : UIView <X1KitMouseDelegate, UITextFieldDelegate>
 #else
-@interface StreamView : UIView <X1KitMouseDelegate, UITextFieldDelegate, UIPointerInteractionDelegate>
+@interface StreamView : UIView <X1KitMouseDelegate, UITextFieldDelegate, UIPointerInteractionDelegate, UIPencilInteractionDelegate>
 #endif
 
 @property (assign, nonatomic) UIView* streamFrameTopLayerView;

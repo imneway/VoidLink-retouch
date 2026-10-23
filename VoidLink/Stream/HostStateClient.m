@@ -107,6 +107,28 @@ static const size_t kMaxLineBytes = 64 * 1024;
     });
 }
 
+- (void)sendCommand:(NSString *)command {
+    dispatch_async(_queue, ^{
+        nw_connection_t connection = self->_connection;
+        if (!connection || !self->_live) {
+            Log(LOG_W, @"[HostAgent] cmd %@ dropped: link not live", command);
+            return;
+        }
+        NSData *json = [NSJSONSerialization dataWithJSONObject:@{@"cmd": command} options:0 error:nil];
+        if (!json) return;
+        NSMutableData *line = [json mutableCopy];
+        [line appendBytes:"\n" length:1];
+        dispatch_data_t payload = dispatch_data_create(line.bytes, line.length, self->_queue, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+        nw_connection_send(connection, payload, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, false, ^(nw_error_t error) {
+            if (error) {
+                Log(LOG_W, @"[HostAgent] cmd %@ send failed: %d", command, nw_error_get_error_code(error));
+            } else {
+                Log(LOG_I, @"[HostAgent] cmd %@ sent", command);
+            }
+        });
+    });
+}
+
 #pragma mark - Connection (on _queue)
 
 - (void)queue_connect {

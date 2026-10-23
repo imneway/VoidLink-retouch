@@ -2557,6 +2557,15 @@ static NSString *OscContentClassName(StreamContentClass c) {
     [_hostStateClient start];
 }
 
+- (BOOL)requestHostTouchKeyboardToggle {
+    if (!_hostStateClient || !_hostAgentLive) {
+        Log(LOG_I, @"[HostAgent] touch keyboard toggle requested with no live agent");
+        return NO;
+    }
+    [_hostStateClient sendCommand:@"toggle_touch_keyboard"];
+    return YES;
+}
+
 - (void)hostAgent_stop {
     _hostStateClient.delegate = nil;
     [_hostStateClient stop];

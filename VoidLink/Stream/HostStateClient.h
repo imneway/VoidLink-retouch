@@ -49,6 +49,10 @@ static const uint16_t HostStateClientDefaultPort = 48100;
 - (void)start;
 - (void)stop;
 
+// Sends {"cmd": command} as one JSON line to the agent. Fire-and-forget:
+// dropped (with a log line) when the link is not live. Any queue.
+- (void)sendCommand:(NSString *)command;
+
 @end
 
 NS_ASSUME_NONNULL_END
