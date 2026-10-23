@@ -261,8 +261,7 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // Bottom-right quick menu: a blank capsule in the corner that pops a
     // horizontal panel of host shortcuts above itself.
     UIButton *_quickMenuButton;
-    UIButton *_modeSwitchButton;                 // bottom-left corner: GAME <-> DESK in one tap
-    VoidBackdropCapsuleView *_modeSwitchBackdrop;
+    UIButton *_modeSwitchButton;                 // bottom-left corner, invisible: GAME <-> DESK in one tap
     VoidBackdropCapsuleView *_toggleRowBackground; // one capsule behind OSC/snap/gyro/rot
     VoidBackdropCapsuleView *_quickMenuBackdrop;   // behind the quick menu button
     UIView *_quickMenuPanel;
@@ -990,10 +989,6 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         _modeSwitchButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _modeSwitchButton.accessibilityLabel = @"切换手柄 / 键鼠模式";
         [_modeSwitchButton addTarget:self action:@selector(modeSwitch_tapped) forControlEvents:UIControlEventTouchUpInside];
-        _modeSwitchBackdrop = [[VoidBackdropCapsuleView alloc] initWithFrame:CGRectZero];
-        [_modeSwitchBackdrop setFillColor:[UIColor colorWithRed:0xB3/255.0 green:0xB3/255.0 blue:0xB3/255.0 alpha:0.16]];
-        _modeSwitchBackdrop.backdropEnabled = NO;
-        [self.view addSubview:_modeSwitchBackdrop];
         [self.view addSubview:_modeSwitchButton];
     }
 
@@ -1062,7 +1057,6 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     _quickMenuButton.hidden = !isPad;
     _quickMenuBackdrop.hidden = !isPad;
     _modeSwitchButton.hidden = !isPad;
-    _modeSwitchBackdrop.hidden = !isPad;
     if (!isPad) [self quickMenu_dismissAnimated:NO];
 
     if (!isPad) {
@@ -1101,10 +1095,11 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
                                         self.view.bounds.size.height - hitY);
     [self quickMenu_layoutPanel];
 
-    // Mirror capsule at bottom-left; its hit area runs from the screen's left
-    // and bottom edges to halfway toward the time label.
-    _modeSwitchBackdrop.frame = CGRectMake(13, baseY - btnH, menuW, btnH);
-    CGFloat switchHitRight = round((CGRectGetMaxX(_modeSwitchBackdrop.frame) + [self stream_bottomLeftLabelsX]) / 2.0);
+    // Hidden bottom-left corner: same footprint as the quick-menu hit area
+    // mirrored (an invisible capsule at x=13 plus half the 16pt gap), from the
+    // left and bottom screen edges. Nothing is drawn; the time label sits over
+    // it and passes touches through.
+    CGFloat switchHitRight = 13 + menuW + 8;
     _modeSwitchButton.frame = CGRectMake(0, hitY, switchHitRight, self.view.bounds.size.height - hitY);
     [self layoutTimeBatteryCountdownDisplay];
     CGFloat rightEdge = rowRight - rowPad;
@@ -1850,7 +1845,7 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     _batteryLabel.hidden = _oscHidden;
     _countdownHitAreaView.hidden = _oscHidden;
 
-    // Layout labels at bottom-left, to the right of the mode-switch capsule.
+    // Layout labels at bottom-left.
     CGFloat spacing = 16.0f;
     
     CGFloat timeX = [self stream_bottomLeftLabelsX];
@@ -1885,14 +1880,12 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     [self quickMenu_raiseToFront];
 }
 
-// Where the bottom-left labels start: past the mode-switch capsule on iPad.
+// Where the bottom-left labels start (the mode-switch corner under them is invisible).
 - (CGFloat)stream_bottomLeftLabelsX {
-    if (UIDevice.currentDevice.userInterfaceIdiom != UIUserInterfaceIdiomPad) return 24.0f;
-    CGFloat menuW = round([self stream_bottomRowHeight] * 1.5) - 2;
-    return 13 + menuW + 16;
+    return 24.0f;
 }
 
-// Bottom-left capsule: one tap flips between the two manual modes. GAME shows
+// Hidden bottom-left corner: one tap flips between the two manual modes. GAME shows
 // the OSC (gamepad play), DESK puts it away so touch drives the mouse. Both
 // count as manual choices; a taskbar-confirmed desktop clears them.
 - (void)modeSwitch_tapped {
