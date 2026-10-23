@@ -899,6 +899,8 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self addSetting:self.pencilHoldModeStack ofId:@"pencilHoldModeStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self installPencilRollModeControl];
     [self addSetting:self.pencilRollModeStack ofId:@"pencilRollModeStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
+    [self installPencilScrollFollowsTipControl];
+    [self addSetting:self.pencilScrollFollowsTipStack ofId:@"pencilScrollFollowsTipStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self installPencilSliderControls];
     for (UIStackView *stack in self.pencilSliderStacks) {
         [self addSetting:stack ofId:[NSString stringWithFormat:@"%@Stack", ((UISlider *)stack.arrangedSubviews.lastObject).accessibilityIdentifier] withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
@@ -2263,6 +2265,28 @@ BOOL isCustomResolution(int resolutionSelected) {
     self.pencilRollModeStack.translatesAutoresizingMaskIntoConstraints = NO;
 }
 
+// Squeeze scroll direction: content follows the tip (touch-like) or the tip
+// drags the scrollbar. NSUserDefaults @"pencilScrollFollowsTip", default YES.
+- (void) installPencilScrollFollowsTipControl {
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.text = [LocalizationHelper localizedStringForKey:@"Pencil Scroll Follows Tip"];
+    label.font = [UIFont systemFontOfSize:18];
+    label.textColor = [UIColor whiteColor];
+    self.pencilScrollFollowsTipSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    id saved = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollFollowsTip"];
+    self.pencilScrollFollowsTipSwitch.on = saved ? [saved boolValue] : YES;
+    [self.pencilScrollFollowsTipSwitch addTarget:self action:@selector(pencilScrollFollowsTipChanged:) forControlEvents:UIControlEventValueChanged];
+    UIStackView *row = [self swapButtonRowWithLabel:label switch:self.pencilScrollFollowsTipSwitch];
+    self.pencilScrollFollowsTipStack = [[UIStackView alloc] initWithArrangedSubviews:@[row]];
+    self.pencilScrollFollowsTipStack.axis = UILayoutConstraintAxisVertical;
+    self.pencilScrollFollowsTipStack.alignment = UIStackViewAlignmentFill;
+    self.pencilScrollFollowsTipStack.distribution = UIStackViewDistributionFill;
+}
+
+- (void) pencilScrollFollowsTipChanged:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"pencilScrollFollowsTip"];
+}
+
 // Pencil tuning sliders (NSUserDefaults, persisted on every change). One
 // table row per slider: defaults key, title key, unit suffix, min, max, default.
 - (void) installPencilSliderControls {
@@ -2270,7 +2294,7 @@ BOOL isCustomResolution(int resolutionSelected) {
         @[@"pencilHoldDelay",        @"Pencil Hold Delay",           @"ms", @(PencilHoldDelayMin),        @(PencilHoldDelayMax),        @(PencilHoldDelayDefault)],
         @[@"pencilHardPressThreshold", @"Pencil Hard Press Threshold", @"%", @(PencilHardPressThresholdMin), @(PencilHardPressThresholdMax), @(PencilHardPressThresholdDefault)],
         @[@"pencilRollStep",         @"Pencil Roll Step",            @"°", @(PencilRollStepMin),         @(PencilRollStepMax),         @(PencilRollStepDefault)],
-        @[@"pencilScrollSpeed",      @"Pencil Squeeze Scroll Speed", @"",  @(PencilScrollSpeedMin),      @(PencilScrollSpeedMax),      @(PencilScrollSpeedDefault)],
+        @[@"pencilScrollPointsPerNotch", @"Pencil Scroll Points Per Notch", @"pt", @(PencilScrollPointsPerNotchMin), @(PencilScrollPointsPerNotchMax), @(PencilScrollPointsPerNotchDefault)],
         @[@"pencilScrollZoneRadius", @"Pencil Scroll Zone Radius",   @"pt", @(PencilScrollZoneRadiusMin), @(PencilScrollZoneRadiusMax), @(PencilScrollZoneRadiusDefault)],
         @[@"pencilScrollMaxRate",    @"Pencil Scroll Max Speed",     @"/s", @(PencilScrollMaxRateMin),    @(PencilScrollMaxRateMax),    @(PencilScrollMaxRateDefault)],
     ];

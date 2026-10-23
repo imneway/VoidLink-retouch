@@ -50,16 +50,19 @@ typedef NS_ENUM(NSInteger, PencilHoldMode) {
 #define PencilHardPressThresholdDefault 65.0f // % of maximumPossibleForce
 #define PencilHardPressThresholdMin 40.0f
 #define PencilHardPressThresholdMax 90.0f
-// Pencil tuning (NSUserDefaults @"pencilScrollSpeed" / @"pencilRollStep").
-#define PencilScrollSpeedDefault 16.0f  // wheel units per point, 120 = one notch
-#define PencilScrollSpeedMin 4.0f
-#define PencilScrollSpeedMax 48.0f
+// Pencil tuning (NSUserDefaults @"pencilRollStep" and the keys below).
+// Squeeze scroll is quantized to whole wheel notches (one notch = what every
+// app treats as a wheel click, with a haptic tick): this many points of hover
+// travel per notch. NSUserDefaults @"pencilScrollPointsPerNotch".
+#define PencilScrollPointsPerNotchDefault 8.0f
+#define PencilScrollPointsPerNotchMin 3.0f
+#define PencilScrollPointsPerNotchMax 30.0f
 #define PencilRollStepDefault 30.0f     // degrees per step
 #define PencilRollStepMin 10.0f
 #define PencilRollStepMax 90.0f
-// Squeeze scroll, continuous zone: beyond this many points from where the
-// squeeze started the scroll runs on its own, up to this many notches per
-// second at the far end of a 200pt ramp. NSUserDefaults @"pencilScrollZoneRadius" / @"pencilScrollMaxRate".
+// Squeeze scroll, continuous zone: beyond this many points from the zone
+// centre the scroll runs on its own, up to this many notches per second at
+// the far end of a 120pt ramp. Pulling back inside re-centres the zone. NSUserDefaults @"pencilScrollZoneRadius" / @"pencilScrollMaxRate".
 #define PencilScrollZoneRadiusDefault 100.0f
 #define PencilScrollZoneRadiusMin 40.0f
 #define PencilScrollZoneRadiusMax 300.0f

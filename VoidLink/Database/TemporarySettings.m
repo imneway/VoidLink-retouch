@@ -150,8 +150,10 @@ static BOOL BoolForUserDefaultKeyWithLegacyFallback(NSString *key, NSString *leg
     self.mapGyroTo = [NSNumber numberWithInteger:[[NSUserDefaults standardUserDefaults] integerForKey:@"mapGyroTo"]];
     id pencilRoll = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilRollMode"];
     self.pencilRollMode = pencilRoll ? @([pencilRoll integerValue]) : @(PencilRollModeArrowKeys);
-    id pencilScrollSpeed = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollSpeed"];
-    self.pencilScrollSpeed = pencilScrollSpeed ? @([pencilScrollSpeed floatValue]) : @(PencilScrollSpeedDefault);
+    id pencilScrollPointsPerNotch = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollPointsPerNotch"];
+    self.pencilScrollPointsPerNotch = pencilScrollPointsPerNotch ? @([pencilScrollPointsPerNotch floatValue]) : @(PencilScrollPointsPerNotchDefault);
+    id pencilScrollFollowsTip = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollFollowsTip"];
+    self.pencilScrollFollowsTip = pencilScrollFollowsTip ? [pencilScrollFollowsTip boolValue] : YES;
     id pencilRollStep = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilRollStep"];
     self.pencilRollStep = pencilRollStep ? @([pencilRollStep floatValue]) : @(PencilRollStepDefault);
     id pencilScrollZoneRadius = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollZoneRadius"];

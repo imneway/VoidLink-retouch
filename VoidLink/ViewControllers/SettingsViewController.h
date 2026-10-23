@@ -124,6 +124,8 @@
 // Pencil tuning sliders, built by installPencilSliderControls from a table:
 // stacks keyed by their NSUserDefaults key, in table order.
 @property (strong, nonatomic) NSArray<UIStackView *> *pencilSliderStacks;
+@property (strong, nonatomic) UIStackView *pencilScrollFollowsTipStack;
+@property (strong, nonatomic) UISwitch *pencilScrollFollowsTipSwitch;
 @property (strong, nonatomic) NSMutableDictionary<NSString *, UILabel *> *pencilSliderLabels;
 @property (strong, nonatomic) NSMutableDictionary<NSString *, NSString *> *pencilSliderTitles;
 @property (strong, nonatomic) NSMutableDictionary<NSString *, NSString *> *pencilSliderUnits;

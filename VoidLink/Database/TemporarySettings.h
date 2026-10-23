@@ -39,9 +39,12 @@
 // What an Apple Pencil Pro barrel roll does while hovering; see PencilRollMode.
 // Stored in NSUserDefaults under @"pencilRollMode"; defaults to arrow keys.
 @property (nonatomic, retain) NSNumber * pencilRollMode;
-// Pencil squeeze-and-move scroll: high-res wheel units per point of hover
-// travel (120 = one notch). NSUserDefaults @"pencilScrollSpeed", default 16.
-@property (nonatomic, retain) NSNumber * pencilScrollSpeed;
+// Pencil squeeze-and-move scroll: points of hover travel per wheel notch
+// (NSUserDefaults @"pencilScrollPointsPerNotch") and whether the content
+// follows the tip (YES, touch-like) or the tip drags the scrollbar (NO).
+// NSUserDefaults @"pencilScrollFollowsTip", default YES.
+@property (nonatomic, retain) NSNumber * pencilScrollPointsPerNotch;
+@property (nonatomic, assign) BOOL pencilScrollFollowsTip;
 // Pencil roll: degrees per step (and the engage dead zone).
 // NSUserDefaults @"pencilRollStep", default 30.
 @property (nonatomic, retain) NSNumber * pencilRollStep;

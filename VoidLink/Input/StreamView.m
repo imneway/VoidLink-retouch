@@ -36,8 +36,12 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 // How far (points) the tip may drift during a squeeze before it stops being a
 // right click and becomes a scroll. Squeezing always wobbles the tip, and a
 // wobble that crosses this turns the click into a (no-op) scroll, so it is
-// generous. Wheel units per point come from settings.pencilScrollSpeed.
+// generous. Points per wheel notch come from settings.pencilScrollPointsPerNotch.
 #define PENCIL_SQUEEZE_SCROLL_SLOP 14.0f
+// Continuous zone: the rate ramps from this many notches/s at the zone edge
+// to settings.pencilScrollMaxRate this many points further out.
+#define PENCIL_SCROLL_RATE_MIN 4.0
+#define PENCIL_SCROLL_RATE_RAMP_POINTS 120.0
 // Barrel roll while hovering (Pencil Pro): degrees per step (and the engage
 // dead zone) come from settings.pencilRollStep. How far (points) the tip may
 // travel between hover samples before the roll is dropped as an ordinary
@@ -122,12 +126,14 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     BOOL pencilSqueezeScrolling;     // the held squeeze moved past the slop while hovering: scrolling, origin/anchor valid
     BOOL pencilSqueezeClickSuppressed; // a contact happened during the squeeze: never right-click on release
     CGPoint pencilSqueezeAnchor;     // hover position the current 1:1 scroll segment is measured from
-    CGPoint pencilSqueezeOrigin;     // where the squeeze committed to scrolling: centre of the 1:1 zone
+    CGPoint pencilSqueezeOrigin;     // centre of the 1:1 zone (re-centred whenever the tip comes back inside)
+    int pencilSqueezeAxis;           // locked at commit: 1 = vertical, 2 = horizontal
+    CGFloat pencilSqueezeAccum;      // points of travel along the axis not yet turned into a notch
     BOOL pencilSqueezeInRateZone;    // tip is outside the 1:1 zone: the display link scrolls on its own
     CADisplayLink *pencilScrollLink; // runs only while in the rate zone
     CFTimeInterval pencilScrollLastTick;
-    double pencilScrollRateUnitsPerSec; // signed high-res wheel units per second
-    double pencilScrollCarry;        // fractional units not yet sent
+    double pencilScrollRateNotchesPerSec; // signed
+    double pencilScrollCarry;        // fractional notches not yet sent
     // Barrel roll (Pencil Pro) while hovering, see handlePencilRoll:
     BOOL pencilRollTracking;         // have a reference angle for this hover
     BOOL pencilRollEngaged;          // past the dead zone: stepping, cursor frozen
@@ -1434,52 +1440,84 @@ static __weak UIView *sMultiTouchExemptView = nil;
     if (!pencilSqueezeScrolling) {
         if (hypot(dx, dy) < PENCIL_SQUEEZE_SCROLL_SLOP) return;
         pencilSqueezeScrolling = YES;
+        // The slop vector decides the axis for the whole squeeze: a sideways
+        // wobble while scrolling a page must never turn into horizontal wheel
+        // events (they interrupt smooth scrolling in many apps).
+        pencilSqueezeAxis = fabs(dx) > fabs(dy) ? 2 : 1;
         pencilSqueezeAnchor = location; // the slop itself does not scroll
         pencilSqueezeOrigin = location;
+        pencilSqueezeAccum = 0;
         pencilSqueezeInRateZone = NO;
         return;
     }
     pencilSqueezeAnchor = location;
-    CGFloat unitsPerPoint = MAX(PencilScrollSpeedMin, settings.pencilScrollSpeed.floatValue);
 
-    // Horizontal is always 1:1 (nobody scrolls sideways for long).
-    int horizontal = (int)lround(-dx * unitsPerPoint);
-    if (horizontal != 0) {
-        LiSendHighResHScrollEvent((short)MAX(-32767, MIN(32767, horizontal)));
+    if (pencilSqueezeAxis == 2) {
+        // Horizontal: 1:1 only, nobody scrolls sideways for long.
+        // Positive HWHEEL scrolls the content right (moves it left), so a tip
+        // moving right with content following it is a negative wheel.
+        int sign = settings.pencilScrollFollowsTip ? -1 : 1;
+        [self emitPencilScrollNotchesFor:dx sign:sign horizontal:YES];
+        return;
     }
 
     // Vertical: 1:1 inside the zone around the origin, continuous outside it.
     // Hybrid so a long list can be scrolled without re-squeezing (push out
-    // and hold), while the exact stop is still made 1:1 (pull back in, which
-    // stops the run at once, then nudge).
+    // and hold), while the exact stop is still made 1:1: pulling back inside
+    // stops the run at once AND re-centres the zone there, so there is a full
+    // radius of 1:1 room in both directions for the final nudge.
+    // Positive WHEEL scrolls the content down (shows earlier lines), so a tip
+    // moving down with content following it is a positive wheel.
+    int sign = settings.pencilScrollFollowsTip ? 1 : -1;
     CGFloat offset = location.y - pencilSqueezeOrigin.y;
     CGFloat radius = MAX(PencilScrollZoneRadiusMin, settings.pencilScrollZoneRadius.floatValue);
     if (fabs(offset) > radius) {
-        // Rate ramps from ~2 notches/s at the zone edge to the configured
-        // maximum 200pt further out, concave so the slow end is fine-grained.
-        CGFloat t = MIN(1.0, (fabs(offset) - radius) / 200.0);
+        CGFloat t = MIN(1.0, (fabs(offset) - radius) / PENCIL_SCROLL_RATE_RAMP_POINTS);
         CGFloat maxRate = MAX(PencilScrollMaxRateMin, settings.pencilScrollMaxRate.floatValue);
-        CGFloat notchesPerSec = 2.0 + (maxRate - 2.0) * pow(t, 1.5);
-        double units = notchesPerSec * 120.0 * (offset > 0 ? 1 : -1);
-        if (settings.reverseMouseWheelDirection) units = -units;
-        pencilScrollRateUnitsPerSec = units;
+        CGFloat notchesPerSec = PENCIL_SCROLL_RATE_MIN + (maxRate - PENCIL_SCROLL_RATE_MIN) * pow(t, 1.5);
+        pencilScrollRateNotchesPerSec = notchesPerSec * (offset > 0 ? 1 : -1) * sign;
         if (!pencilSqueezeInRateZone) {
             pencilSqueezeInRateZone = YES;
+            pencilSqueezeAccum = 0;
             [self startPencilScrollLink];
         }
         return;
     }
     if (pencilSqueezeInRateZone) {
-        // Back inside: stop the run, and this re-entry sample does not scroll.
         pencilSqueezeInRateZone = NO;
         [self stopPencilScrollLink];
+        pencilSqueezeOrigin = location; // re-centre: this sample does not scroll
+        pencilSqueezeAccum = 0;
         return;
     }
-    int vertical = (int)lround(dy * unitsPerPoint);
-    if (settings.reverseMouseWheelDirection) vertical = -vertical;
-    if (vertical != 0) {
-        LiSendHighResScrollEvent((short)MAX(-32767, MIN(32767, vertical)));
+    [self emitPencilScrollNotchesFor:dy sign:sign horizontal:NO];
+}
+
+// Turns axis travel into whole wheel notches (one per
+// settings.pencilScrollPointsPerNotch points), each with a haptic tick. Whole
+// notches because that is the unit every Windows app honours; sub-notch
+// high-res deltas are dropped by some and animated into mush by others.
+- (void)emitPencilScrollNotchesFor:(CGFloat)travel sign:(int)sign horizontal:(BOOL)horizontal {
+    pencilSqueezeAccum += travel;
+    CGFloat pointsPerNotch = MAX(PencilScrollPointsPerNotchMin, settings.pencilScrollPointsPerNotch.floatValue);
+    int notches = (int)trunc(pencilSqueezeAccum / pointsPerNotch);
+    if (notches == 0) return;
+    pencilSqueezeAccum -= notches * pointsPerNotch;
+    [self sendPencilScrollNotches:notches * sign horizontal:horizontal];
+}
+
+- (void)sendPencilScrollNotches:(int)notches horizontal:(BOOL)horizontal {
+    while (notches != 0) { // the packet carries a signed char: chunk anything bigger
+        signed char clicks = (signed char)MAX(-127, MIN(127, notches));
+        if (horizontal) {
+            LiSendHScrollEvent(clicks);
+        } else {
+            LiSendScrollEvent(clicks);
+        }
+        notches -= clicks;
     }
+    [pencilRollFeedback selectionChanged];
+    [pencilRollFeedback prepare];
 }
 
 - (void)startPencilScrollLink {
@@ -1504,11 +1542,11 @@ static __weak UIView *sMultiTouchExemptView = nil;
     if (pencilScrollLastTick == 0) { pencilScrollLastTick = link.timestamp; return; }
     double dt = MIN(0.1, link.timestamp - pencilScrollLastTick);
     pencilScrollLastTick = link.timestamp;
-    pencilScrollCarry += pencilScrollRateUnitsPerSec * dt;
+    pencilScrollCarry += pencilScrollRateNotchesPerSec * dt;
     int whole = (int)trunc(pencilScrollCarry);
     if (whole == 0) return;
     pencilScrollCarry -= whole;
-    LiSendHighResScrollEvent((short)MAX(-32767, MIN(32767, whole)));
+    [self sendPencilScrollNotches:whole horizontal:NO];
 }
 
 #pragma mark - Apple Pencil hardware gestures (UIPencilInteractionDelegate)
