@@ -39,6 +39,12 @@
 // What an Apple Pencil Pro barrel roll does while hovering; see PencilRollMode.
 // Stored in NSUserDefaults under @"pencilRollMode"; defaults to arrow keys.
 @property (nonatomic, retain) NSNumber * pencilRollMode;
+// Pencil squeeze-and-move scroll: high-res wheel units per point of hover
+// travel (120 = one notch). NSUserDefaults @"pencilScrollSpeed", default 16.
+@property (nonatomic, retain) NSNumber * pencilScrollSpeed;
+// Pencil roll: degrees per step (and the engage dead zone).
+// NSUserDefaults @"pencilRollStep", default 30.
+@property (nonatomic, retain) NSNumber * pencilRollStep;
 // Per-axis gyro direction flips (apply only when mapGyroTo != Motion).
 // Stored in NSUserDefaults under @"gyroInvertPitch" / @"gyroInvertYaw".
 @property (nonatomic, assign) BOOL gyroInvertPitch;

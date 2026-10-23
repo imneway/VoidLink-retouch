@@ -34,17 +34,23 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 // UIPencilInteractionDelegate section): hover moves the cursor, contact is the
 // left button, squeeze is the right button, squeeze-and-move is the wheel.
 // How far (points) the tip may drift during a squeeze before it stops being a
-// right click and becomes a scroll, and how many high-res wheel units one
-// point of movement is worth (120 = one notch).
-#define PENCIL_SQUEEZE_SCROLL_SLOP 6.0f
-#define PENCIL_SQUEEZE_SCROLL_UNITS_PER_POINT 8.0f
-// Barrel roll while hovering (Pencil Pro): degrees of roll before the roll
-// engages (grip noise), degrees per step once engaged, and how far (points)
-// the tip may travel between hover samples before the roll is dropped as an
-// ordinary move / regrip.
-#define PENCIL_ROLL_DEAD_ZONE_DEG 10.0f
-#define PENCIL_ROLL_STEP_DEG 15.0f
-#define PENCIL_ROLL_MAX_TIP_TRAVEL 3.0f
+// right click and becomes a scroll. Squeezing always wobbles the tip, and a
+// wobble that crosses this turns the click into a (no-op) scroll, so it is
+// generous. Wheel units per point come from settings.pencilScrollSpeed.
+#define PENCIL_SQUEEZE_SCROLL_SLOP 14.0f
+// Barrel roll while hovering (Pencil Pro): degrees per step (and the engage
+// dead zone) come from settings.pencilRollStep. How far (points) the tip may
+// travel between hover samples before the roll is dropped as an ordinary
+// move / regrip.
+#define PENCIL_ROLL_MAX_TIP_TRAVEL 4.0f
+// Pencil taps: a second tap this soon and this close (normalized to the view)
+// to the last lift keeps the host cursor where it was, so Windows sees the
+// two clicks at one spot and makes a double click of them (SM_CXDOUBLECLK is
+// 4 px). Same idea as AbsoluteTouchHandler's finger dead zone. While a tap is
+// down, the first few points of wobble are not sent as moves either.
+#define PENCIL_DOUBLE_CLICK_DEAD_ZONE_DELAY 0.300
+#define PENCIL_DOUBLE_CLICK_DEAD_ZONE_DELTA 0.025f
+#define PENCIL_CONTACT_MOVE_SLOP 3.0f
 
 static BOOL RSPADALT2ValueNear(CGFloat value, CGFloat target, CGFloat tolerance) {
     return fabs(value - target) < tolerance;
@@ -105,6 +111,10 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 
     // Apple Pencil as a mouse
     BOOL pencilContactActive;        // tip on glass: host left button is held
+    CGPoint pencilContactDownLocation; // where the current contact started
+    BOOL pencilContactMoved;         // contact travelled past PENCIL_CONTACT_MOVE_SLOP: it is a drag
+    NSTimeInterval pencilLastLiftTime; // for the double-click dead zone
+    CGPoint pencilLastLiftLocation;
     CGPoint pencilHoverLocation;     // last hover position, view coordinates
     BOOL pencilSqueezeHeld;          // between squeeze began and ended/cancelled
     BOOL pencilSqueezeScrolling;     // the held squeeze moved past the slop: it is a scroll, not a right click
@@ -1103,8 +1113,18 @@ static __weak UIView *sMultiTouchExemptView = nil;
 - (BOOL)sendStylusEvent:(UITouch*)event {
     CGPoint viewLocation = [event locationInView:self];
     switch (event.phase) {
-        case UITouchPhaseBegan:
-            [self updateCursorLocation:viewLocation isMouse:NO];
+        case UITouchPhaseBegan: {
+            // Double-click dead zone: a quick second tap near the last lift
+            // does not move the cursor first, so both clicks land on one spot.
+            BOOL secondTap = (event.timestamp - pencilLastLiftTime) <= PENCIL_DOUBLE_CLICK_DEAD_ZONE_DELAY
+                && hypot((viewLocation.x - pencilLastLiftLocation.x) / self.bounds.size.width,
+                         (viewLocation.y - pencilLastLiftLocation.y) / self.bounds.size.height) <= PENCIL_DOUBLE_CLICK_DEAD_ZONE_DELTA;
+            if (!secondTap) {
+                [self updateCursorLocation:viewLocation isMouse:NO];
+                pencilLastLiftTime = 0; // this tap moved the cursor: it cannot pair with the previous lift
+            }
+            pencilContactDownLocation = viewLocation;
+            pencilContactMoved = NO;
             if (!pencilContactActive) {
                 pencilContactActive = YES;
                 LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
@@ -1113,8 +1133,14 @@ static __weak UIView *sMultiTouchExemptView = nil;
             // as a modifier/grip, not a right click: never click on release.
             if (pencilSqueezeHeld) pencilSqueezeScrolling = YES;
             break;
+        }
         case UITouchPhaseMoved:
             if (pencilContactActive) {
+                if (!pencilContactMoved
+                    && hypot(viewLocation.x - pencilContactDownLocation.x, viewLocation.y - pencilContactDownLocation.y) < PENCIL_CONTACT_MOVE_SLOP) {
+                    break; // tap wobble, not a drag: keep the click where it landed
+                }
+                pencilContactMoved = YES;
                 [self updateCursorLocation:viewLocation isMouse:NO];
             }
             break;
@@ -1122,10 +1148,12 @@ static __weak UIView *sMultiTouchExemptView = nil;
         case UITouchPhaseCancelled:
             if (pencilContactActive) {
                 pencilContactActive = NO;
-                if (event.phase == UITouchPhaseEnded) {
+                if (event.phase == UITouchPhaseEnded && pencilContactMoved) {
                     [self updateCursorLocation:viewLocation isMouse:NO];
                 }
                 LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+                pencilLastLiftTime = event.timestamp;
+                pencilLastLiftLocation = viewLocation;
             }
             // A squeeze still held across the contact: the drag must not be
             // replayed as one big wheel step when hover resumes.
@@ -1173,7 +1201,15 @@ static __weak UIView *sMultiTouchExemptView = nil;
             isPencilHovering = YES;
             CGPoint location = [gesture locationInView:self];
             pencilHoverLocation = location;
+            if (gesture.state == UIGestureRecognizerStateBegan) [pencilRollFeedback prepare];
             BOOL rollFrozeCursor = [self handlePencilRoll:gesture atLocation:location];
+            // Between the two taps of a double click the hover briefly resumes;
+            // a cursor move there would split the clicks just like a tap would.
+            if ([NSProcessInfo processInfo].systemUptime - pencilLastLiftTime <= PENCIL_DOUBLE_CLICK_DEAD_ZONE_DELAY
+                && hypot((location.x - pencilLastLiftLocation.x) / self.bounds.size.width,
+                         (location.y - pencilLastLiftLocation.y) / self.bounds.size.height) <= PENCIL_DOUBLE_CLICK_DEAD_ZONE_DELTA) {
+                rollFrozeCursor = YES;
+            }
             if (pencilSqueezeHeld) {
                 // Squeeze held: movement is the scroll wheel and the cursor
                 // stays put, so the page under the pinned cursor scrolls.
@@ -1182,6 +1218,7 @@ static __weak UIView *sMultiTouchExemptView = nil;
                 [self sendPencilSqueezeScrollTo:location];
             } else if (!pencilContactActive && !rollFrozeCursor) {
                 [self updateCursorLocation:location isMouse:NO];
+                pencilLastLiftTime = 0; // cursor left the last click: no double-click pairing with it
             }
             break;
         }
@@ -1235,19 +1272,15 @@ static __weak UIView *sMultiTouchExemptView = nil;
             return NO;
         }
         pencilRollAccumulated += deltaDeg;
+        CGFloat stepDeg = MAX(PencilRollStepMin, settings.pencilRollStep.floatValue);
         if (!pencilRollEngaged) {
-            if (fabs(pencilRollAccumulated) < PENCIL_ROLL_DEAD_ZONE_DEG) return NO;
-            // Engage: the dead zone itself is the first step; whatever was
-            // rolled past it in the same sample counts toward the next ones.
-            pencilRollEngaged = YES;
-            int direction = pencilRollAccumulated > 0 ? 1 : -1;
-            [self sendPencilRollStep:direction mode:mode atLocation:location];
-            pencilRollAccumulated -= direction * PENCIL_ROLL_DEAD_ZONE_DEG;
+            if (fabs(pencilRollAccumulated) < stepDeg) return NO;
+            pencilRollEngaged = YES; // the dead zone is one full step: it fires below
         }
-        while (fabs(pencilRollAccumulated) >= PENCIL_ROLL_STEP_DEG) {
+        while (fabs(pencilRollAccumulated) >= stepDeg) {
             int direction = pencilRollAccumulated > 0 ? 1 : -1;
             [self sendPencilRollStep:direction mode:mode atLocation:location];
-            pencilRollAccumulated -= direction * PENCIL_ROLL_STEP_DEG;
+            pencilRollAccumulated -= direction * stepDeg;
         }
         return YES;
     }
@@ -1268,9 +1301,11 @@ static __weak UIView *sMultiTouchExemptView = nil;
     } else {
         return;
     }
+    Log(LOG_D, @"Pencil roll step %+d (mode %ld)", direction, (long)mode);
 #if defined(__IPHONE_17_5)
     if (@available(iOS 17.5, *)) {
         [(UICanvasFeedbackGenerator *)pencilRollFeedback alignmentOccurredAtLocation:location];
+        [pencilRollFeedback prepare]; // keep the pencil's haptic engine warm for the next step
     }
 #endif
 }
@@ -1291,8 +1326,9 @@ static __weak UIView *sMultiTouchExemptView = nil;
         return;
     }
     pencilSqueezeAnchor = location;
-    int vertical = (int)lround(dy * PENCIL_SQUEEZE_SCROLL_UNITS_PER_POINT);
-    int horizontal = (int)lround(-dx * PENCIL_SQUEEZE_SCROLL_UNITS_PER_POINT);
+    CGFloat unitsPerPoint = MAX(PencilScrollSpeedMin, settings.pencilScrollSpeed.floatValue);
+    int vertical = (int)lround(dy * unitsPerPoint);
+    int horizontal = (int)lround(-dx * unitsPerPoint);
     if (settings.reverseMouseWheelDirection) vertical = -vertical;
     if (vertical != 0) {
         LiSendHighResScrollEvent((short)MAX(-32767, MIN(32767, vertical)));
@@ -1348,6 +1384,7 @@ static __weak UIView *sMultiTouchExemptView = nil;
     CGPoint location = pose ? pose.location : pencilHoverLocation;
     switch (squeeze.phase) {
         case UIPencilInteractionPhaseBegan:
+            Log(LOG_D, @"Pencil squeeze began, contact=%d", pencilContactActive);
             pencilSqueezeHeld = YES;
             pencilSqueezeScrolling = pencilContactActive; // tip already down: grip, not a click
             pencilSqueezeAnchor = location;
@@ -1357,13 +1394,14 @@ static __weak UIView *sMultiTouchExemptView = nil;
             break;
         case UIPencilInteractionPhaseEnded: {
             BOOL click = pencilSqueezeHeld && !pencilSqueezeScrolling && !pencilContactActive;
+            if (!click) Log(LOG_D, @"Pencil squeeze ended without click: held=%d scrolling=%d contact=%d", pencilSqueezeHeld, pencilSqueezeScrolling, pencilContactActive);
             pencilSqueezeHeld = NO;
             pencilSqueezeScrolling = NO;
             if (!click) return;
             if (CGRectContainsPoint(self.bounds, location)) {
                 [self updateCursorLocation:location isMouse:NO];
             }
-            Log(LOG_I, @"Pencil squeeze: right click");
+            Log(LOG_I, @"Pencil squeeze: right click (%.0f,%.0f)", location.x, location.y);
             LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
             usleep(30 * 1000);
             LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);

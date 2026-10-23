@@ -2558,6 +2558,13 @@ static NSString *OscContentClassName(StreamContentClass c) {
 }
 
 - (BOOL)requestHostTouchKeyboardToggle {
+    // Desktop only: in a game the double tap is far too easy to hit by
+    // accident, and there is nothing to type into anyway. Report handled so
+    // the caller does not fall back to the Win+Ctrl+O keystroke either.
+    if ([self osc_effectiveHideMode] == OscHideModeGame) {
+        Log(LOG_I, @"[HostAgent] touch keyboard toggle ignored: game mode");
+        return YES;
+    }
     if (!_hostStateClient || !_hostAgentLive) {
         Log(LOG_I, @"[HostAgent] touch keyboard toggle requested with no live agent");
         return NO;

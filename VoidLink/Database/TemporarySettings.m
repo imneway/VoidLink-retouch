@@ -150,6 +150,10 @@ static BOOL BoolForUserDefaultKeyWithLegacyFallback(NSString *key, NSString *leg
     self.mapGyroTo = [NSNumber numberWithInteger:[[NSUserDefaults standardUserDefaults] integerForKey:@"mapGyroTo"]];
     id pencilRoll = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilRollMode"];
     self.pencilRollMode = pencilRoll ? @([pencilRoll integerValue]) : @(PencilRollModeArrowKeys);
+    id pencilScrollSpeed = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollSpeed"];
+    self.pencilScrollSpeed = pencilScrollSpeed ? @([pencilScrollSpeed floatValue]) : @(PencilScrollSpeedDefault);
+    id pencilRollStep = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilRollStep"];
+    self.pencilRollStep = pencilRollStep ? @([pencilRollStep floatValue]) : @(PencilRollStepDefault);
     self.gyroInvertPitch = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertPitch"];
     self.gyroInvertYaw = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertYaw"];
     self.forceGyroEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:@"forceGyroEnabled"];

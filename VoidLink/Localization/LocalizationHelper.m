@@ -24,6 +24,8 @@
     dispatch_once(&onceToken, ^{
         zhDict = @{
             @"Pencil Roll": @"Pencil 滚转",
+            @"Pencil Roll Step": @"Pencil 滚转步进",
+            @"Pencil Squeeze Scroll Speed": @"Pencil 轻捏滚动速度",
             @"Arrow Keys": @"方向键",
             @"Wheel": @"滚轮",
             @"PairingHelpTitle": @"配对布局说明",

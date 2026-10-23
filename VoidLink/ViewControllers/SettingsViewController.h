@@ -118,6 +118,12 @@
 // off / arrow keys / wheel; persisted under NSUserDefaults @"pencilRollMode".
 @property (strong, nonatomic) UIStackView *pencilRollModeStack;
 @property (strong, nonatomic) UISegmentedControl *pencilRollModeSelector;
+@property (strong, nonatomic) UIStackView *pencilRollStepStack;
+@property (strong, nonatomic) UILabel *pencilRollStepLabel;
+@property (strong, nonatomic) UISlider *pencilRollStepSlider;
+@property (strong, nonatomic) UIStackView *pencilScrollSpeedStack;
+@property (strong, nonatomic) UILabel *pencilScrollSpeedLabel;
+@property (strong, nonatomic) UISlider *pencilScrollSpeedSlider;
 // Per-axis invert toggles for stick / mouse mapping (DS4 motion path is
 // untouched). Persisted under @"gyroInvertPitch" / @"gyroInvertYaw".
 @property (strong, nonatomic) UIStackView *gyroInvertPitchStack;

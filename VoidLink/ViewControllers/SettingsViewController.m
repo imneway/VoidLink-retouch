@@ -897,6 +897,9 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self addSetting:self.gyroInvertYawStack ofId:@"gyroInvertYawStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self installPencilRollModeControl];
     [self addSetting:self.pencilRollModeStack ofId:@"pencilRollModeStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
+    [self installPencilSliderControls];
+    [self addSetting:self.pencilRollStepStack ofId:@"pencilRollStepStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
+    [self addSetting:self.pencilScrollSpeedStack ofId:@"pencilScrollSpeedStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [touchAndControlSection addToParentStack:_parentStack];
     [touchAndControlSection setExpanded:YES];
 
@@ -2255,6 +2258,65 @@ BOOL isCustomResolution(int resolutionSelected) {
     self.pencilRollModeStack.spacing = 4;
     self.pencilRollModeStack.alignment = UIStackViewAlignmentFill;
     self.pencilRollModeStack.translatesAutoresizingMaskIntoConstraints = NO;
+}
+
+// Pencil tuning sliders (NSUserDefaults, persisted on every change):
+// roll degrees per step and squeeze-scroll wheel units per point.
+- (UIStackView*)pencilSliderStackWithLabel:(UILabel*)label slider:(UISlider*)slider {
+    label.font = [UIFont systemFontOfSize:18];
+    label.textColor = [UIColor whiteColor];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[label, slider]];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.spacing = 4;
+    stack.alignment = UIStackViewAlignmentFill;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    return stack;
+}
+
+- (void) installPencilSliderControls {
+    self.pencilRollStepLabel = [[UILabel alloc] init];
+    self.pencilRollStepSlider = [[UISlider alloc] init];
+    self.pencilRollStepSlider.minimumValue = PencilRollStepMin;
+    self.pencilRollStepSlider.maximumValue = PencilRollStepMax;
+    id savedStep = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilRollStep"];
+    self.pencilRollStepSlider.value = savedStep ? [savedStep floatValue] : PencilRollStepDefault;
+    [self.pencilRollStepSlider addTarget:self action:@selector(pencilRollStepChanged:) forControlEvents:UIControlEventValueChanged];
+    self.pencilRollStepStack = [self pencilSliderStackWithLabel:self.pencilRollStepLabel slider:self.pencilRollStepSlider];
+    [self refreshPencilRollStepLabel];
+
+    self.pencilScrollSpeedLabel = [[UILabel alloc] init];
+    self.pencilScrollSpeedSlider = [[UISlider alloc] init];
+    self.pencilScrollSpeedSlider.minimumValue = PencilScrollSpeedMin;
+    self.pencilScrollSpeedSlider.maximumValue = PencilScrollSpeedMax;
+    id savedSpeed = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollSpeed"];
+    self.pencilScrollSpeedSlider.value = savedSpeed ? [savedSpeed floatValue] : PencilScrollSpeedDefault;
+    [self.pencilScrollSpeedSlider addTarget:self action:@selector(pencilScrollSpeedChanged:) forControlEvents:UIControlEventValueChanged];
+    self.pencilScrollSpeedStack = [self pencilSliderStackWithLabel:self.pencilScrollSpeedLabel slider:self.pencilScrollSpeedSlider];
+    [self refreshPencilScrollSpeedLabel];
+}
+
+- (void) refreshPencilRollStepLabel {
+    self.pencilRollStepLabel.text = [NSString stringWithFormat:@"%@: %d°",
+                                     [LocalizationHelper localizedStringForKey:@"Pencil Roll Step"],
+                                     (int)lroundf(self.pencilRollStepSlider.value)];
+}
+
+- (void) refreshPencilScrollSpeedLabel {
+    self.pencilScrollSpeedLabel.text = [NSString stringWithFormat:@"%@: %d",
+                                        [LocalizationHelper localizedStringForKey:@"Pencil Squeeze Scroll Speed"],
+                                        (int)lroundf(self.pencilScrollSpeedSlider.value)];
+}
+
+- (void) pencilRollStepChanged:(UISlider* )sender {
+    sender.value = lroundf(sender.value); // whole degrees
+    [[NSUserDefaults standardUserDefaults] setFloat:sender.value forKey:@"pencilRollStep"];
+    [self refreshPencilRollStepLabel];
+}
+
+- (void) pencilScrollSpeedChanged:(UISlider* )sender {
+    sender.value = lroundf(sender.value);
+    [[NSUserDefaults standardUserDefaults] setFloat:sender.value forKey:@"pencilScrollSpeed"];
+    [self refreshPencilScrollSpeedLabel];
 }
 
 - (void) pencilRollModeChanged:(UISegmentedControl* )sender {

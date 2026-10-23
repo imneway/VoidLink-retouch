@@ -34,6 +34,13 @@ typedef NS_ENUM(NSInteger, PencilRollMode) {
     PencilRollModeArrowKeys = 1, // one Up/Down key per step
     PencilRollModeWheel = 2,     // one wheel notch per step
 };
+// Pencil tuning (NSUserDefaults @"pencilScrollSpeed" / @"pencilRollStep").
+#define PencilScrollSpeedDefault 16.0f  // wheel units per point, 120 = one notch
+#define PencilScrollSpeedMin 4.0f
+#define PencilScrollSpeedMax 48.0f
+#define PencilRollStepDefault 30.0f     // degrees per step
+#define PencilRollStepMin 10.0f
+#define PencilRollStepMax 90.0f
 
 typedef NS_ENUM(NSInteger, TouchEventPriorityEnum) {
     AsyncNativeTouchOff,
