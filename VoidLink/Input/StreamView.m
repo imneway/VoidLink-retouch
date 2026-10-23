@@ -132,7 +132,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     CGFloat pencilRollLastAngle;     // radians, last hover sample
     CGFloat pencilRollAccumulated;   // degrees since the last step / dead-zone start
     CGPoint pencilRollLastLocation;  // tip position at the last hover sample
-    UIFeedbackGenerator *pencilRollFeedback; // UICanvasFeedbackGenerator (iOS 17.5): one tick per step
+    UISelectionFeedbackGenerator *pencilRollFeedback; // view-bound (iOS 17.5) so Pencil Pro plays it: one tick per step
     NSMutableSet* keysDown;
     float streamAspectRatio;
 
@@ -379,7 +379,10 @@ static __weak UIView *sMultiTouchExemptView = nil;
 #if defined(__IPHONE_17_5)
     if (@available(iOS 17.5, *)) {
         if (!pencilRollFeedback) {
-            pencilRollFeedback = [UICanvasFeedbackGenerator feedbackGeneratorForView:self];
+            // A view-bound generator plays on Apple Pencil Pro while the pencil
+            // is in use over that view. UICanvasFeedbackGenerator (alignment
+            // ticks) stayed silent on device; the selection tick does not.
+            pencilRollFeedback = [UISelectionFeedbackGenerator feedbackGeneratorForView:self];
         }
     }
 #endif
@@ -1319,7 +1322,7 @@ static __weak UIView *sMultiTouchExemptView = nil;
     Log(LOG_D, @"Pencil roll step %+d (mode %ld)", direction, (long)mode);
 #if defined(__IPHONE_17_5)
     if (@available(iOS 17.5, *)) {
-        [(UICanvasFeedbackGenerator *)pencilRollFeedback alignmentOccurredAtLocation:location];
+        [pencilRollFeedback selectionChanged];
         [pencilRollFeedback prepare]; // keep the pencil's haptic engine warm for the next step
     }
 #endif
