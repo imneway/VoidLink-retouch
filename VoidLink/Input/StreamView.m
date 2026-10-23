@@ -117,8 +117,15 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     CGPoint pencilLastLiftLocation;
     CGPoint pencilHoverLocation;     // last hover position, view coordinates
     BOOL pencilSqueezeHeld;          // between squeeze began and ended/cancelled
-    BOOL pencilSqueezeScrolling;     // the held squeeze moved past the slop: it is a scroll, not a right click
-    CGPoint pencilSqueezeAnchor;     // hover position the current scroll segment is measured from
+    BOOL pencilSqueezeScrolling;     // the held squeeze moved past the slop while hovering: scrolling, origin/anchor valid
+    BOOL pencilSqueezeClickSuppressed; // a contact happened during the squeeze: never right-click on release
+    CGPoint pencilSqueezeAnchor;     // hover position the current 1:1 scroll segment is measured from
+    CGPoint pencilSqueezeOrigin;     // where the squeeze committed to scrolling: centre of the 1:1 zone
+    BOOL pencilSqueezeInRateZone;    // tip is outside the 1:1 zone: the display link scrolls on its own
+    CADisplayLink *pencilScrollLink; // runs only while in the rate zone
+    CFTimeInterval pencilScrollLastTick;
+    double pencilScrollRateUnitsPerSec; // signed high-res wheel units per second
+    double pencilScrollCarry;        // fractional units not yet sent
     // Barrel roll (Pencil Pro) while hovering, see handlePencilRoll:
     BOOL pencilRollTracking;         // have a reference angle for this hover
     BOOL pencilRollEngaged;          // past the dead zone: stepping, cursor frozen
@@ -1131,7 +1138,13 @@ static __weak UIView *sMultiTouchExemptView = nil;
             }
             // A contact during a held squeeze means the squeeze is being used
             // as a modifier/grip, not a right click: never click on release.
-            if (pencilSqueezeHeld) pencilSqueezeScrolling = YES;
+            // Any scroll in flight stops; hover scrolling re-commits from a
+            // fresh origin after the lift.
+            if (pencilSqueezeHeld) {
+                pencilSqueezeClickSuppressed = YES;
+                pencilSqueezeScrolling = NO;
+                [self stopPencilScrollLink];
+            }
             break;
         }
         case UITouchPhaseMoved:
@@ -1188,6 +1201,8 @@ static __weak UIView *sMultiTouchExemptView = nil;
     }
     pencilSqueezeHeld = NO;
     pencilSqueezeScrolling = NO;
+    pencilSqueezeClickSuppressed = NO;
+    [self stopPencilScrollLink];
 }
 
 - (void)sendStylusHoverEvent:(UIHoverGestureRecognizer*)gesture API_AVAILABLE(ios(13.0)) {
@@ -1323,19 +1338,80 @@ static __weak UIView *sMultiTouchExemptView = nil;
         if (hypot(dx, dy) < PENCIL_SQUEEZE_SCROLL_SLOP) return;
         pencilSqueezeScrolling = YES;
         pencilSqueezeAnchor = location; // the slop itself does not scroll
+        pencilSqueezeOrigin = location;
+        pencilSqueezeInRateZone = NO;
         return;
     }
     pencilSqueezeAnchor = location;
     CGFloat unitsPerPoint = MAX(PencilScrollSpeedMin, settings.pencilScrollSpeed.floatValue);
-    int vertical = (int)lround(dy * unitsPerPoint);
+
+    // Horizontal is always 1:1 (nobody scrolls sideways for long).
     int horizontal = (int)lround(-dx * unitsPerPoint);
+    if (horizontal != 0) {
+        LiSendHighResHScrollEvent((short)MAX(-32767, MIN(32767, horizontal)));
+    }
+
+    // Vertical: 1:1 inside the zone around the origin, continuous outside it.
+    // Hybrid so a long list can be scrolled without re-squeezing (push out
+    // and hold), while the exact stop is still made 1:1 (pull back in, which
+    // stops the run at once, then nudge).
+    CGFloat offset = location.y - pencilSqueezeOrigin.y;
+    CGFloat radius = MAX(PencilScrollZoneRadiusMin, settings.pencilScrollZoneRadius.floatValue);
+    if (fabs(offset) > radius) {
+        // Rate ramps from ~2 notches/s at the zone edge to the configured
+        // maximum 200pt further out, concave so the slow end is fine-grained.
+        CGFloat t = MIN(1.0, (fabs(offset) - radius) / 200.0);
+        CGFloat maxRate = MAX(PencilScrollMaxRateMin, settings.pencilScrollMaxRate.floatValue);
+        CGFloat notchesPerSec = 2.0 + (maxRate - 2.0) * pow(t, 1.5);
+        double units = notchesPerSec * 120.0 * (offset > 0 ? 1 : -1);
+        if (settings.reverseMouseWheelDirection) units = -units;
+        pencilScrollRateUnitsPerSec = units;
+        if (!pencilSqueezeInRateZone) {
+            pencilSqueezeInRateZone = YES;
+            [self startPencilScrollLink];
+        }
+        return;
+    }
+    if (pencilSqueezeInRateZone) {
+        // Back inside: stop the run, and this re-entry sample does not scroll.
+        pencilSqueezeInRateZone = NO;
+        [self stopPencilScrollLink];
+        return;
+    }
+    int vertical = (int)lround(dy * unitsPerPoint);
     if (settings.reverseMouseWheelDirection) vertical = -vertical;
     if (vertical != 0) {
         LiSendHighResScrollEvent((short)MAX(-32767, MIN(32767, vertical)));
     }
-    if (horizontal != 0) {
-        LiSendHighResHScrollEvent((short)MAX(-32767, MIN(32767, horizontal)));
-    }
+}
+
+- (void)startPencilScrollLink {
+    if (pencilScrollLink) return;
+    pencilScrollCarry = 0;
+    pencilScrollLastTick = 0;
+    pencilScrollLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(pencilScrollTick:)];
+    [pencilScrollLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+}
+
+- (void)stopPencilScrollLink {
+    [pencilScrollLink invalidate];
+    pencilScrollLink = nil;
+    pencilSqueezeInRateZone = NO;
+    pencilScrollCarry = 0;
+}
+
+// Continuous scroll while the tip sits outside the zone. Keeps running at the
+// last rate if hover is lost (tip lifted too high) until the squeeze ends.
+- (void)pencilScrollTick:(CADisplayLink *)link {
+    if (link != pencilScrollLink) return;
+    if (pencilScrollLastTick == 0) { pencilScrollLastTick = link.timestamp; return; }
+    double dt = MIN(0.1, link.timestamp - pencilScrollLastTick);
+    pencilScrollLastTick = link.timestamp;
+    pencilScrollCarry += pencilScrollRateUnitsPerSec * dt;
+    int whole = (int)trunc(pencilScrollCarry);
+    if (whole == 0) return;
+    pencilScrollCarry -= whole;
+    LiSendHighResScrollEvent((short)MAX(-32767, MIN(32767, whole)));
 }
 
 #pragma mark - Apple Pencil hardware gestures (UIPencilInteractionDelegate)
@@ -1386,17 +1462,20 @@ static __weak UIView *sMultiTouchExemptView = nil;
         case UIPencilInteractionPhaseBegan:
             Log(LOG_D, @"Pencil squeeze began, contact=%d", pencilContactActive);
             pencilSqueezeHeld = YES;
-            pencilSqueezeScrolling = pencilContactActive; // tip already down: grip, not a click
+            pencilSqueezeScrolling = NO;
+            pencilSqueezeClickSuppressed = pencilContactActive; // tip already down: grip, not a click
             pencilSqueezeAnchor = location;
             pencilHoverLocation = location;
             break;
         case UIPencilInteractionPhaseChanged:
             break;
         case UIPencilInteractionPhaseEnded: {
-            BOOL click = pencilSqueezeHeld && !pencilSqueezeScrolling && !pencilContactActive;
-            if (!click) Log(LOG_D, @"Pencil squeeze ended without click: held=%d scrolling=%d contact=%d", pencilSqueezeHeld, pencilSqueezeScrolling, pencilContactActive);
+            BOOL click = pencilSqueezeHeld && !pencilSqueezeScrolling && !pencilSqueezeClickSuppressed && !pencilContactActive;
+            if (!click) Log(LOG_D, @"Pencil squeeze ended without click: held=%d scrolling=%d suppressed=%d contact=%d", pencilSqueezeHeld, pencilSqueezeScrolling, pencilSqueezeClickSuppressed, pencilContactActive);
             pencilSqueezeHeld = NO;
             pencilSqueezeScrolling = NO;
+            pencilSqueezeClickSuppressed = NO;
+            [self stopPencilScrollLink];
             if (!click) return;
             if (CGRectContainsPoint(self.bounds, location)) {
                 [self updateCursorLocation:location isMouse:NO];
@@ -1411,6 +1490,8 @@ static __weak UIView *sMultiTouchExemptView = nil;
         default:
             pencilSqueezeHeld = NO;
             pencilSqueezeScrolling = NO;
+            pencilSqueezeClickSuppressed = NO;
+            [self stopPencilScrollLink];
             break;
     }
 }

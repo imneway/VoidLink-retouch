@@ -26,6 +26,8 @@
             @"Pencil Roll": @"Pencil 滚转",
             @"Pencil Roll Step": @"Pencil 滚转步进",
             @"Pencil Squeeze Scroll Speed": @"Pencil 轻捏滚动速度",
+            @"Pencil Scroll Zone Radius": @"Pencil 持续滚动起始距离",
+            @"Pencil Scroll Max Speed": @"Pencil 持续滚动最高速度",
             @"Arrow Keys": @"方向键",
             @"Wheel": @"滚轮",
             @"PairingHelpTitle": @"配对布局说明",

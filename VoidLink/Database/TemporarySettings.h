@@ -45,6 +45,9 @@
 // Pencil roll: degrees per step (and the engage dead zone).
 // NSUserDefaults @"pencilRollStep", default 30.
 @property (nonatomic, retain) NSNumber * pencilRollStep;
+// Squeeze scroll continuous zone, see DataManager.h PencilScrollZoneRadius* / PencilScrollMaxRate*.
+@property (nonatomic, retain) NSNumber * pencilScrollZoneRadius;
+@property (nonatomic, retain) NSNumber * pencilScrollMaxRate;
 // Per-axis gyro direction flips (apply only when mapGyroTo != Motion).
 // Stored in NSUserDefaults under @"gyroInvertPitch" / @"gyroInvertYaw".
 @property (nonatomic, assign) BOOL gyroInvertPitch;

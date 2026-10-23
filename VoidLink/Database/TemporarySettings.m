@@ -154,6 +154,10 @@ static BOOL BoolForUserDefaultKeyWithLegacyFallback(NSString *key, NSString *leg
     self.pencilScrollSpeed = pencilScrollSpeed ? @([pencilScrollSpeed floatValue]) : @(PencilScrollSpeedDefault);
     id pencilRollStep = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilRollStep"];
     self.pencilRollStep = pencilRollStep ? @([pencilRollStep floatValue]) : @(PencilRollStepDefault);
+    id pencilScrollZoneRadius = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollZoneRadius"];
+    self.pencilScrollZoneRadius = pencilScrollZoneRadius ? @([pencilScrollZoneRadius floatValue]) : @(PencilScrollZoneRadiusDefault);
+    id pencilScrollMaxRate = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollMaxRate"];
+    self.pencilScrollMaxRate = pencilScrollMaxRate ? @([pencilScrollMaxRate floatValue]) : @(PencilScrollMaxRateDefault);
     self.gyroInvertPitch = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertPitch"];
     self.gyroInvertYaw = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertYaw"];
     self.forceGyroEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:@"forceGyroEnabled"];

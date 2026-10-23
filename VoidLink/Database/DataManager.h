@@ -41,6 +41,15 @@ typedef NS_ENUM(NSInteger, PencilRollMode) {
 #define PencilRollStepDefault 30.0f     // degrees per step
 #define PencilRollStepMin 10.0f
 #define PencilRollStepMax 90.0f
+// Squeeze scroll, continuous zone: beyond this many points from where the
+// squeeze started the scroll runs on its own, up to this many notches per
+// second at the far end of a 200pt ramp. NSUserDefaults @"pencilScrollZoneRadius" / @"pencilScrollMaxRate".
+#define PencilScrollZoneRadiusDefault 100.0f
+#define PencilScrollZoneRadiusMin 40.0f
+#define PencilScrollZoneRadiusMax 300.0f
+#define PencilScrollMaxRateDefault 30.0f
+#define PencilScrollMaxRateMin 5.0f
+#define PencilScrollMaxRateMax 80.0f
 
 typedef NS_ENUM(NSInteger, TouchEventPriorityEnum) {
     AsyncNativeTouchOff,
