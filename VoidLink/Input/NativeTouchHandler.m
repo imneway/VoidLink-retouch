@@ -12,6 +12,8 @@
 #import "OnScreenControls.h"
 #import "StreamView.h"
 
+static BOOL sLoggedFirstTouchDown = NO; // [InputDiag] once per stream, reset in init
+
 #include <Limelight.h>
 
 
@@ -47,6 +49,7 @@
 
 - (id)initWithView:(StreamView*)view andSettings:(TemporarySettings*)settings{
     self = [super init];
+    sLoggedFirstTouchDown = NO;
     self->streamView = view;
     self->currentSettings = settings;
     self->activateCoordSelector = currentSettings.pointerVelocityModeDivider.floatValue != 1.0;
@@ -222,7 +225,16 @@
     if([self getPointerObjFromDict:touch].needResetCoords){ // access whether the current pointer has reached the boundary, and need a coord reset.
         LiSendTouchEvent(LI_TOUCH_EVENT_UP, pointerId, normalizedX, normalizedY, 0, 0, 0, 0);  //event must sent from the lowest level directy by LiSendTouchEvent to simulate continous dragging to another point on screen
         LiSendTouchEvent(LI_TOUCH_EVENT_DOWN, pointerId, 0.3, 0.4, 0, 0, 0, 0);
-    }else LiSendTouchEvent(touchType, pointerId, normalizedX, normalizedY,(touch.force / touch.maximumPossibleForce) / sin(touch.altitudeAngle),0.0f, 0.0f,[self getRotationFromAzimuthAngle:[touch azimuthAngleInView:streamView]]);
+    }else {
+        int rc = LiSendTouchEvent(touchType, pointerId, normalizedX, normalizedY,(touch.force / touch.maximumPossibleForce) / sin(touch.altitudeAngle),0.0f, 0.0f,[self getRotationFromAzimuthAngle:[touch azimuthAngleInView:streamView]]);
+        // Stream-start diagnosis: the first DOWN of each handler lifetime (one
+        // per stream) with its return code, to tell "client never sent" from
+        // "host sat on it". Mirror of [InputDiag] in StreamView / ControllerSupport.
+        if (touchType == LI_TOUCH_EVENT_DOWN && !sLoggedFirstTouchDown) {
+            sLoggedFirstTouchDown = YES;
+            Log(LOG_I, @"[InputDiag] first touch DOWN sent (%.3f, %.3f) rc=%d", normalizedX, normalizedY, rc);
+        }
+    }
 }
 
 - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {

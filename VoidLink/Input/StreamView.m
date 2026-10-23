@@ -128,6 +128,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     BOOL isPencilHovering;
 
     // Apple Pencil as a mouse
+    BOOL loggedFirstMousePosition;   // [InputDiag] stream-start diagnosis, reset in setupStreamView
     BOOL pencilContactActive;        // tip on glass (a host button may or may not be held yet, see pencilContactButton)
     int pencilContactButton;         // 0 = none yet (press withheld), BUTTON_LEFT or BUTTON_RIGHT held on the host
     NSTimer *pencilHoldTimer;        // fires when a withheld contact has stayed put for pencilHoldDelay
@@ -280,6 +281,7 @@ static __weak NSHashTable<UITouch *> *sWithheldStreamTouches = nil;
     localMousePointerMode = streamConfig.localMousePointerMode;
     
     keysDown = [[NSMutableSet alloc] init];
+    loggedFirstMousePosition = NO;
     suppressedGestureTouchAddrs = [NSMutableSet set];
     rightEdgeGestureSuppressionDepth = 0;
     oscGestureSuppressed = NO;
@@ -2505,7 +2507,11 @@ static __weak NSHashTable<UITouch *> *sWithheldStreamTouches = nil;
     // mouse motion when using a Citrix X1 mouse.
     if (normalizedLocation.x != lastMouseX || normalizedLocation.y != lastMouseY || !isMouse) {
         if (lastMouseX != 0 || lastMouseY != 0 || !isMouse) {
-            LiSendMousePositionEvent(normalizedLocation.x, normalizedLocation.y, videoSize.width, videoSize.height);
+            int rc = LiSendMousePositionEvent(normalizedLocation.x, normalizedLocation.y, videoSize.width, videoSize.height);
+            if (!loggedFirstMousePosition) {
+                loggedFirstMousePosition = YES; // [InputDiag] once per stream setup
+                Log(LOG_I, @"[InputDiag] first mouse position sent (%d, %d) rc=%d", (int)normalizedLocation.x, (int)normalizedLocation.y, rc);
+            }
         }
         
         if (isMouse) {
