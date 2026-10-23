@@ -161,7 +161,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     CGFloat pencilRollLastAngle;     // radians, last hover sample
     CGFloat pencilRollAccumulated;   // degrees since the last step / dead-zone start
     CGPoint pencilRollLastLocation;  // tip position at the last hover sample
-    UIImpactFeedbackGenerator *pencilRollFeedback; // view-bound (iOS 17.5) so Pencil Pro plays it; built lazily by pencilHapticWithIntensity:
+    UICanvasFeedbackGenerator *pencilRollFeedback; // the only generator the Pencil Pro plays; built lazily by pencilHapticConfirm / pencilHapticTick
     NSMutableSet* keysDown;
     float streamAspectRatio;
 
@@ -1316,34 +1316,59 @@ static __weak UIView *sMultiTouchExemptView = nil;
     }
 }
 
-// Haptics on the Apple Pencil Pro. The generator is bound to this view's
-// WINDOW, so it is built lazily the first time it is needed while the view
-// is on screen (a generator made before the view had a window never plays)
-// and rebuilt if the window changes. Impact rather than selection feedback:
-// the selection tick is the lightest pattern there is and was not felt.
-- (void)pencilHapticWithIntensity:(CGFloat)intensity {
+// Haptics on the Apple Pencil Pro. Only UICanvasFeedbackGenerator plays on
+// the pencil: impact / selection / notification generators stay silent on an
+// M4 iPad Pro even when view-bound (measured, nutrient.io haptics survey), and
+// the alignment / path-completed patterns need a location in the view. The
+// generator is bound to this view's WINDOW, so it is built lazily the first
+// time it is needed while the view is on screen (a generator made before the
+// view had a window never plays) and rebuilt if the window changes. Apple
+// engineers also say the pencil may refuse to vibrate while it is only
+// hovering, so the wheel / roll ticks during hover may stay silent by design.
+- (UICanvasFeedbackGenerator *)pencilHapticGenerator API_AVAILABLE(ios(17.5)) {
+    UIWindow *window = self.window;
+    if (!window) {
+        Log(LOG_W, @"Pencil haptic: no window, skipped");
+        return nil;
+    }
+    if (!pencilRollFeedback || pencilHapticWindow != window) {
+        pencilRollFeedback = [UICanvasFeedbackGenerator feedbackGeneratorForView:self];
+        pencilHapticWindow = window;
+        [pencilRollFeedback prepare];
+        Log(LOG_I, @"Pencil haptic: canvas generator bound to window %p", window);
+    }
+    return pencilRollFeedback;
+}
+
+- (CGPoint)pencilHapticLocation {
+    return pencilContactActive ? pencilContactDownLocation : pencilHoverLocation;
+}
+
+// Wheel notch / roll step: the alignment tick.
+- (void)pencilHapticTick {
 #if defined(__IPHONE_17_5)
     if (@available(iOS 17.5, *)) {
-        UIWindow *window = self.window;
-        if (!window) {
-            Log(LOG_W, @"Pencil haptic: no window, skipped");
-            return;
-        }
-        if (!pencilRollFeedback || pencilHapticWindow != window) {
-            pencilRollFeedback = [UIImpactFeedbackGenerator feedbackGeneratorWithStyle:UIImpactFeedbackStyleHeavy forView:self];
-            pencilHapticWindow = window;
-            [pencilRollFeedback prepare];
-            Log(LOG_I, @"Pencil haptic: generator bound to window %p", window);
-        }
-        [pencilRollFeedback impactOccurredWithIntensity:intensity];
-        [pencilRollFeedback prepare];
-        Log(LOG_I, @"Pencil haptic: impact %.1f", intensity);
+        UICanvasFeedbackGenerator *generator = [self pencilHapticGenerator];
+        if (!generator) return;
+        [generator alignmentOccurredAtLocation:[self pencilHapticLocation]];
+        [generator prepare];
+        Log(LOG_I, @"Pencil haptic: alignment tick (contact=%d)", pencilContactActive);
     }
 #endif
 }
 
-- (void)pencilHapticTick { [self pencilHapticWithIntensity:0.6]; }     // wheel notch / roll step
-- (void)pencilHapticConfirm { [self pencilHapticWithIntensity:1.0]; }  // contact became the right button
+// Contact became the right button: the path-completed pattern, a firmer one.
+- (void)pencilHapticConfirm {
+#if defined(__IPHONE_17_5)
+    if (@available(iOS 17.5, *)) {
+        UICanvasFeedbackGenerator *generator = [self pencilHapticGenerator];
+        if (!generator) return;
+        [generator pathCompletedAtLocation:[self pencilHapticLocation]];
+        [generator prepare];
+        Log(LOG_I, @"Pencil haptic: path completed (contact=%d)", pencilContactActive);
+    }
+#endif
+}
 
 #pragma mark - Withheld-contact indicator
 
