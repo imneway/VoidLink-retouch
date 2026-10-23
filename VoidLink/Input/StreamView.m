@@ -1242,60 +1242,41 @@ static __weak UIView *sMultiTouchExemptView = nil;
 }
 
 - (void)sendStylusHoverEvent:(UIHoverGestureRecognizer*)gesture API_AVAILABLE(ios(13.0)) {
-    uint8_t type;
-
     // While a contact is deferred or converted to a right-drag, the host must
-    // see no pen traffic at all — a stray hover would move the cursor off the
-    // pinned right-click location.
+    // see no pointer traffic at all — a stray hover would move the cursor off
+    // the pinned right-click location.
     if (pencilPenDownDeferred || pencilRightClickActive) {
         return;
     }
 
+    // Pencil hover is sent as an ABSOLUTE MOUSE move, not a pen HOVER event.
+    // Sunshine turns pen hover into an injected pen "in range" pointer: that
+    // moves the host cursor, but apps that key their hover highlights and
+    // tooltips off mouse messages never see it. A real mouse move reaches
+    // every app. Contacts still go through the pen path (pressure / tilt),
+    // and nothing pen-shaped is ever sent for hover, so there is no HOVER_LEAVE
+    // to pair with on exit. Only hover zOffset / tilt are lost, which nothing
+    // on a Windows desktop uses.
     switch (gesture.state) {
         case UIGestureRecognizerStateBegan:
         case UIGestureRecognizerStateChanged:
-            type = LI_TOUCH_EVENT_HOVER;
             isPencilHovering = YES;
+            [self updateCursorLocation:[gesture locationInView:self] isMouse:NO];
             break;
 
-        case UIGestureRecognizerStateEnded:
-            type = LI_TOUCH_EVENT_HOVER_LEAVE;
+        case UIGestureRecognizerStateEnded: {
+            // Hold the pencil-hover flag through one more frame so a trailing
+            // pointerInteraction/touchesMoved update can't yank the host cursor
+            // back and make it flicker (upstream adeb77cf).
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.016 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                self->isPencilHovering = NO;
+            });
             break;
+        }
 
         default:
-            return;
+            break;
     }
-
-    if (gesture.state == UIGestureRecognizerStateEnded) {
-        // Hold the pencil-hover flag through one more frame so a trailing
-        // pointerInteraction/touchesMoved update can't yank the host cursor
-        // back and make it flicker (upstream adeb77cf).
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.016 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            self->isPencilHovering = NO;
-        });
-    }
-
-    CGPoint location = [self adjustCoordinatesForVideoArea:[gesture locationInView:self]];
-    CGSize videoSize = [self getVideoAreaSize];
-    
-    float distance = 0.0f;
-#if defined(__IPHONE_16_1) || defined(__TVOS_16_1)
-    if (@available(iOS 16.1, *)) {
-        distance = gesture.zOffset;
-    }
-#endif
-    
-    uint16_t rotationAngle = LI_ROT_UNKNOWN;
-    uint8_t tiltAngle = LI_TILT_UNKNOWN;
-#if defined(__IPHONE_16_4) || defined(__TVOS_16_4)
-    if (@available(iOS 16.4, *)) {
-        rotationAngle = [self getRotationFromAzimuthAngle:[gesture azimuthAngleInView:self]];
-        tiltAngle = [self getTiltFromAltitudeAngle:gesture.altitudeAngle];
-    }
-#endif
-    
-    LiSendPenEvent(type, LI_TOOL_TYPE_PEN, 0, location.x / videoSize.width, location.y / videoSize.height,
-                   distance, 0.0f, 0.0f, rotationAngle, tiltAngle);
 }
 
 #pragma mark - Apple Pencil hardware gestures (UIPencilInteractionDelegate)
