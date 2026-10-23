@@ -30,14 +30,14 @@
 
 static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 
-// Apple Pencil client-side long press → real mouse right click.
-// How long the pencil must stay stationary to trigger it (matches the finger
-// long-press delay in AbsoluteTouchHandler), and how far (normalized) it may
-// drift before the long press is abandoned. The pen DOWN is withheld from the
-// host during this window (see sendStylusEvent), so it also bounds the extra
-// latency a stationary tap pays before it is delivered as DOWN+UP.
-#define PENCIL_LONG_PRESS_ACTIVATION_DELAY 0.650f
-#define PENCIL_LONG_PRESS_ACTIVATION_DELTA 0.01f
+// Apple Pencil is a MOUSE, never a pen (see sendStylusEvent / the
+// UIPencilInteractionDelegate section): hover moves the cursor, contact is the
+// left button, squeeze is the right button, squeeze-and-move is the wheel.
+// How far (points) the tip may drift during a squeeze before it stops being a
+// right click and becomes a scroll, and how many high-res wheel units one
+// point of movement is worth (120 = one notch).
+#define PENCIL_SQUEEZE_SCROLL_SLOP 6.0f
+#define PENCIL_SQUEEZE_SCROLL_UNITS_PER_POINT 8.0f
 
 static BOOL RSPADALT2ValueNear(CGFloat value, CGFloat target, CGFloat tolerance) {
     return fabs(value - target) < tolerance;
@@ -96,11 +96,12 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     BOOL isInputingText;
     BOOL isPencilHovering;
 
-    // Apple Pencil client-side long-press → right click state
-    NSTimer* pencilLongPressTimer;
-    CGPoint pencilTouchDownLocation;
-    BOOL pencilPenDownDeferred;
-    BOOL pencilRightClickActive;
+    // Apple Pencil as a mouse
+    BOOL pencilContactActive;        // tip on glass: host left button is held
+    CGPoint pencilHoverLocation;     // last hover position, view coordinates
+    BOOL pencilSqueezeHeld;          // between squeeze began and ended/cancelled
+    BOOL pencilSqueezeScrolling;     // the held squeeze moved past the slop: it is a scroll, not a right click
+    CGPoint pencilSqueezeAnchor;     // hover position the current scroll segment is measured from
     NSMutableSet* keysDown;
     float streamAspectRatio;
 
@@ -1072,198 +1073,96 @@ static __weak UIView *sMultiTouchExemptView = nil;
     return 90 - MIN(90, altitudeDegs);
 }
 
+// Pencil contact → left mouse button. Returns YES when the touch was consumed
+// (always: the pencil never reaches the finger touch handlers). The host sees
+// a plain mouse, so apps that read raw mouse input (games) take the clicks and
+// Windows Ink never gets a chance to replay or delay anything. No long-press
+// conversion: holding the tip down is a held left button; right click is the
+// squeeze.
 - (BOOL)sendStylusEvent:(UITouch*)event {
-    uint8_t type;
-    
-    // Don't touch stylus events if the host doesn't support them. We want to pass
-    // them as normal touches for legacy hosts that don't understand pen events.
-    if (!(LiGetHostFeatureFlags() & LI_FF_PEN_TOUCH_EVENTS)) {
-        // The pen path can vanish mid-contact (reconnect renegotiates host
-        // features) — never strand a pending conversion behind this early
-        // return, or a held right button / stale timer would leak.
-        [self resetPencilLongPressState];
-        return NO;
-    }
-    
+    CGPoint viewLocation = [event locationInView:self];
     switch (event.phase) {
         case UITouchPhaseBegan:
-            type = LI_TOUCH_EVENT_DOWN;
+            [self updateCursorLocation:viewLocation isMouse:NO];
+            if (!pencilContactActive) {
+                pencilContactActive = YES;
+                LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
+            }
+            // A contact during a held squeeze means the squeeze is being used
+            // as a modifier/grip, not a right click: never click on release.
+            if (pencilSqueezeHeld) pencilSqueezeScrolling = YES;
             break;
         case UITouchPhaseMoved:
-            type = LI_TOUCH_EVENT_MOVE;
+            if (pencilContactActive) {
+                [self updateCursorLocation:viewLocation isMouse:NO];
+            }
             break;
         case UITouchPhaseEnded:
-            type = LI_TOUCH_EVENT_UP;
-            break;
         case UITouchPhaseCancelled:
-            type = LI_TOUCH_EVENT_CANCEL;
+            if (pencilContactActive) {
+                pencilContactActive = NO;
+                if (event.phase == UITouchPhaseEnded) {
+                    [self updateCursorLocation:viewLocation isMouse:NO];
+                }
+                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+            }
+            // A squeeze still held across the contact: the drag must not be
+            // replayed as one big wheel step when hover resumes.
+            pencilSqueezeAnchor = viewLocation;
             break;
         default:
-            return YES;
-    }
-
-    CGPoint viewLocation = [event locationInView:self];
-
-    // Client-side long press → real mouse right click. Windows' own pen
-    // press-and-hold (the spinning-ring Ink gesture) is unreliable in many
-    // third-party apps, so a stationary pencil press is converted here instead.
-    //
-    // Crucially, the pen DOWN is DEFERRED while the pencil is stationary: the
-    // host is a virtual HID pen device, which has no "cancel" concept — any
-    // contact the host has seen can be turned into a click by Windows Ink when
-    // it ends (Ink replays the buffered tap when its press-and-hold aborts,
-    // which showed up as phantom double clicks). So nothing is sent until the
-    // contact declares itself: movement past the slop → commit DOWN and stream
-    // pen events as usual; lift before the delay → commit DOWN+UP as one clean
-    // tap; stationary past the delay → press the right mouse button and the
-    // host never sees a pen contact at all (no spinning ring, nothing for Ink
-    // to replay).
-    switch (type) {
-        case LI_TOUCH_EVENT_DOWN:
-            if (pencilRightClickActive) {
-                // Stale right button from a contact whose terminal event never
-                // arrived — release it before starting a fresh contact, or the
-                // two state machines would overlap.
-                pencilRightClickActive = NO;
-                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
-            }
-            [pencilLongPressTimer invalidate];
-            pencilTouchDownLocation = viewLocation;
-            pencilPenDownDeferred = YES;
-            // Common run-loop modes so a concurrent tracking interaction can't
-            // delay the 650ms deadline.
-            pencilLongPressTimer = [NSTimer timerWithTimeInterval:PENCIL_LONG_PRESS_ACTIVATION_DELAY
-                                                           target:self
-                                                         selector:@selector(onPencilLongPress:)
-                                                         userInfo:nil
-                                                          repeats:NO];
-            [[NSRunLoop mainRunLoop] addTimer:pencilLongPressTimer forMode:NSRunLoopCommonModes];
-            return YES; // nothing sent to the host yet
-        case LI_TOUCH_EVENT_MOVE:
-            if (pencilRightClickActive) {
-                // Long press already converted: drag the cursor with the right
-                // button held instead of sending pen moves.
-                [self updateCursorLocation:viewLocation isMouse:NO];
-                return YES;
-            }
-            if (pencilPenDownDeferred) {
-                if (hypot((viewLocation.x - pencilTouchDownLocation.x) / self.bounds.size.width,
-                          (viewLocation.y - pencilTouchDownLocation.y) / self.bounds.size.height) <= PENCIL_LONG_PRESS_ACTIVATION_DELTA) {
-                    return YES; // still stationary — keep waiting
-                }
-                // Moved past the slop: this is a stroke/drag, not a long press.
-                // Commit the deferred DOWN at the original contact point, then
-                // fall through to send this MOVE normally.
-                [pencilLongPressTimer invalidate];
-                pencilLongPressTimer = nil;
-                pencilPenDownDeferred = NO;
-                [self sendCommittedPenEvent:LI_TOUCH_EVENT_DOWN atViewLocation:pencilTouchDownLocation withTouch:event];
-            }
-            break;
-        case LI_TOUCH_EVENT_UP:
-        case LI_TOUCH_EVENT_CANCEL:
-            [pencilLongPressTimer invalidate];
-            pencilLongPressTimer = nil;
-            if (pencilRightClickActive) {
-                pencilRightClickActive = NO;
-                // Menu pops on release, matching finger long-press behavior.
-                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
-                return YES;
-            }
-            if (pencilPenDownDeferred) {
-                pencilPenDownDeferred = NO;
-                if (type == LI_TOUCH_EVENT_CANCEL) {
-                    return YES; // host never saw this contact — nothing to cancel
-                }
-                // Short stationary press: commit DOWN+UP together as one clean
-                // tap (DOWN here, UP through the normal send below).
-                [self sendCommittedPenEvent:LI_TOUCH_EVENT_DOWN atViewLocation:pencilTouchDownLocation withTouch:event];
-            }
             break;
     }
-
-    return [self sendCommittedPenEvent:type atViewLocation:viewLocation withTouch:event] != LI_ERR_UNSUPPORTED;
+    return YES;
 }
 
-- (int)sendCommittedPenEvent:(uint8_t)type atViewLocation:(CGPoint)viewLocation withTouch:(UITouch*)event {
-    CGPoint location = [self adjustCoordinatesForVideoArea:viewLocation];
-    CGSize videoSize = [self getVideoAreaSize];
-
-    // The tap path synthesizes a DOWN from a lifting touch, where force can be
-    // 0 with altitudeAngle 0 — guard the 0/0 (NaN) and clamp to [0, 1].
-    float pressure = 0.0f;
-    if (event.maximumPossibleForce > 0) {
-        pressure = event.force / event.maximumPossibleForce;
-        float sinAltitude = sin(event.altitudeAngle);
-        if (sinAltitude > 0.01f) {
-            pressure /= sinAltitude;
+// Routes every pencil touch in `touches` through sendStylusEvent and returns
+// the finger touches that remain for the touch-mode handlers (the same set
+// object when there was no pencil in it).
+- (NSSet *)consumePencilTouches:(NSSet *)touches {
+    NSMutableSet* filtered = nil;
+    for (UITouch* touch in touches) {
+        if (touch.type == UITouchTypePencil && [self sendStylusEvent:touch]) {
+            if (filtered == nil) filtered = [touches mutableCopy];
+            [filtered removeObject:touch];
         }
-        if (!(pressure > 0.0f)) pressure = 0.0f;
-        if (pressure > 1.0f) pressure = 1.0f;
     }
-
-    return LiSendPenEvent(type, LI_TOOL_TYPE_PEN, 0, location.x / videoSize.width, location.y / videoSize.height,
-                          pressure,
-                          0.0f, 0.0f,
-                          [self getRotationFromAzimuthAngle:[event azimuthAngleInView:self]],
-                          [self getTiltFromAltitudeAngle:event.altitudeAngle]);
+    return filtered ?: touches;
 }
 
-// Releases every piece of in-flight pencil long-press state: pending timer,
-// deferred contact, and (if held) the synthetic right mouse button.
-- (void)resetPencilLongPressState {
-    [pencilLongPressTimer invalidate];
-    pencilLongPressTimer = nil;
-    pencilPenDownDeferred = NO;
-    if (pencilRightClickActive) {
-        pencilRightClickActive = NO;
-        LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+// Releases every piece of in-flight pencil state: a held left button and a
+// held squeeze. Teardown backstop (view leaving the window, reconfigure).
+- (void)resetPencilState {
+    if (pencilContactActive) {
+        pencilContactActive = NO;
+        LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
     }
-}
-
-- (void)onPencilLongPress:(NSTimer*)timer {
-    if (timer != pencilLongPressTimer) {
-        return; // stale timer that lost an invalidation race — never act on it
-    }
-    pencilLongPressTimer = nil;
-
-    if (!pencilPenDownDeferred) {
-        return; // contact already committed or gone — never convert it
-    }
-    pencilPenDownDeferred = NO;
-
-    // The host never saw this pen contact, so there is nothing to cancel and
-    // nothing Windows Ink could replay. Pin the host cursor to the pen tip,
-    // then press and hold the right mouse button — released when the pencil
-    // lifts (see sendStylusEvent UP/CANCEL).
-    [self updateCursorLocation:pencilTouchDownLocation isMouse:NO];
-    LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
-    pencilRightClickActive = YES;
+    pencilSqueezeHeld = NO;
+    pencilSqueezeScrolling = NO;
 }
 
 - (void)sendStylusHoverEvent:(UIHoverGestureRecognizer*)gesture API_AVAILABLE(ios(13.0)) {
-    // While a contact is deferred or converted to a right-drag, the host must
-    // see no pointer traffic at all — a stray hover would move the cursor off
-    // the pinned right-click location.
-    if (pencilPenDownDeferred || pencilRightClickActive) {
-        return;
-    }
-
-    // Pencil hover is sent as an ABSOLUTE MOUSE move, not a pen HOVER event.
-    // Sunshine turns pen hover into an injected pen "in range" pointer: that
-    // moves the host cursor, but apps that key their hover highlights and
-    // tooltips off mouse messages never see it. A real mouse move reaches
-    // every app. Contacts still go through the pen path (pressure / tilt),
-    // and nothing pen-shaped is ever sent for hover, so there is no HOVER_LEAVE
-    // to pair with on exit. Only hover zOffset / tilt are lost, which nothing
-    // on a Windows desktop uses.
+    // Pencil hover is an ABSOLUTE MOUSE move. (A Moonlight pen HOVER becomes an
+    // injected pen "in range" pointer on the host: that moves the cursor, but
+    // apps that key hover highlights / tooltips off mouse messages never see
+    // it. A real mouse move reaches every app.)
     switch (gesture.state) {
         case UIGestureRecognizerStateBegan:
-        case UIGestureRecognizerStateChanged:
+        case UIGestureRecognizerStateChanged: {
             isPencilHovering = YES;
-            [self updateCursorLocation:[gesture locationInView:self] isMouse:NO];
+            CGPoint location = [gesture locationInView:self];
+            pencilHoverLocation = location;
+            if (pencilSqueezeHeld) {
+                // Squeeze held: movement is the scroll wheel and the cursor
+                // stays put, so the page under the pinned cursor scrolls.
+                // A hover that (re)starts mid-squeeze measures from here.
+                if (gesture.state == UIGestureRecognizerStateBegan) pencilSqueezeAnchor = location;
+                [self sendPencilSqueezeScrollTo:location];
+            } else if (!pencilContactActive) {
+                [self updateCursorLocation:location isMouse:NO];
+            }
             break;
-
+        }
         case UIGestureRecognizerStateEnded: {
             // Hold the pencil-hover flag through one more frame so a trailing
             // pointerInteraction/touchesMoved update can't yank the host cursor
@@ -1273,9 +1172,35 @@ static __weak UIView *sMultiTouchExemptView = nil;
             });
             break;
         }
-
         default:
             break;
+    }
+}
+
+// Squeeze-and-move → wheel. The first PENCIL_SQUEEZE_SCROLL_SLOP points are
+// absorbed (a squeeze always wobbles the tip a little); past that the squeeze
+// is committed as a scroll and every further point of hover travel is sent as
+// high-res wheel units. Vertical follows the finger-scroll convention (moving
+// the tip down scrolls the content down the screen, i.e. wheel up), flipped by
+// the reverse-wheel setting like every other wheel source in this view.
+- (void)sendPencilSqueezeScrollTo:(CGPoint)location {
+    CGFloat dx = location.x - pencilSqueezeAnchor.x;
+    CGFloat dy = location.y - pencilSqueezeAnchor.y;
+    if (!pencilSqueezeScrolling) {
+        if (hypot(dx, dy) < PENCIL_SQUEEZE_SCROLL_SLOP) return;
+        pencilSqueezeScrolling = YES;
+        pencilSqueezeAnchor = location; // the slop itself does not scroll
+        return;
+    }
+    pencilSqueezeAnchor = location;
+    int vertical = (int)lround(dy * PENCIL_SQUEEZE_SCROLL_UNITS_PER_POINT);
+    int horizontal = (int)lround(-dx * PENCIL_SQUEEZE_SCROLL_UNITS_PER_POINT);
+    if (settings.reverseMouseWheelDirection) vertical = -vertical;
+    if (vertical != 0) {
+        LiSendHighResScrollEvent((short)MAX(-32767, MIN(32767, vertical)));
+    }
+    if (horizontal != 0) {
+        LiSendHighResHScrollEvent((short)MAX(-32767, MIN(32767, horizontal)));
     }
 }
 
@@ -1313,27 +1238,45 @@ static __weak UIView *sMultiTouchExemptView = nil;
 }
 
 #if defined(__IPHONE_17_5)
-// Squeeze (Apple Pencil Pro) → one right click at the pencil's hover spot.
-// Fires on the END phase so a squeeze that is cancelled never clicks. Skipped
-// while a pencil contact is being held or already converted into a right
-// drag — the long-press path owns the right button then.
+// Squeeze (Apple Pencil Pro). A squeeze that releases where it began is one
+// right click at the hover spot; a squeeze that moves past the slop is the
+// scroll wheel for as long as it is held (see sendPencilSqueezeScrollTo:).
+// A squeeze during a contact, or that the system cancels, does nothing.
 - (void)pencilInteraction:(UIPencilInteraction *)interaction didReceiveSqueeze:(UIPencilInteractionSqueeze *)squeeze API_AVAILABLE(ios(17.5)) {
-    if (squeeze.phase != UIPencilInteractionPhaseEnded) return;
     if (UIPencilInteraction.preferredSqueezeAction == UIPencilPreferredActionIgnore) {
         return; // user turned pencil squeeze off system-wide
     }
-    if (pencilPenDownDeferred || pencilRightClickActive) return;
-
-    // Pin the host cursor to where the tip hovers (the hover stream already
-    // keeps it there, but the pose is authoritative at the moment of release).
     UIPencilHoverPose *pose = squeeze.hoverPose; // location is in this view's coordinates
-    if (pose && CGRectContainsPoint(self.bounds, pose.location)) {
-        [self updateCursorLocation:pose.location isMouse:NO];
+    CGPoint location = pose ? pose.location : pencilHoverLocation;
+    switch (squeeze.phase) {
+        case UIPencilInteractionPhaseBegan:
+            pencilSqueezeHeld = YES;
+            pencilSqueezeScrolling = pencilContactActive; // tip already down: grip, not a click
+            pencilSqueezeAnchor = location;
+            pencilHoverLocation = location;
+            break;
+        case UIPencilInteractionPhaseChanged:
+            break;
+        case UIPencilInteractionPhaseEnded: {
+            BOOL click = pencilSqueezeHeld && !pencilSqueezeScrolling && !pencilContactActive;
+            pencilSqueezeHeld = NO;
+            pencilSqueezeScrolling = NO;
+            if (!click) return;
+            if (CGRectContainsPoint(self.bounds, location)) {
+                [self updateCursorLocation:location isMouse:NO];
+            }
+            Log(LOG_I, @"Pencil squeeze: right click");
+            LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
+            usleep(30 * 1000);
+            LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+            break;
+        }
+        case UIPencilInteractionPhaseCancelled:
+        default:
+            pencilSqueezeHeld = NO;
+            pencilSqueezeScrolling = NO;
+            break;
     }
-    Log(LOG_I, @"Pencil squeeze: right click");
-    LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
-    usleep(30 * 1000);
-    LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
 }
 #endif
 
@@ -1407,16 +1350,13 @@ static __weak UIView *sMultiTouchExemptView = nil;
 #if !TARGET_OS_TV
     // if (@available(iOS 13.4, *)) {
     // cancel restriction of native touch for iOS13.3 & lower
+    // The pencil is a mouse in every touch mode: it never reaches the finger
+    // handlers. Fingers sharing the same touches set still must.
+    touches = [self consumePencilTouches:touches];
+    if (touches.count == 0) return;
     if (settings.touchMode.intValue == NativeTouchOnly) {
         [touchHandler touchesBegan:touches withEvent:event];
         return; //This is a native touch oriented fork, in pure native touch mode, this call back method deals with native touch only.
-    }
-    if (@available(iOS 13.4, *)) { // now only pencil events are restricted
-        for (UITouch* touch in touches) {
-            if (touch.type == UITouchTypePencil) {
-                if ([self sendStylusEvent:touch]) return;
-            }
-        }
     }
     
 #endif
@@ -1568,15 +1508,14 @@ static __weak UIView *sMultiTouchExemptView = nil;
 - (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
 #if !TARGET_OS_TV
     
+    touches = [self consumePencilTouches:touches];
+    if (touches.count == 0) return;
     if (settings.touchMode.intValue == NativeTouchOnly) {
         [touchHandler touchesMoved:touches withEvent:event];
         return; //This is a native touch oriented fork, in pure native touch mode, this call back method deals with native touch only.
     }
     
     for (UITouch* touch in touches) {
-        if (touch.type == UITouchTypePencil) {
-            if ([self sendStylusEvent:touch]) return;
-        }
         if (@available(iOS 13.4, *)) {
             UITouch *touch = [touches anyObject];
             if (touch.type == UITouchTypeIndirectPointer) {
@@ -1592,7 +1531,7 @@ static __weak UIView *sMultiTouchExemptView = nil;
                 // don't require this, but we do it anyway for them too.
                 // Cursor movement without a button held down is handled
                 // in pointerInteraction:regionForRequest:defaultRegion.
-                if (!isPencilHovering && !pencilRightClickActive) [self updateCursorLocation:[touch locationInView:self] isMouse:YES];
+                if (!isPencilHovering && !pencilContactActive) [self updateCursorLocation:[touch locationInView:self] isMouse:YES];
                 return;
             }
         }
@@ -1676,17 +1615,11 @@ static __weak UIView *sMultiTouchExemptView = nil;
 - (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
 #if !TARGET_OS_TV
 
+    touches = [self consumePencilTouches:touches];
+    if (touches.count == 0) return;
     if (settings.touchMode.intValue == NativeTouchOnly) {
         [touchHandler touchesEnded:touches withEvent:event];
         return; //This is a native touch oriented fork, in pure native touch mode, this call back method deals with native touch only.
-    }
-    
-    if (@available(iOS 13.4, *)){ //now only pencil events are restricted
-        for (UITouch* touch in touches) {
-            if (touch.type == UITouchTypePencil) {
-                if ([self sendStylusEvent:touch]) return;
-            }
-        }
     }
 
 #endif
@@ -1715,24 +1648,13 @@ static __weak UIView *sMultiTouchExemptView = nil;
 - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
     NSSet* nonStylusTouches = touches;
 #if !TARGET_OS_TV
-    // Send the pen CANCEL for stylus-handled pencil touches BEFORE the generic
-    // handlers, and keep those touches away from touchHandler entirely: on a
-    // pen-capable host the pencil's began/moved/ended all early-return through
-    // sendStylusEvent, so the native touch handlers never allocated a pointer id
-    // for it — letting the cancel fall through would make them emit an UP for
-    // pointer id 0 and could release an unrelated active touch.
-    if (settings.touchMode.intValue != NativeTouchOnly) {
-        if (@available(iOS 13.4, *)) {
-            NSMutableSet* filtered = nil;
-            for (UITouch* touch in touches) {
-                if (touch.type == UITouchTypePencil && [self sendStylusEvent:touch]) {
-                    if (filtered == nil) filtered = [touches mutableCopy];
-                    [filtered removeObject:touch];
-                }
-            }
-            if (filtered != nil) nonStylusTouches = filtered;
-        }
-    }
+    // Release the pencil's left button BEFORE the generic handlers, and keep
+    // pencil touches away from touchHandler entirely: the pencil's
+    // began/moved/ended all early-return through sendStylusEvent, so the
+    // native touch handlers never allocated a pointer id for it — letting the
+    // cancel fall through would make them emit an UP for pointer id 0 and
+    // could release an unrelated active touch.
+    nonStylusTouches = [self consumePencilTouches:touches];
 #endif
     if (nonStylusTouches.count > 0) {
         [touchHandler touchesCancelled:nonStylusTouches withEvent:event];
@@ -1835,11 +1757,10 @@ static __weak UIView *sMultiTouchExemptView = nil;
     [super willMoveToWindow:newWindow];
     if (newWindow == nil) {
         [self endRightEdgeGestureSuppression];
-        // Teardown backstop for the pencil long-press conversion: if the view
-        // leaves the window without a terminal touch callback, a pending timer
-        // would retain self and fire into a dead view, and an active synthetic
-        // right button would stay pressed on the host forever.
-        [self resetPencilLongPressState];
+        // Teardown backstop: if the view leaves the window without a terminal
+        // touch callback, a pencil-held left button would stay pressed on the
+        // host forever.
+        [self resetPencilState];
     }
 }
 
@@ -1901,9 +1822,9 @@ static __weak UIView *sMultiTouchExemptView = nil;
     
     // Move the cursor on the host if no buttons are pressed.
     // Motion with buttons pressed in handled in touchesMoved:
-    // pencilRightClickActive: while a pencil long-press right-drag is in
-    // flight, an indirect pointer must not yank the host cursor off the pen tip.
-    if (lastMouseButtonMask == 0 && !isPencilHovering && !pencilRightClickActive) {
+    // pencilContactActive: while the pencil tip holds the left button, an
+    // indirect pointer must not yank the host cursor off the pen tip.
+    if (lastMouseButtonMask == 0 && !isPencilHovering && !pencilContactActive) {
         [self updateCursorLocation:request.location isMouse:YES];
     }
     
