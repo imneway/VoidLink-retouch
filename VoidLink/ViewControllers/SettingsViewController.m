@@ -23,6 +23,7 @@
 
 #import "LocalizationHelper.h"
 #import "StreamView.h"
+#import "GameAspectMemory.h"
 
 @implementation SettingsViewController {
     UISwitch *_streamTouchBlockSwitch;
@@ -668,6 +669,51 @@ BOOL isCustomResolution(int resolutionSelected) {
     else [parent insertArrangedSubview:row atIndex:index + 1];
 }
 
+// "Clear learned screen ratios": forgets which games were learned as
+// full-display and every per-game ratio choice (GameAspectMemory).
+- (UIStackView *)aspectMemoryResetStack {
+    UILabel *reference = nil;
+    for (UIView *view in self.snapScreenToTopStack.arrangedSubviews) {
+        if ([view isKindOfClass:[UILabel class]]) { reference = (UILabel *)view; break; }
+    }
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.font = reference ? reference.font : [UIFont systemFontOfSize:17];
+    label.textColor = reference ? reference.textColor : [UIColor labelColor];
+    label.text = [LocalizationHelper localizedStringForKey:@"Learned screen ratios"];
+    label.adjustsFontSizeToFitWidth = YES;
+    label.minimumScaleFactor = 0.65;
+    label.numberOfLines = 1;
+    [label setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    [button setTitle:[LocalizationHelper localizedStringForKey:@"Clear"] forState:UIControlStateNormal];
+    button.titleLabel.font = label.font;
+    button.tintColor = [UIColor systemRedColor];
+    [button addTarget:self action:@selector(aspectMemoryResetTapped) forControlEvents:UIControlEventTouchUpInside];
+    [button setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [button setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[label, button]];
+    row.axis = UILayoutConstraintAxisHorizontal;
+    row.alignment = UIStackViewAlignmentCenter;
+    row.distribution = UIStackViewDistributionFill;
+    row.spacing = 20;
+    return row;
+}
+
+- (void)aspectMemoryResetTapped {
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Clear learned screen ratios?"]
+                         message:[LocalizationHelper localizedStringForKey:@"Forgets which games draw over the whole screen and every ratio you set per game. Games start learning again."]
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Clear"] style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        [[GameAspectMemory shared] clearAll];
+        Log(LOG_I, @"[Aspect] learned screen ratios cleared");
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)streamTouchBlockSwitchFlipped:(UISwitch *)sender {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:StreamViewBlockStreamTouchDefaultsKey];
 }
@@ -904,6 +950,7 @@ BOOL isCustomResolution(int resolutionSelected) {
     if (self.screenRatioStack) {
         [self addSetting:self.screenRatioStack ofId:@"screenRatioStack" withInfoTag:NO withDynamicLabel:NO to:videoSection];
     }
+    [self addSetting:[self aspectMemoryResetStack] ofId:@"aspectMemoryResetStack" withInfoTag:NO withDynamicLabel:NO to:videoSection];
 
     [videoSection addToParentStack:_parentStack];
     [videoSection setExpanded:YES];

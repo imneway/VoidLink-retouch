@@ -63,6 +63,14 @@ static const int kMaxBarGapRows = 3;
 // least this often while sampling, so a Console capture shows what the
 // detector actually sees (bar heights, pixel format) without a debugger.
 static const CFTimeInterval kDiagLogInterval = 5.0;
+// Content in the 16:9 bar area: rows at 1/4, 1/2 and 3/4 of the ideal bar
+// height, top and bottom. A row counts when at least half its samples are
+// non-black (a cursor, a toast or a volume popup covers far less), and each
+// side needs two of its three rows. The stretch has to last this long and
+// span this many samples before it is reported.
+static const float kBarContentRowFill = 0.5f;
+static const CFTimeInterval kBarContentSustain = 5.0;
+static const int kBarContentMinSamples = 10;
 
 typedef struct {
     size_t a[kWindowSamples];   // top or left
@@ -105,6 +113,10 @@ static void BarWindowMin(const BarWindow *w, size_t *outA, size_t *outB) {
     StreamContentClass _lastDiagRaw;     // _analysisQueue only
     BOOL _lastDiagFits;                  // _analysisQueue only
     CFTimeInterval _lastFailureLogTime;  // _analysisQueue only
+    CFTimeInterval _barContentSince;     // _analysisQueue only, 0 = no stretch
+    int _barContentSamples;              // _analysisQueue only
+    BOOL _barContentReported;            // _analysisQueue only
+    unsigned _barContentGeneration;      // _analysisQueue only
     // Bar measurement windows (guarded by @synchronized(self)). One ring per axis,
     // cleared whenever that axis' edge-black state flips (desktop <-> bars),
     // so a fresh game is measured from its first sample, not against the
@@ -230,6 +242,32 @@ static BOOL ColumnIsBlack(const uint8_t *base, size_t bytesPerRow, size_t height
         if (LumaAt(base + y * bytesPerRow, x, wide) > blackMax && ++nonBlack > kLineMaxNonBlack) return NO;
     }
     return YES;
+}
+
+static BOOL RowMostlyFilled(const uint8_t *base, size_t bytesPerRow, size_t width, size_t y, BOOL wide, int blackMax) {
+    const uint8_t *row = base + y * bytesPerRow;
+    int n = 0, filled = 0;
+    size_t step = width / kLineSamples;
+    if (step == 0) step = 1;
+    for (size_t x = step / 2; x < width; x += step) {
+        n++;
+        if (LumaAt(row, x, wide) > blackMax) filled++;
+    }
+    return n > 0 && filled >= (int)(n * kBarContentRowFill);
+}
+
+// Is there real content where a centred 16:9 picture would have its bars?
+static BOOL ContentInSixteenNineBars(const uint8_t *base, size_t bytesPerRow, size_t width, size_t height, BOOL wide, int blackMax) {
+    double ideal = ((double)height - (double)width * 9.0 / 16.0) / 2.0;
+    if (ideal < 16) return NO;   // the frame is (nearly) 16:9 itself
+    static const double fractions[3] = {0.25, 0.5, 0.75};
+    int topHits = 0, bottomHits = 0;
+    for (int i = 0; i < 3; i++) {
+        size_t y = (size_t)(ideal * fractions[i]);
+        if (RowMostlyFilled(base, bytesPerRow, width, y, wide, blackMax)) topHits++;
+        if (RowMostlyFilled(base, bytesPerRow, width, height - 1 - y, wide, blackMax)) bottomHits++;
+    }
+    return topHits >= 2 && bottomHits >= 2;
 }
 
 // Windows taskbar signature, from the luma plane alone. Looking up from the
@@ -448,7 +486,9 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
     // Only meaningful without a bottom bar; the first step fails on one anyway.
     BOOL taskbar = (bottomRaw < (size_t)(height * kMinSingleBarFraction))
         && TaskbarAtBottom(base, bytesPerRow, width, height, wide, blackMax);
+    BOOL barContent = ContentInSixteenNineBars(base, bytesPerRow, width, height, wide, blackMax);
     CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    [self analysisQueue_trackBarContent:barContent at:now generation:generation];
 
     // A frame that is black to the scan limit on every edge says nothing on its
     // own (a fade, or a night scene whose sprites all missed the sampled lines):
@@ -527,6 +567,38 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
         // observation from an older generation must not restart the debounce.
         if (atomic_load(&self->_generation) != generation) return;
         [self stateQueue_observe:raw fits:fits at:now];
+    });
+}
+
+// Stretches of content in the bar area, reported once each when they have
+// lasted long enough. Any sample without it (a fade, a cutscene, black)
+// ends the stretch; so does a reset.
+- (void)analysisQueue_trackBarContent:(BOOL)barContent at:(CFTimeInterval)now generation:(unsigned)generation {
+    if (generation != _barContentGeneration) {
+        _barContentGeneration = generation;
+        _barContentSince = 0;
+        _barContentReported = NO;
+    }
+    if (!barContent) {
+        _barContentSince = 0;
+        _barContentReported = NO;
+        return;
+    }
+    if (_barContentSince == 0) {
+        _barContentSince = now;
+        _barContentSamples = 0;
+    }
+    _barContentSamples++;
+    if (_barContentReported || now - _barContentSince < kBarContentSustain || _barContentSamples < kBarContentMinSamples) return;
+    _barContentReported = YES;
+    CFTimeInterval since = _barContentSince;
+    Log(LOG_I, @"[Letterbox] content in the 16:9 bar area for %.1fs (%d samples)", now - since, _barContentSamples);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!self.enabled || atomic_load(&self->_generation) != generation) return;
+        id<StreamLetterboxDetectorDelegate> delegate = self.delegate;
+        if ([delegate respondsToSelector:@selector(letterboxDetector:didSeeContentInBarsSince:)]) {
+            [delegate letterboxDetector:self didSeeContentInBarsSince:since];
+        }
     });
 }
 

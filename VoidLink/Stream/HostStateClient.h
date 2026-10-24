@@ -24,6 +24,13 @@ static const uint16_t HostStateClientDefaultPort = 48100;
 @property (nonatomic, readonly) BOOL displayPrimary;
 @property (nonatomic, readonly) BOOL displayFound;
 @property (nonatomic, readonly) NSUInteger seq;
+// About the window the agent judged by (top): whether it has the focus, is a
+// covering (fullscreen-sized) window, and its client area in host pixels
+// (0 when the agent predates the field).
+@property (nonatomic, readonly) BOOL topForeground;
+@property (nonatomic, readonly) BOOL topCoversDisplay;
+@property (nonatomic, readonly) NSInteger topClientWidth;
+@property (nonatomic, readonly) NSInteger topClientHeight;
 @end
 
 @class HostStateClient;

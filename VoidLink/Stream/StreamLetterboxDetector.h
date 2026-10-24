@@ -36,6 +36,13 @@ typedef NS_ENUM(NSInteger, StreamContentClass) {
 - (void)letterboxDetector:(StreamLetterboxDetector *)detector
     didChangeContentClass:(StreamContentClass)contentClass
           fitsSixteenNine:(BOOL)fitsSixteenNine;
+@optional
+// Main queue. The area a 16:9 letterbox would leave black (top and bottom)
+// has carried substantial content for a sustained stretch that began at
+// `since` (CACurrentMediaTime). Fired once per uninterrupted stretch: proof
+// that whatever is on screen draws over the whole display, which a 16:9 game
+// never does. The caller decides whether the content was a game.
+- (void)letterboxDetector:(StreamLetterboxDetector *)detector didSeeContentInBarsSince:(CFTimeInterval)since;
 @end
 
 @interface StreamLetterboxDetector : NSObject

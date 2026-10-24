@@ -15,6 +15,7 @@
 #import "VideoDecoderRenderer.h"
 #import "StreamLetterboxDetector.h"
 #import "HostStateClient.h"
+#import "GameAspectMemory.h"
 #import "FrameQueue.h"
 #import "StreamManager.h"
 #import "SceneDelegate.h"
@@ -283,6 +284,13 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     HostStateClient *_hostStateClient;       // host agent link; outranks the pixel detector while live
     BOOL _hostAgentLive;
     BOOL _detectorFits;                      // detector's own 16:9 verdict, kept apart from the applied one
+    // The agent's game on top (lower-cased exe; nil unless the agent says
+    // game) and what the per-process ratio memory needs about it.
+    NSString *_hostGameProcess;
+    BOOL _hostGameForeground;
+    BOOL _hostGameCovers;                    // the game's window covers the display
+    BOOL _hostGameExclusive169;              // covers the display and its client area is 16:9 (mode change)
+    CFTimeInterval _hostGameSince;           // CACurrentMediaTime of the last change of the above
     StreamContentClass _oscDetectedContent;  // last debounced detector verdict
     // YES from viewDidLoad until osc_configureForStream: the OSC stays fully
     // Off (not translucent) while connecting, whatever the hide mode says.
@@ -2330,6 +2338,16 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
 
 - (void)toggleSnapRatio {
     NSInteger mode = [self snap_effectiveRatioMode] == 0 ? 1 : 0;
+    if (_oscAutoDetectApplicable && [self aspect_hasGameProcess]) {
+        // Remembered for this game: a learned or detected ratio never
+        // overrides it again (sidebar: clear learned screen ratios).
+        [[GameAspectMemory shared] setManualFits:(mode == 0) forProcess:_hostGameProcess];
+        Log(LOG_I, @"[Aspect] %@: ratio set to %@ by hand, remembered", _hostGameProcess, mode == 0 ? @"16:9" : @"FULL");
+        _snapRatioOverride = SnapRatioOverrideNone;
+        [self osc_applyContentClass:_oscDetectedContent fits:[self aspect_resolvedFits:_detectorFits] source:@"ratio button"];
+        [self updateSnapRatioButton];
+        return;
+    }
     if (_oscAutoDetectApplicable) {
         _snapRatioOverride = (mode == 0) ? SnapRatioOverrideSixteenNine : SnapRatioOverrideFull;
     } else {
@@ -2460,6 +2478,9 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     self->_streamMan.videoRenderer.letterboxDetector.delegate = self;
     [self osc_updateAutoDetectApplicabilityForStreamAspect:streamAspect];
     [self hostAgent_startForHost:_streamConfig.host];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:GameAspectMemoryDidClearNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(aspect_memoryCleared:)
+                                                 name:GameAspectMemoryDidClearNotification object:nil];
     self->_streamView.blockStreamTouchesWhileOscActive = VoidStreamTouchBlockEnabled();
 
     if (_oscAutoDetectApplicable) {
@@ -2537,7 +2558,7 @@ static NSString *OscContentClassName(StreamContentClass c) {
     // supplies the 16:9 fit (bars are the only way to know where to snap).
     _detectorFits = fitsSixteenNine;
     if (_hostAgentLive) {
-        BOOL fits = (_oscDetectedContent == StreamContentClassGame) ? fitsSixteenNine : NO;
+        BOOL fits = (_oscDetectedContent == StreamContentClassGame) ? [self aspect_resolvedFits:fitsSixteenNine] : NO;
         [self osc_applyContentClass:_oscDetectedContent fits:fits source:@"detector(fit only)"];
     } else {
         [self osc_applyContentClass:contentClass fits:fitsSixteenNine source:@"detector"];
@@ -2586,6 +2607,88 @@ static NSString *OscContentClassName(StreamContentClass c) {
     if (fitChanged || classChanged) [self applySnapToTopAnimated:YES];
 }
 
+#pragma mark Per-game screen ratio (GameAspectMemory)
+
+// While the agent names the game on top, the 16:9 snap follows what is known
+// about that process before the bars of the moment: the user's ratio choice,
+// then a 16:9 display mode (exclusive fullscreen), then "draws over the whole
+// display" learned from sustained content in the bar area. A full-display
+// game's cutscene bars then leave the picture where it is.
+
+// _hostGameProcess is only set while the agent says game; it is updated before
+// the class is applied, so this holds on the very report that starts a game.
+- (BOOL)aspect_hasGameProcess {
+    return _hostAgentLive && _hostGameProcess.length > 0;
+}
+
+- (BOOL)aspect_resolvedFits:(BOOL)detectorFits {
+    if (![self aspect_hasGameProcess]) return detectorFits;
+    GameAspectMemory *memory = [GameAspectMemory shared];
+    NSNumber *manual = [memory manualFitsForProcess:_hostGameProcess];
+    if (manual) return manual.boolValue;
+    if (_hostGameExclusive169) return YES;
+    if ([memory isLearnedFullForProcess:_hostGameProcess]) return NO;
+    return detectorFits;
+}
+
+- (void)aspect_memoryCleared:(NSNotification *)note {
+    if (!_hasConnectionStarted) return;
+    BOOL fits = (_oscDetectedContent == StreamContentClassGame) ? [self aspect_resolvedFits:_detectorFits] : NO;
+    Log(LOG_I, @"[Aspect] memory cleared, ratio re-resolved (fits 16:9 %d)", fits);
+    [self osc_applyContentClass:_oscDetectedContent fits:fits source:@"aspect cleared"];
+}
+
+// Returns YES when the game on top (or its 16:9 display mode) changed.
+- (BOOL)aspect_noteHostState:(HostState *)state {
+    NSString *process = (state.game && state.process.length > 0) ? state.process.lowercaseString : nil;
+    BOOL exclusive169 = NO;
+    if (process && state.topCoversDisplay && state.topClientWidth > 0 && state.topClientHeight > 0) {
+        double aspect = (double)state.topClientWidth / (double)state.topClientHeight;
+        exclusive169 = fabs(aspect - 16.0 / 9.0) < 0.02;
+    }
+    BOOL foreground = process && state.topForeground;
+    BOOL covers = process && state.topCoversDisplay;
+    BOOL changed = !((process == _hostGameProcess) || [process isEqualToString:_hostGameProcess])
+        || exclusive169 != _hostGameExclusive169;
+    // Focus and window-size changes don't change the resolved ratio, but they
+    // restart the settle time: evidence spanning one of them proves nothing.
+    if (changed || foreground != _hostGameForeground || covers != _hostGameCovers) {
+        _hostGameSince = CACurrentMediaTime();
+    }
+    _hostGameForeground = foreground;
+    _hostGameCovers = covers;
+    if (changed) {
+        _hostGameProcess = process;
+        _hostGameExclusive169 = exclusive169;
+        // A session-wide ratio tap belongs to what was on screen then, not to
+        // the next game (whose own remembered choice must win).
+        _snapRatioOverride = SnapRatioOverrideNone;
+    }
+    return changed;
+}
+
+- (void)letterboxDetector:(StreamLetterboxDetector *)detector didSeeContentInBarsSince:(CFTimeInterval)since {
+    if (detector != self->_streamMan.videoRenderer.letterboxDetector) return;
+    NSString *process = _hostGameProcess;
+    NSString *skip = nil;
+    if (![self aspect_hasGameProcess]) skip = @"no game from the agent";
+    else if (!_hostGameForeground) skip = @"game not in the foreground";
+    else if (!_hostGameCovers) skip = @"game window does not cover the display";
+    else if (_hostGameExclusive169) skip = @"16:9 display mode";
+    else if (since < _hostGameSince + 3.0) skip = @"too close to a window switch";
+    if (skip) {
+        Log(LOG_I, @"[Aspect] content in the bar area ignored: %@", skip);
+        return;
+    }
+    NSUInteger count = 0;
+    BOOL learned = [[GameAspectMemory shared] recordContentInBarsForProcess:process count:&count];
+    Log(LOG_I, @"[Aspect] %@: content in the bar area, sighting %lu%@", process, (unsigned long)count,
+        learned ? @" -> learned as full-display" : @"");
+    if (learned) {
+        [self osc_applyContentClass:_oscDetectedContent fits:[self aspect_resolvedFits:_detectorFits] source:@"aspect learned"];
+    }
+}
+
 #pragma mark Host agent (HostStateClientDelegate)
 
 // The agent (utilities/pc/voidlink-host-agent) reports game/desk from the
@@ -2621,6 +2724,7 @@ static NSString *OscContentClassName(StreamContentClass c) {
     [_hostStateClient stop];
     _hostStateClient = nil;
     _hostAgentLive = NO;
+    [self aspect_noteHostState:nil];
 }
 
 - (StreamContentClass)hostAgent_classForState:(HostState *)state {
@@ -2630,22 +2734,25 @@ static NSString *OscContentClassName(StreamContentClass c) {
 - (void)hostStateClient:(HostStateClient *)client didReceiveState:(HostState *)state {
     if (client != _hostStateClient || !_hostAgentLive) return;
     StreamContentClass cls = [self hostAgent_classForState:state];
-    if (cls == _oscDetectedContent) return; // heartbeat
-    Log(LOG_I, @"[HostAgent] %@: %@ (%@) taskbar=%d primary=%d", state.mode, state.process ?: @"-",
-        state.title ?: @"", state.taskbarOnDisplay, state.displayPrimary);
-    BOOL fits = (cls == StreamContentClassGame) ? _detectorFits : NO;
+    BOOL gameChanged = [self aspect_noteHostState:state];
+    if (cls == _oscDetectedContent && !gameChanged) return; // heartbeat
+    Log(LOG_I, @"[HostAgent] %@: %@ (%@) taskbar=%d primary=%d fg=%d client=%ldx%ld", state.mode, state.process ?: @"-",
+        state.title ?: @"", state.taskbarOnDisplay, state.displayPrimary, state.topForeground,
+        (long)state.topClientWidth, (long)state.topClientHeight);
+    BOOL fits = (cls == StreamContentClassGame) ? [self aspect_resolvedFits:_detectorFits] : NO;
     [self osc_applyContentClass:cls fits:fits source:@"agent"];
 }
 
 - (void)hostStateClient:(HostStateClient *)client liveChanged:(BOOL)live {
     if (client != _hostStateClient) return;
     _hostAgentLive = live;
+    [self aspect_noteHostState:live ? client.lastState : nil];
     if (live) {
         HostState *state = client.lastState;
         if (!state) return;
         StreamContentClass cls = [self hostAgent_classForState:state];
         Log(LOG_I, @"[HostAgent] live, %@: %@", state.mode, state.process ?: @"-");
-        BOOL fits = (cls == StreamContentClassGame) ? _detectorFits : NO;
+        BOOL fits = (cls == StreamContentClassGame) ? [self aspect_resolvedFits:_detectorFits] : NO;
         [self osc_applyContentClass:cls fits:fits source:@"agent"];
         [self osc_applyPresentation]; // auto may have just become available
         return;

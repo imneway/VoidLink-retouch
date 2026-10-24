@@ -6118,6 +6118,98 @@
         }
       }
     },
+    "Learned screen ratios" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已学习的画面比例"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已學習的畫面比例"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已學習的畫面比例"
+          }
+        }
+      }
+    },
+    "Clear" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除"
+          }
+        }
+      }
+    },
+    "Clear learned screen ratios?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除已学习的画面比例？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除已學習的畫面比例？"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除已學習的畫面比例？"
+          }
+        }
+      }
+    },
+    "Forgets which games draw over the whole screen and every ratio you set per game. Games start learning again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会忘掉哪些游戏是铺满全屏的，以及你为每个游戏手动设的比例。之后重新开始学习。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "會忘掉哪些遊戲是鋪滿全螢幕的，以及你為每個遊戲手動設的比例。之後重新開始學習。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "會忘掉哪些遊戲是鋪滿全螢幕的，以及你為每個遊戲手動設的比例。之後重新開始學習。"
+          }
+        }
+      }
+    },
     "Block stream touch while OSC is on" : {
       "extractionState" : "manual",
       "localizations" : {

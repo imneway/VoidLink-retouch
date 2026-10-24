@@ -33,6 +33,13 @@ static const size_t kMaxLineBytes = 64 * 1024;
     _displayPrimary = [json[@"display_primary"] boolValue];
     _displayFound = [json[@"display_found"] boolValue];
     _seq = [json[@"seq"] unsignedIntegerValue];
+    _topForeground = [top[@"foreground"] boolValue];
+    _topCoversDisplay = [top[@"covers_display"] boolValue];
+    NSArray *client = [top[@"client"] isKindOfClass:[NSArray class]] ? top[@"client"] : nil;
+    if (client.count == 2 && [client[0] isKindOfClass:[NSNumber class]] && [client[1] isKindOfClass:[NSNumber class]]) {
+        _topClientWidth = [client[0] integerValue];
+        _topClientHeight = [client[1] integerValue];
+    }
     return self;
 }
 
