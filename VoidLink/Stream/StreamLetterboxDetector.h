@@ -62,4 +62,9 @@ typedef NS_ENUM(NSInteger, StreamContentClass) {
 // Forget the current verdict and debounce history (new stream / resize).
 - (void)reset;
 
+// Measure the current bar-content stretch (if any) from now on and report it
+// again once it has lasted long enough. For a delegate that had to reject a
+// report (the game had just changed) and wants fresh evidence.
+- (void)restartBarContentStretch;
+
 @end

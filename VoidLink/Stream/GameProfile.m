@@ -28,10 +28,11 @@
         bg3.forceTouchBlock = YES;
         bg3.pencilSwitchesToDesk = YES;
         // Towards KB&M a key, not a mouse button: right after a load the game
-        // kept ignoring the middle click. F16: unbound in the game and in the
-        // host's AutoHotkey script (which takes F13 and F17-F19).
+        // kept ignoring the middle click. F16 was ignored outright (an
+        // unknown scancode to the game), so a key every engine knows that
+        // does nothing on its own: Ctrl.
         bg3.deskNudge = GameNudgeKeyboardKey;
-        bg3.nudgeKeyCode = 0x7F;   // VK_F16
+        bg3.nudgeKeyCode = 0x11;   // VK_CONTROL
         bg3.gameNudge = GameNudgeGamepadL3;
         bg3.edgeSwipeSwitchesMode = YES;
         bg3.pencilDoubleTapDisabled = YES;

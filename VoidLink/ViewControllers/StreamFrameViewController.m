@@ -298,6 +298,7 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     BOOL _hostGameCovers;                    // the game's window covers the display
     BOOL _hostGameExclusive169;              // covers the display and its client area is 16:9 (mode change)
     CFTimeInterval _hostGameSince;           // CACurrentMediaTime of the last change of the above
+    NSUInteger _learn169Token;               // pending "fit held long enough" check
     StreamContentClass _oscDetectedContent;  // last debounced detector verdict
     // YES from viewDidLoad until osc_configureForStream: the OSC stays fully
     // Off (not translucent) while connecting, whatever the hide mode says.
@@ -1039,6 +1040,7 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
 
     if (!_toggleRowBackground) {
         _toggleRowBackground = [[VoidBackdropCapsuleView alloc] initWithFrame:CGRectZero];
+        _toggleRowBackground.backdropEnabled = NO;   // plain tint: the blurred backdrop lagged behind the picture
         [self.view insertSubview:_toggleRowBackground belowSubview:_snapRatioButton];
     }
 
@@ -1961,7 +1963,7 @@ static const CGFloat kQuickMenuSpacing = 12;
 
 // Settle time before parking, so the bare "Eden" title between two games or
 // a dialog that closes at once doesn't blink the OSC. Un-parking is instant.
-static const NSTimeInterval kAgentParkSettle = 1.0;
+static const NSTimeInterval kAgentParkSettle = 0.2;
 
 - (void)agent_noteTransientDesk:(BOOL)transient reason:(NSString *)reason {
     if (!transient) {
@@ -2467,9 +2469,9 @@ static const NSTimeInterval kAgentParkSettle = 1.0;
         [self applySnapToTopIfNeeded];
         return;
     }
-    [UIView animateWithDuration:0.3
+    [UIView animateWithDuration:0.15
                           delay:0
-                        options:(UIViewAnimationOptionCurveEaseInOut | UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction)
+                        options:(UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction)
                      animations:^{ [self applySnapToTopIfNeeded]; }
                      completion:nil];
 }
@@ -2614,6 +2616,8 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     _oscAutoDetectApplicable = applicable;
     [renderer.letterboxDetector reset];
     renderer.letterboxDetector.enabled = applicable;
+    _detectorFits = NO;          // the reset detector has no fit verdict yet
+    _learn169Token++;            // and a pending 16:9 learn must not rest on the old one
     Log(LOG_I, @"OSC auto hide-mode %@ (stream %.3f vs screen %.3f, decoded frames %d)",
         applicable ? @"enabled" : @"unavailable", streamAspect, screenAspect, renderer.providesDecodedFrames);
 }
@@ -2665,6 +2669,7 @@ static NSString *OscContentClassName(StreamContentClass c) {
     // While the host agent is live it owns the class; the detector still
     // supplies the 16:9 fit (bars are the only way to know where to snap).
     _detectorFits = fitsSixteenNine;
+    [self aspect_fitsChanged];
     if (_hostAgentLive) {
         BOOL fits = (_oscDetectedContent == StreamContentClassGame) ? [self aspect_resolvedFits:fitsSixteenNine] : NO;
         [self osc_applyContentClass:_oscDetectedContent fits:fits source:@"detector(fit only)"];
@@ -2736,7 +2741,32 @@ static NSString *OscContentClassName(StreamContentClass c) {
     if (manual) return manual.boolValue;
     if (_hostGameExclusive169) return YES;
     if ([memory isLearnedFullForProcess:_hostGameProcess]) return NO;
+    if ([memory isLearnedSixteenNineForProcess:_hostGameProcess]) return YES;
     return detectorFits;
+}
+
+// Learning 16:9 the other way round: a covering, foreground game whose
+// picture stayed inside the 16:9 region for this long is snapped from its
+// first frame next time, and its own letterbox flaps no longer move it. A
+// full-display game's long cutscene can pass this too, which is why the
+// memory drops it on the first content seen in the bar area (within 5 s of
+// gameplay) and learned-full outranks it.
+static const NSTimeInterval kLearn169Hold = 30.0;
+
+- (void)aspect_fitsChanged {
+    _learn169Token++;
+    if (!_detectorFits || ![self aspect_hasGameProcess] || !_hostGameForeground || !_hostGameCovers) return;
+    if (_hostGameExclusive169) return;
+    GameAspectMemory *memory = [GameAspectMemory shared];
+    if ([memory isLearnedSixteenNineForProcess:_hostGameProcess] || [memory isLearnedFullForProcess:_hostGameProcess]) return;
+    NSUInteger token = _learn169Token;
+    NSString *process = _hostGameProcess;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kLearn169Hold * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (token != self->_learn169Token || !self->_detectorFits || !self->_oscAutoDetectApplicable) return;
+        if (![process isEqualToString:self->_hostGameProcess] || !self->_hostGameForeground || !self->_hostGameCovers) return;
+        [[GameAspectMemory shared] setLearnedSixteenNineForProcess:process];
+        Log(LOG_I, @"[Aspect] %@: fit 16:9 for %.0fs -> learned as 16:9", process, kLearn169Hold);
+    });
 }
 
 - (void)aspect_memoryCleared:(NSNotification *)note {
@@ -2760,9 +2790,8 @@ static NSString *OscContentClassName(StreamContentClass c) {
         || exclusive169 != _hostGameExclusive169;
     // Focus and window-size changes don't change the resolved ratio, but they
     // restart the settle time: evidence spanning one of them proves nothing.
-    if (changed || foreground != _hostGameForeground || covers != _hostGameCovers) {
-        _hostGameSince = CACurrentMediaTime();
-    }
+    BOOL settled = !(changed || foreground != _hostGameForeground || covers != _hostGameCovers);
+    if (!settled) _hostGameSince = CACurrentMediaTime();
     _hostGameForeground = foreground;
     _hostGameCovers = covers;
     if (changed) {
@@ -2772,6 +2801,7 @@ static NSString *OscContentClassName(StreamContentClass c) {
         // the next game (whose own remembered choice must win).
         _snapRatioOverride = SnapRatioOverrideNone;
     }
+    if (!settled) [self aspect_fitsChanged];   // the 16:9 hold restarts with the new game / focus / size
     return changed;
 }
 
@@ -2786,13 +2816,19 @@ static NSString *OscContentClassName(StreamContentClass c) {
     else if (since < _hostGameSince + 3.0) skip = @"too close to a window switch";
     if (skip) {
         Log(LOG_I, @"[Aspect] content in the bar area ignored: %@", skip);
+        // The detector reports a stretch once. If the content is still there
+        // in a few seconds the reason may be gone (the game settled, came to
+        // the front): have it measured and reported afresh.
+        [detector restartBarContentStretch];
         return;
     }
     NSUInteger count = 0;
+    BOOL was169 = [[GameAspectMemory shared] isLearnedSixteenNineForProcess:process];
     BOOL learned = [[GameAspectMemory shared] recordContentInBarsForProcess:process count:&count];
+    if (was169) Log(LOG_I, @"[Aspect] %@: content in the bar area, learned 16:9 dropped", process);
     Log(LOG_I, @"[Aspect] %@: content in the bar area, sighting %lu%@", process, (unsigned long)count,
         learned ? @" -> learned as full-display" : @"");
-    if (learned) {
+    if (learned || was169) {
         [self osc_applyContentClass:_oscDetectedContent fits:[self aspect_resolvedFits:_detectorFits] source:@"aspect learned"];
     }
 }

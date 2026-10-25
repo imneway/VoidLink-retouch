@@ -602,6 +602,13 @@ static AxisClass ClassifyAxis(size_t a, size_t b, size_t extent, size_t maxScan)
     });
 }
 
+- (void)restartBarContentStretch {
+    dispatch_async(_analysisQueue, ^{
+        self->_barContentSince = 0;
+        self->_barContentReported = NO;
+    });
+}
+
 #pragma mark - Debounce (on _stateQueue)
 
 - (void)stateQueue_observe:(StreamContentClass)raw fits:(BOOL)fits at:(CFTimeInterval)now {

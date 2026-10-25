@@ -23,6 +23,10 @@ extern NSNotificationName const GameAspectMemoryDidClearNotification;
 
 // Learned: the process was seen drawing into the 16:9 bar area often enough.
 - (BOOL)isLearnedFullForProcess:(NSString *)process;
+// Learned: the process kept its picture inside the 16:9 region for long
+// enough. Tentative: one sighting of content in the bar area drops it.
+- (BOOL)isLearnedSixteenNineForProcess:(NSString *)process;
+- (void)setLearnedSixteenNineForProcess:(NSString *)process;
 // The user's ratio choice for this process: @YES = 16:9, @NO = FULL, nil = none.
 - (nullable NSNumber *)manualFitsForProcess:(NSString *)process;
 - (void)setManualFits:(BOOL)fits forProcess:(NSString *)process;

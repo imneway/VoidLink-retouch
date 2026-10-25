@@ -11,6 +11,7 @@ static NSString * const kDefaultsKey = @"gameAspectMemoryV1";
 static NSString * const kSightingsKey = @"sightings";   // NSArray<NSNumber *> of epoch seconds
 static NSString * const kFullKey = @"full";             // BOOL
 static NSString * const kManualKey = @"manualFits";     // BOOL, absent = no choice
+static NSString * const kSixteenNineKey = @"fits169";   // BOOL
 
 // Three separate sightings, each at least a minute after the previous one: an
 // in-game overlay (Steam's Shift+Tab draws over the whole display, bars
@@ -66,6 +67,17 @@ static NSString *Key(NSString *process) {
     return [[self entryFor:process create:NO][kFullKey] boolValue];
 }
 
+- (BOOL)isLearnedSixteenNineForProcess:(NSString *)process {
+    return [[self entryFor:process create:NO][kSixteenNineKey] boolValue];
+}
+
+- (void)setLearnedSixteenNineForProcess:(NSString *)process {
+    NSMutableDictionary *entry = [self entryFor:process create:YES];
+    if (!entry || [entry[kSixteenNineKey] boolValue]) return;
+    entry[kSixteenNineKey] = @YES;
+    [self save];
+}
+
 - (NSNumber *)manualFitsForProcess:(NSString *)process {
     id value = [self entryFor:process create:NO][kManualKey];
     return [value isKindOfClass:[NSNumber class]] ? value : nil;
@@ -86,6 +98,11 @@ static NSString *Key(NSString *process) {
     NSTimeInterval now = [NSDate date].timeIntervalSince1970;
     NSNumber *last = sightings.lastObject;
     BOOL wasFull = [entry[kFullKey] boolValue];
+    // A 16:9 game never draws there: whatever was learned the other way is wrong.
+    if ([entry[kSixteenNineKey] boolValue]) {
+        [entry removeObjectForKey:kSixteenNineKey];
+        [self save];
+    }
     if (!last || now - last.doubleValue >= kMinSightingSpacing) {
         [sightings addObject:@(now)];
         while (sightings.count > kSightingsToLearn) [sightings removeObjectAtIndex:0];
