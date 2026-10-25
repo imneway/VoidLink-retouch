@@ -217,7 +217,6 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     // Shown / Translucent / Off — see setOscPresentation:. The Off flavour
     // reuses the hold-suspend machinery (hidden + non-interactive).
     OscPresentation oscPresentation;
-    BOOL oscSuspensionSawStreamTouch;
     NSHashTable<UIView *> *widgetsHiddenBySuspension;
 }
 
@@ -296,8 +295,8 @@ static __weak StreamView *sPalmClassifier = nil;
     rightEdgeGestureSuppressionDepth = 0;
     oscGestureSuppressed = NO;
     // NOT resetting oscTemporarilySuspended here: a reconfigure (resize /
-    // orientation / stats overlay) can run mid-hold, and the host VC still
-    // thinks it's holding. The OSC / widget reloads that follow re-apply it.
+    // orientation / stats overlay) can run while the agent has the OSC parked,
+    // and the host VC still owns that flag. The reloads that follow re-apply it.
     if (!widgetsHiddenBySuspension) widgetsHiddenBySuspension = [NSHashTable weakObjectsHashTable];
     // Guarantee a clean, non-suppressed input state on every (re)configuration so a
     // right-edge suppression that never received its matching "end" can't leave OSC
@@ -722,14 +721,9 @@ static __weak StreamView *sPalmClassifier = nil;
     return oscTemporarilySuspended;
 }
 
-- (BOOL)oscSuspensionSawStreamTouch {
-    return oscSuspensionSawStreamTouch;
-}
-
 - (void)setOscTemporarilySuspended:(BOOL)suspended {
     if (oscTemporarilySuspended == suspended) return;
     oscTemporarilySuspended = suspended;
-    oscSuspensionSawStreamTouch = NO;
     [self osc_syncSuspensionState];
     [self osc_syncStreamTouchBlock];
 }
@@ -789,7 +783,7 @@ static __weak StreamView *sPalmClassifier = nil;
     for (UITouch *touch in touches) [blockedStreamTouches removeObject:touch];
 }
 
-// Push the effective suspension (mode-button hold OR the Off presentation) onto
+// Push the effective suspension (agent parking OR the Off presentation) onto
 // whatever OSC instance / widget set exists right now. Called on every change and
 // again after a reload, since a reload swaps in a fresh OnScreenControls and
 // fresh (unhidden) widgets.
@@ -2016,6 +2010,10 @@ static __weak StreamView *sPalmClassifier = nil;
     if (UIPencilInteraction.preferredTapAction == UIPencilPreferredActionIgnore) {
         return; // user turned pencil double tap off system-wide
     }
+    if (self.pencilDoubleTapDisabled) {
+        Log(LOG_I, @"Pencil double tap: ignored for this game");
+        return;
+    }
     if ([interactionDelegate respondsToSelector:@selector(requestHostTouchKeyboardToggle)]
         && [interactionDelegate requestHostTouchKeyboardToggle]) {
         Log(LOG_I, @"Pencil double tap: toggling host touch keyboard via agent");
@@ -2139,9 +2137,6 @@ static __weak StreamView *sPalmClassifier = nil;
 }
 
 - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
-    // Any stream touch during an OSC hold marks the hold as "used": the button's
-    // release must then NOT be treated as a tap that toggles the OSC off.
-    if (oscTemporarilySuspended) oscSuspensionSawStreamTouch = YES;
 #if !TARGET_OS_TV
     // if (@available(iOS 13.4, *)) {
     // cancel restriction of native touch for iOS13.3 & lower

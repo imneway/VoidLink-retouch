@@ -273,11 +273,6 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     BOOL _quickMenuOpen;
     NSUInteger _quickMenuToken;
     NSArray<RemoteCommand *> *_quickMenuCommands; // snapshot behind the panel's items
-    // OSC mode button hold: while the finger is down (and the OSC is on) the
-    // OSC is suspended so the other hand can drive the PC. A quick release with
-    // no stream touch in between is still the plain mode-cycling tap.
-    BOOL _oscHoldActive;
-    BOOL _oscHoldSuspending;                 // the hold is suspending the OSC right now
     // Agent-driven parking: the game on top is behind one of its dialogs or
     // in its launcher ("transient desk"). Same suspension as the hold, so
     // nothing the user chose (mode, visibility) is touched.
@@ -288,7 +283,7 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // The agent's process on top (any mode) and its per-game profile.
     NSString *_hostProcess;
     GameProfile *_gameProfile;
-    CFTimeInterval _oscHoldStartTime;
+    NSUInteger _nudgeGeneration;             // bumped by every mode switch and by stream stop: queued nudges die
     // OSC visibility model — see "OSC visibility & hide mode".
     BOOL _oscHidden;                         // right-edge swipe / detector
     OscHideMode _oscModeOverride;            // Auto unless the mode button was tapped this session
@@ -994,12 +989,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.33] forState:UIControlStateNormal];
         [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.15] forState:UIControlStateHighlighted];
         _oscModeButton.contentEdgeInsets = UIEdgeInsetsMake(4, 10, 4, 10);
-        // Press-and-hold semantics (see oscModeTouchDown:) instead of a plain
-        // TouchUpInside -> cycle.
-        [_oscModeButton addTarget:self action:@selector(oscModeTouchDown:) forControlEvents:UIControlEventTouchDown];
-        [_oscModeButton addTarget:self action:@selector(oscModeTouchUpInside:) forControlEvents:UIControlEventTouchUpInside];
-        [_oscModeButton addTarget:self action:@selector(oscModeTouchEnded:) forControlEvents:(UIControlEventTouchUpOutside | UIControlEventTouchCancel)];
-        // The holding finger must not count toward the stream's multi-finger
+        [_oscModeButton addTarget:self action:@selector(cycleOscHideMode) forControlEvents:UIControlEventTouchUpInside];
+        // The finger on the button must not count toward the stream's multi-finger
         // detection (2-finger right click / scroll, 3-finger keyboard, ...).
         [StreamView setMultiTouchExemptView:_oscModeButton];
         [self.view addSubview:_oscModeButton];
@@ -1403,49 +1394,12 @@ static const CGFloat kQuickMenuSpacing = 12;
     [self presentToolboxViewController];
 }
 
-#pragma mark - OSC mode button: tap cycles the hide mode, hold suspends
+#pragma mark - OSC temporary suspension
 
-// Release faster than this, with no stream touch in between, counts as a tap.
-static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
-
-- (void)oscModeTouchDown:(UIButton *)sender {
-    _oscHoldActive = NO;
-    if (self->_streamView.widgetToolOpened) return;
-    // Nothing on screen: nothing to suspend, the release is a plain tap.
-    if (![self->_streamView hasAnyOnScreenControls]) return;
-    _oscHoldActive = YES;
-    _oscHoldStartTime = CACurrentMediaTime();
-    // Suspend right at touch-down (no long-press delay) so a hold feels instant;
-    // a tap resumes within a few hundred ms, which is invisible.
-    _oscHoldSuspending = YES;
-    [self osc_syncTemporarySuspension];
-}
-
-// The hold and the agent's parking share StreamView's one suspension flag.
+// StreamView's one suspension flag; the agent's parking is its only driver
+// now (the mode button's press-and-hold is gone: DESK mode made it moot).
 - (void)osc_syncTemporarySuspension {
-    [self->_streamView setOscTemporarilySuspended:(_oscHoldSuspending || _oscAgentSuspended)];
-}
-
-- (void)oscModeTouchUpInside:(UIButton *)sender {
-    if (!_oscHoldActive) {
-        [self cycleOscHideMode];
-        return;
-    }
-    BOOL usedAsHold = [self->_streamView oscSuspensionSawStreamTouch]
-                   || (CACurrentMediaTime() - _oscHoldStartTime) >= kOscHoldTapMaxDuration;
-    [self endOscHold];
-    if (!usedAsHold) [self cycleOscHideMode];
-}
-
-- (void)oscModeTouchEnded:(UIButton *)sender {
-    [self endOscHold];
-}
-
-- (void)endOscHold {
-    if (!_oscHoldActive) return;
-    _oscHoldActive = NO;
-    _oscHoldSuspending = NO;
-    [self osc_syncTemporarySuspension];
+    [self->_streamView setOscTemporarilySuspended:_oscAgentSuspended];
 }
 
 // Toggles the persistent forceGyroEnabled flag. An unset value behaves like
@@ -1928,6 +1882,7 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
 }
 
 - (void)modeSwitch_toDesk:(BOOL)toDesk source:(NSString *)source {
+    _nudgeGeneration++;                      // a nudge still queued for the previous switch must not land after this one
     _oscModeOverride = toDesk ? OscHideModeDesk : OscHideModeGame;
     _oscHidden = toDesk;
     _oscManualVisibility = YES;
@@ -1943,6 +1898,7 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     _hostProcess = key;
     _gameProfile = [GameProfile profileForProcess:key];
     self->_streamView.forceStreamTouchBlock = _gameProfile.forceTouchBlock;
+    self->_streamView.pencilDoubleTapDisabled = _gameProfile.pencilDoubleTapDisabled;
     if (_gameProfile) Log(LOG_I, @"[Profile] %@ on top: %@", key, _gameProfile.name);
 }
 
@@ -1955,27 +1911,46 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     [self modeSwitch_toDesk:YES source:@"pencil"];
 }
 
+// A press/release pair, `delay` seconds from now. The press is skipped when
+// the nudge generation moved on (another switch, or the stream stopped); a
+// press that went out always gets its release.
+- (void)profile_tap:(void (^)(BOOL down))send after:(NSTimeInterval)delay {
+    NSUInteger generation = _nudgeGeneration;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (generation != self->_nudgeGeneration || !self->_hasConnectionStarted) return;
+        send(YES);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            send(NO);
+        });
+    });
+}
+
 - (void)profile_sendNudge:(GameNudgeKind)nudge {
     switch (nudge) {
         case GameNudgeNone:
             return;
+        case GameNudgeKeyboardKey: {
+            // Twice: right after a load the game can miss the first one.
+            short key = (short)(0x8000 | _gameProfile.nudgeKeyCode);
+            for (int i = 0; i < 2; i++) {
+                [self profile_tap:^(BOOL down) { LiSendKeyboardEvent(key, down ? KEY_ACTION_DOWN : KEY_ACTION_UP, 0); } after:i * 0.4];
+            }
+            Log(LOG_I, @"[Profile] nudge: key 0x%02X x2", _gameProfile.nudgeKeyCode);
+            return;
+        }
         case GameNudgeMouseMiddleClick:
-            LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_MIDDLE);
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_MIDDLE);
-            });
+            [self profile_tap:^(BOOL down) { LiSendMouseButtonEvent(down ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_MIDDLE); } after:0];
             Log(LOG_I, @"[Profile] nudge: mouse middle click");
             return;
         case GameNudgeGamepadL3: {
             ControllerSupport *support = self->_controllerSupport;
             VoidController *controller = [support getOscController];
             if (!controller) { Log(LOG_W, @"[Profile] nudge L3 skipped: no OSC controller"); return; }
-            [support setButtonFlag:controller flags:LS_CLK_FLAG];
-            [support updateFinished:controller];
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [support clearButtonFlag:controller flags:LS_CLK_FLAG];
+            [self profile_tap:^(BOOL down) {
+                if (down) [support setButtonFlag:controller flags:LS_CLK_FLAG];
+                else [support clearButtonFlag:controller flags:LS_CLK_FLAG];
                 [support updateFinished:controller];
-            });
+            } after:0];
             Log(LOG_I, @"[Profile] nudge: gamepad L3");
             return;
         }
@@ -2563,6 +2538,10 @@ static NSString * const kOscHiddenKey = @"oscHidden";
 - (void)toggleOscVisibility {
     // Avoid interference when widget layout tool is open
     if (self->_streamView.widgetToolOpened) return;
+    if (_gameProfile.edgeSwipeSwitchesMode) {   // per-game: the swipe is the corner
+        [self modeSwitch_tapped];
+        return;
+    }
     // Un-parking is the swipe's job when the OSC was visible underneath;
     // if it was hidden as well, the swipe goes on to reveal it.
     if ([self agent_endSuspensionForUserAction] && !_oscHidden) return;
@@ -2853,6 +2832,7 @@ static NSString *OscContentClassName(StreamContentClass c) {
     [_hostStateClient stop];
     _hostStateClient = nil;
     _hostAgentLive = NO;
+    _nudgeGeneration++;                      // stream stop: nothing queued may reach the host
     [self aspect_noteHostState:nil];
     [self profile_noteHostProcess:nil];
     [self agent_noteTransientDesk:NO reason:nil];

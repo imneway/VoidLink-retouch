@@ -11,6 +11,9 @@
 @property (nonatomic) BOOL pencilSwitchesToDesk;
 @property (nonatomic) GameNudgeKind deskNudge;
 @property (nonatomic) GameNudgeKind gameNudge;
+@property (nonatomic) uint16_t nudgeKeyCode;
+@property (nonatomic) BOOL edgeSwipeSwitchesMode;
+@property (nonatomic) BOOL pencilDoubleTapDisabled;
 @end
 
 @implementation GameProfile
@@ -24,8 +27,14 @@
         bg3.name = @"Baldur's Gate 3";
         bg3.forceTouchBlock = YES;
         bg3.pencilSwitchesToDesk = YES;
-        bg3.deskNudge = GameNudgeMouseMiddleClick;
+        // Towards KB&M a key, not a mouse button: right after a load the game
+        // kept ignoring the middle click. F16: unbound in the game and in the
+        // host's AutoHotkey script (which takes F13 and F17-F19).
+        bg3.deskNudge = GameNudgeKeyboardKey;
+        bg3.nudgeKeyCode = 0x7F;   // VK_F16
         bg3.gameNudge = GameNudgeGamepadL3;
+        bg3.edgeSwipeSwitchesMode = YES;
+        bg3.pencilDoubleTapDisabled = YES;
         table = @{ @"bg3.exe": bg3, @"bg3_dx11.exe": bg3 };
     });
     return table;
