@@ -742,8 +742,14 @@ static __weak StreamView *sPalmClassifier = nil;
     [self osc_syncStreamTouchBlock];
 }
 
+- (void)setForceStreamTouchBlock:(BOOL)force {
+    if (_forceStreamTouchBlock == force) return;
+    _forceStreamTouchBlock = force;
+    [self osc_syncStreamTouchBlock];
+}
+
 - (BOOL)stream_touchesBlocked {
-    return _blockStreamTouchesWhileOscActive
+    return (_blockStreamTouchesWhileOscActive || _forceStreamTouchBlock)
         && oscPresentation != OscPresentationOff
         && !oscTemporarilySuspended
         && !self.widgetToolOpened;
@@ -1262,6 +1268,7 @@ static __weak StreamView *sPalmClassifier = nil;
             pencilContactMoved = NO;
             pencilContactActive = YES;
             pencilContactButton = 0;
+            if (self.pencilContactBegan) self.pencilContactBegan();
             BOOL hardPressIsRight = (holdMode == PencilHoldModeLongPressHardPress || holdMode == PencilHoldModeHardPressOnly);
             if (holdMode == PencilHoldModeOff) {
                 [self commitPencilContactButton:BUTTON_LEFT];

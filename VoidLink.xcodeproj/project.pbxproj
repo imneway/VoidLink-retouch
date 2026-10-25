@@ -112,6 +112,7 @@
 		A1B2C3D401BACKDROPBB0001 /* StreamBackdropBlur.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D401BACKDROPBM0001 /* StreamBackdropBlur.m */; };
 		A1B2C3D401HOSTSTATEB0001 /* HostStateClient.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D401HOSTSTATEM0001 /* HostStateClient.m */; };
 		A1B2C3D401GAMEASPECTB001 /* GameAspectMemory.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D401GAMEASPECTM001 /* GameAspectMemory.m */; };
+		A1B2C3D401GAMEPROFILB001 /* GameProfile.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D401GAMEPROFILM001 /* GameProfile.m */; };
 		FB89463419F646E200339C8A /* Utils.m in Sources */ = {isa = PBXBuildFile; fileRef = FB89462219F646E200339C8A /* Utils.m */; };
 		FB89463519F646E200339C8A /* MainFrameViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = FB89462519F646E200339C8A /* MainFrameViewController.m */; };
 		FB89463619F646E200339C8A /* StreamFrameViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = FB89462719F646E200339C8A /* StreamFrameViewController.m */; };
@@ -355,6 +356,8 @@
 		A1B2C3D401HOSTSTATEM0001 /* HostStateClient.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = HostStateClient.m; sourceTree = "<group>"; };
 		A1B2C3D401GAMEASPECTH001 /* GameAspectMemory.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GameAspectMemory.h; sourceTree = "<group>"; };
 		A1B2C3D401GAMEASPECTM001 /* GameAspectMemory.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = GameAspectMemory.m; sourceTree = "<group>"; };
+		A1B2C3D401GAMEPROFILH001 /* GameProfile.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GameProfile.h; sourceTree = "<group>"; };
+		A1B2C3D401GAMEPROFILM001 /* GameProfile.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = GameProfile.m; sourceTree = "<group>"; };
 		FB89462119F646E200339C8A /* Utils.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Utils.h; sourceTree = "<group>"; };
 		FB89462219F646E200339C8A /* Utils.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = Utils.m; sourceTree = "<group>"; };
 		FB89462419F646E200339C8A /* MainFrameViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = MainFrameViewController.h; sourceTree = "<group>"; };
@@ -752,6 +755,8 @@
 				A1B2C3D401HOSTSTATEM0001 /* HostStateClient.m */,
 				A1B2C3D401GAMEASPECTH001 /* GameAspectMemory.h */,
 				A1B2C3D401GAMEASPECTM001 /* GameAspectMemory.m */,
+				A1B2C3D401GAMEPROFILH001 /* GameProfile.h */,
+				A1B2C3D401GAMEPROFILM001 /* GameProfile.m */,
 				9803CCAB254F9EAF00EE185E /* ConnectionCallbacks.h */,
 			);
 			path = Stream;
@@ -1029,6 +1034,7 @@
 				A1B2C3D401BACKDROPBB0001 /* StreamBackdropBlur.m in Sources */,
 				A1B2C3D401HOSTSTATEB0001 /* HostStateClient.m in Sources */,
 				A1B2C3D401GAMEASPECTB001 /* GameAspectMemory.m in Sources */,
+				A1B2C3D401GAMEPROFILB001 /* GameProfile.m in Sources */,
 				FB290D0419B2C406004C83CF /* AppDelegate.m in Sources */,
 				FB9AFD401A7E127D00872C98 /* AppListResponse.m in Sources */,
 				FB89463419F646E200339C8A /* Utils.m in Sources */,

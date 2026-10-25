@@ -16,6 +16,7 @@
 #import "StreamLetterboxDetector.h"
 #import "HostStateClient.h"
 #import "GameAspectMemory.h"
+#import "GameProfile.h"
 #import "FrameQueue.h"
 #import "StreamManager.h"
 #import "SceneDelegate.h"
@@ -276,6 +277,17 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // OSC is suspended so the other hand can drive the PC. A quick release with
     // no stream touch in between is still the plain mode-cycling tap.
     BOOL _oscHoldActive;
+    BOOL _oscHoldSuspending;                 // the hold is suspending the OSC right now
+    // Agent-driven parking: the game on top is behind one of its dialogs or
+    // in its launcher ("transient desk"). Same suspension as the hold, so
+    // nothing the user chose (mode, visibility) is touched.
+    BOOL _oscAgentSuspended;
+    BOOL _oscAgentSuspendOptOut;             // user acted during the park: stay out until the game returns
+    NSUInteger _oscAgentSuspendToken;        // settle timer generation
+    BOOL _oscAgentParkPending;               // settle timer armed (one per transient episode)
+    // The agent's process on top (any mode) and its per-game profile.
+    NSString *_hostProcess;
+    GameProfile *_gameProfile;
     CFTimeInterval _oscHoldStartTime;
     // OSC visibility model — see "OSC visibility & hide mode".
     BOOL _oscHidden;                         // right-edge swipe / detector
@@ -1405,7 +1417,13 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
     _oscHoldStartTime = CACurrentMediaTime();
     // Suspend right at touch-down (no long-press delay) so a hold feels instant;
     // a tap resumes within a few hundred ms, which is invisible.
-    [self->_streamView setOscTemporarilySuspended:YES];
+    _oscHoldSuspending = YES;
+    [self osc_syncTemporarySuspension];
+}
+
+// The hold and the agent's parking share StreamView's one suspension flag.
+- (void)osc_syncTemporarySuspension {
+    [self->_streamView setOscTemporarilySuspended:(_oscHoldSuspending || _oscAgentSuspended)];
 }
 
 - (void)oscModeTouchUpInside:(UIButton *)sender {
@@ -1426,7 +1444,8 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
 - (void)endOscHold {
     if (!_oscHoldActive) return;
     _oscHoldActive = NO;
-    [self->_streamView setOscTemporarilySuspended:NO];
+    _oscHoldSuspending = NO;
+    [self osc_syncTemporarySuspension];
 }
 
 // Toggles the persistent forceGyroEnabled flag. An unset value behaves like
@@ -1899,11 +1918,116 @@ static const CFTimeInterval kOscHoldTapMaxDuration = 0.35;
 - (void)modeSwitch_tapped {
     if (self->_streamView.widgetToolOpened) return;
     BOOL toDesk = ([self osc_effectiveHideMode] == OscHideModeGame);
+    // Parked over a visible GAME OSC: the tap just brings it back. Parked
+    // over DESK (or a hidden OSC): un-park and switch to GAME as usual.
+    if ([self agent_endSuspensionForUserAction] && toDesk && !_oscHidden) return;
+    [self modeSwitch_toDesk:toDesk source:@"corner"];
+    // The corner is a deliberate device switch: tell a game that styles its
+    // UI after the last input device (GameProfile).
+    [self profile_sendNudge:(toDesk ? _gameProfile.deskNudge : _gameProfile.gameNudge)];
+}
+
+- (void)modeSwitch_toDesk:(BOOL)toDesk source:(NSString *)source {
     _oscModeOverride = toDesk ? OscHideModeDesk : OscHideModeGame;
     _oscHidden = toDesk;
     _oscManualVisibility = YES;
-    Log(LOG_I, @"OSC mode switch -> %@", toDesk ? @"DESK" : @"GAME");
+    Log(LOG_I, @"OSC mode switch [%@] -> %@", source, toDesk ? @"DESK" : @"GAME");
     [self osc_applyPresentation];
+}
+
+#pragma mark - Per-game profile (GameProfile)
+
+- (void)profile_noteHostProcess:(NSString *)process {
+    NSString *key = process.length > 0 ? process.lowercaseString : nil;
+    if ((key == _hostProcess) || [key isEqualToString:_hostProcess]) return;
+    _hostProcess = key;
+    _gameProfile = [GameProfile profileForProcess:key];
+    self->_streamView.forceStreamTouchBlock = _gameProfile.forceTouchBlock;
+    if (_gameProfile) Log(LOG_I, @"[Profile] %@ on top: %@", key, _gameProfile.name);
+}
+
+// Pencil landed on the stream (never on the OSC): a profiled game in GAME
+// mode goes to DESK, the pencil tap itself being the mouse input the game
+// switches on. Back to GAME is the bottom-left corner.
+- (void)pencil_contactBegan {
+    if (!_gameProfile.pencilSwitchesToDesk || self->_streamView.widgetToolOpened) return;
+    if ([self osc_effectiveHideMode] != OscHideModeGame) return;
+    [self modeSwitch_toDesk:YES source:@"pencil"];
+}
+
+- (void)profile_sendNudge:(GameNudgeKind)nudge {
+    switch (nudge) {
+        case GameNudgeNone:
+            return;
+        case GameNudgeMouseMiddleClick:
+            LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_MIDDLE);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_MIDDLE);
+            });
+            Log(LOG_I, @"[Profile] nudge: mouse middle click");
+            return;
+        case GameNudgeGamepadL3: {
+            ControllerSupport *support = self->_controllerSupport;
+            VoidController *controller = [support getOscController];
+            if (!controller) { Log(LOG_W, @"[Profile] nudge L3 skipped: no OSC controller"); return; }
+            [support setButtonFlag:controller flags:LS_CLK_FLAG];
+            [support updateFinished:controller];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [support clearButtonFlag:controller flags:LS_CLK_FLAG];
+                [support updateFinished:controller];
+            });
+            Log(LOG_I, @"[Profile] nudge: gamepad L3");
+            return;
+        }
+    }
+}
+
+#pragma mark - Agent-driven OSC parking (transient desk)
+
+// Settle time before parking, so the bare "Eden" title between two games or
+// a dialog that closes at once doesn't blink the OSC. Un-parking is instant.
+static const NSTimeInterval kAgentParkSettle = 1.0;
+
+- (void)agent_noteTransientDesk:(BOOL)transient reason:(NSString *)reason {
+    if (!transient) {
+        _oscAgentSuspendToken++;            // cancels a pending park
+        _oscAgentParkPending = NO;
+        _oscAgentSuspendOptOut = NO;
+        if (_oscAgentSuspended) {
+            _oscAgentSuspended = NO;
+            Log(LOG_I, @"[HostAgent] game back: OSC un-parked");
+            [self osc_syncTemporarySuspension];
+        }
+        return;
+    }
+    // Heartbeats and window-state updates keep arriving during the episode;
+    // only the first one arms the timer, or a busy dialog never settles.
+    if (_oscAgentSuspended || _oscAgentSuspendOptOut || _oscAgentParkPending) return;
+    _oscAgentParkPending = YES;
+    NSUInteger token = ++_oscAgentSuspendToken;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kAgentParkSettle * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (token != self->_oscAgentSuspendToken) return;
+        self->_oscAgentParkPending = NO;
+        if (!self->_hostAgentLive || self->_streamView.widgetToolOpened) return;
+        self->_oscAgentSuspended = YES;
+        Log(LOG_I, @"[HostAgent] %@: OSC parked", reason ?: @"transient desk");
+        [self osc_syncTemporarySuspension];
+    });
+}
+
+// A swipe or corner tap while parked: the user wants the OSC in spite of
+// the dialog (Ryujinx's controller applet needs gamepad buttons). Returns
+// YES when it ended a park; the park stays off until the game returns.
+- (BOOL)agent_endSuspensionForUserAction {
+    _oscAgentSuspendToken++;
+    _oscAgentParkPending = NO;
+    if (!_oscAgentSuspended && !_oscAgentSuspendOptOut) return NO;
+    BOOL wasParked = _oscAgentSuspended;
+    _oscAgentSuspendOptOut = YES;
+    _oscAgentSuspended = NO;
+    if (wasParked) Log(LOG_I, @"[HostAgent] OSC un-parked by the user");
+    [self osc_syncTemporarySuspension];
+    return wasParked;
 }
 
 - (void)streamCountdownTapped:(UITapGestureRecognizer *)recognizer {
@@ -2439,6 +2563,9 @@ static NSString * const kOscHiddenKey = @"oscHidden";
 - (void)toggleOscVisibility {
     // Avoid interference when widget layout tool is open
     if (self->_streamView.widgetToolOpened) return;
+    // Un-parking is the swipe's job when the OSC was visible underneath;
+    // if it was hidden as well, the swipe goes on to reveal it.
+    if ([self agent_endSuspensionForUserAction] && !_oscHidden) return;
     [self setOscHidden:!_oscHidden];
 }
 
@@ -2478,6 +2605,8 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     self->_streamMan.videoRenderer.letterboxDetector.delegate = self;
     [self osc_updateAutoDetectApplicabilityForStreamAspect:streamAspect];
     [self hostAgent_startForHost:_streamConfig.host];
+    __weak typeof(self) weakSelf = self;
+    self->_streamView.pencilContactBegan = ^{ [weakSelf pencil_contactBegan]; };
     [[NSNotificationCenter defaultCenter] removeObserver:self name:GameAspectMemoryDidClearNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(aspect_memoryCleared:)
                                                  name:GameAspectMemoryDidClearNotification object:nil];
@@ -2725,6 +2854,8 @@ static NSString *OscContentClassName(StreamContentClass c) {
     _hostStateClient = nil;
     _hostAgentLive = NO;
     [self aspect_noteHostState:nil];
+    [self profile_noteHostProcess:nil];
+    [self agent_noteTransientDesk:NO reason:nil];
 }
 
 - (StreamContentClass)hostAgent_classForState:(HostState *)state {
@@ -2733,8 +2864,11 @@ static NSString *OscContentClassName(StreamContentClass c) {
 
 - (void)hostStateClient:(HostStateClient *)client didReceiveState:(HostState *)state {
     if (client != _hostStateClient || !_hostAgentLive) return;
+    [self profile_noteHostProcess:state.process];
+    [self agent_noteTransientDesk:state.transientDesk reason:state.reason];
+    BOOL gameChanged = [self aspect_noteHostState:state]; // no game on top while transient: no ratio learning
+    if (state.transientDesk) return;        // parked, not a change of scene
     StreamContentClass cls = [self hostAgent_classForState:state];
-    BOOL gameChanged = [self aspect_noteHostState:state];
     if (cls == _oscDetectedContent && !gameChanged) return; // heartbeat
     Log(LOG_I, @"[HostAgent] %@: %@ (%@) taskbar=%d primary=%d fg=%d client=%ldx%ld", state.mode, state.process ?: @"-",
         state.title ?: @"", state.taskbarOnDisplay, state.displayPrimary, state.topForeground,
@@ -2747,9 +2881,15 @@ static NSString *OscContentClassName(StreamContentClass c) {
     if (client != _hostStateClient) return;
     _hostAgentLive = live;
     [self aspect_noteHostState:live ? client.lastState : nil];
+    [self profile_noteHostProcess:live ? client.lastState.process : nil];
     if (live) {
         HostState *state = client.lastState;
         if (!state) return;
+        [self agent_noteTransientDesk:state.transientDesk reason:state.reason];
+        if (state.transientDesk) {
+            [self osc_applyPresentation];
+            return;
+        }
         StreamContentClass cls = [self hostAgent_classForState:state];
         Log(LOG_I, @"[HostAgent] live, %@: %@", state.mode, state.process ?: @"-");
         BOOL fits = (cls == StreamContentClassGame) ? [self aspect_resolvedFits:_detectorFits] : NO;
@@ -2757,6 +2897,7 @@ static NSString *OscContentClassName(StreamContentClass c) {
         [self osc_applyPresentation]; // auto may have just become available
         return;
     }
+    [self agent_noteTransientDesk:NO reason:nil];
     // Back to the pixel detector's own view of the content, if it has one.
     StreamLetterboxDetector *detector = self->_streamMan.videoRenderer.letterboxDetector;
     StreamContentClass cls = _oscAutoDetectApplicable ? detector.currentContentClass : StreamContentClassUnknown;

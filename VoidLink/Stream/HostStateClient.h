@@ -18,6 +18,11 @@ static const uint16_t HostStateClientDefaultPort = 48100;
 @interface HostState : NSObject
 @property (nonatomic, readonly) BOOL game;               // mode == "game"
 @property (nonatomic, readonly, copy) NSString *mode;
+@property (nonatomic, readonly, copy, nullable) NSString *reason;
+// mode == "desk" with reason "dialog" / "idle": the game process is still on
+// top (behind one of its dialogs, or in its launcher / game list). The OSC
+// is parked, not put away: nothing the user chose is cleared.
+@property (nonatomic, readonly) BOOL transientDesk;
 @property (nonatomic, readonly, copy, nullable) NSString *process;
 @property (nonatomic, readonly, copy, nullable) NSString *title;
 @property (nonatomic, readonly) BOOL taskbarOnDisplay;
