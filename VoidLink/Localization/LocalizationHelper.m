@@ -23,6 +23,8 @@
     static NSDictionary *zhDict; static NSDictionary *enDict; static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         zhDict = @{
+            @"Palm Rejection": @"手掌误触过滤",
+            @"Palm Radius Threshold": @"手掌判定半径",
             @"Pencil Hold": @"Pencil 长按",
             @"Long Press": @"长按",
             @"Long + Hard": @"长按+重按",

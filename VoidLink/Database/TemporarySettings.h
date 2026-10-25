@@ -56,6 +56,9 @@
 @property (nonatomic, retain) NSNumber * pencilHoldMode;
 @property (nonatomic, retain) NSNumber * pencilHoldDelay;
 @property (nonatomic, retain) NSNumber * pencilHardPressThreshold;
+// Palm rejection on the stream surface, see DataManager.h PalmRadiusThreshold*.
+@property (nonatomic, assign) BOOL palmRejection;
+@property (nonatomic, retain) NSNumber * palmRadiusThreshold;
 // Per-axis gyro direction flips (apply only when mapGyroTo != Motion).
 // Stored in NSUserDefaults under @"gyroInvertPitch" / @"gyroInvertYaw".
 @property (nonatomic, assign) BOOL gyroInvertPitch;

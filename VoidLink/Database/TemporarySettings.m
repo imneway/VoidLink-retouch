@@ -166,6 +166,10 @@ static BOOL BoolForUserDefaultKeyWithLegacyFallback(NSString *key, NSString *leg
     self.pencilHoldDelay = pencilHoldDelay ? @([pencilHoldDelay floatValue]) : @(PencilHoldDelayDefault);
     id pencilHardPressThreshold = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilHardPressThreshold"];
     self.pencilHardPressThreshold = pencilHardPressThreshold ? @([pencilHardPressThreshold floatValue]) : @(PencilHardPressThresholdDefault);
+    id palmRejection = [[NSUserDefaults standardUserDefaults] objectForKey:@"palmRejection"];
+    self.palmRejection = palmRejection ? [palmRejection boolValue] : YES;
+    id palmRadiusThreshold = [[NSUserDefaults standardUserDefaults] objectForKey:@"palmRadiusThreshold"];
+    self.palmRadiusThreshold = palmRadiusThreshold ? @([palmRadiusThreshold floatValue]) : @(PalmRadiusThresholdDefault);
     self.gyroInvertPitch = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertPitch"];
     self.gyroInvertYaw = [[NSUserDefaults standardUserDefaults] boolForKey:@"gyroInvertYaw"];
     self.forceGyroEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:@"forceGyroEnabled"];

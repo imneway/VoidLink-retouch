@@ -55,6 +55,13 @@ typedef NS_ENUM(NSInteger, PencilHoldMode) {
 #define PencilHardPressThresholdDefault 65.0f // % of maximumPossibleForce
 #define PencilHardPressThresholdMin 40.0f
 #define PencilHardPressThresholdMax 90.0f
+// Palm rejection (NSUserDefaults @"palmRejection" / @"palmRadiusThreshold").
+// A direct touch is a palm when the pencil tip is on the glass, or when its
+// majorRadius reaches the threshold (x1 while the pencil hovers, x1.5 without
+// a pencil in range, since then a wide fingertip is the only other candidate).
+#define PalmRadiusThresholdDefault 40.0f // pt; fingertips measure 10–25
+#define PalmRadiusThresholdMin 25.0f
+#define PalmRadiusThresholdMax 80.0f
 // Pencil tuning (NSUserDefaults @"pencilRollStep" and the keys below).
 // Squeeze scroll is quantized to whole wheel notches (one notch = what every
 // app treats as a wheel click, with a haptic tick): this many points of hover

@@ -977,6 +977,8 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self installGyroInvertControls];
     [self addSetting:self.gyroInvertPitchStack ofId:@"gyroInvertPitchStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self addSetting:self.gyroInvertYawStack ofId:@"gyroInvertYawStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
+    [self installPalmRejectionControl];
+    [self addSetting:self.palmRejectionStack ofId:@"palmRejectionStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self installPencilHoldModeControl];
     [self addSetting:self.pencilHoldModeStack ofId:@"pencilHoldModeStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self installPencilRollModeControl];
@@ -2348,6 +2350,27 @@ BOOL isCustomResolution(int resolutionSelected) {
     self.pencilRollModeStack.translatesAutoresizingMaskIntoConstraints = NO;
 }
 
+// Palm rejection on the stream surface. NSUserDefaults @"palmRejection", default YES.
+- (void) installPalmRejectionControl {
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.text = [LocalizationHelper localizedStringForKey:@"Palm Rejection"];
+    label.font = [UIFont systemFontOfSize:18];
+    label.textColor = [UIColor whiteColor];
+    self.palmRejectionSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    id saved = [[NSUserDefaults standardUserDefaults] objectForKey:@"palmRejection"];
+    self.palmRejectionSwitch.on = saved ? [saved boolValue] : YES;
+    [self.palmRejectionSwitch addTarget:self action:@selector(palmRejectionChanged:) forControlEvents:UIControlEventValueChanged];
+    UIStackView *row = [self swapButtonRowWithLabel:label switch:self.palmRejectionSwitch];
+    self.palmRejectionStack = [[UIStackView alloc] initWithArrangedSubviews:@[row]];
+    self.palmRejectionStack.axis = UILayoutConstraintAxisVertical;
+    self.palmRejectionStack.alignment = UIStackViewAlignmentFill;
+    self.palmRejectionStack.distribution = UIStackViewDistributionFill;
+}
+
+- (void) palmRejectionChanged:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"palmRejection"];
+}
+
 // Squeeze scroll direction: content follows the tip (touch-like) or the tip
 // drags the scrollbar. NSUserDefaults @"pencilScrollFollowsTip", default YES.
 - (void) installPencilScrollFollowsTipControl {
@@ -2374,6 +2397,7 @@ BOOL isCustomResolution(int resolutionSelected) {
 // table row per slider: defaults key, title key, unit suffix, min, max, default.
 - (void) installPencilSliderControls {
     NSArray<NSArray *> *rows = @[
+        @[@"palmRadiusThreshold",    @"Palm Radius Threshold",       @"pt", @(PalmRadiusThresholdMin),    @(PalmRadiusThresholdMax),    @(PalmRadiusThresholdDefault)],
         @[@"pencilHoldDelay",        @"Pencil Hold Delay",           @"ms", @(PencilHoldDelayMin),        @(PencilHoldDelayMax),        @(PencilHoldDelayDefault)],
         @[@"pencilHardPressThreshold", @"Pencil Hard Press Threshold", @"%", @(PencilHardPressThresholdMin), @(PencilHardPressThresholdMax), @(PencilHardPressThresholdDefault)],
         @[@"pencilRollStep",         @"Pencil Roll Step",            @"°", @(PencilRollStepMin),         @(PencilRollStepMax),         @(PencilRollStepDefault)],

@@ -129,6 +129,8 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 
     // Apple Pencil as a mouse
     BOOL loggedFirstMousePosition;   // [InputDiag] stream-start diagnosis, reset in setupStreamView
+    NSHashTable<UITouch *> *palmRejectedTouches; // live touches judged to be a palm
+    NSHashTable<UITouch *> *palmClassifiedTouches; // live direct touches already judged either way
     BOOL pencilContactActive;        // tip on glass (a host button may or may not be held yet, see pencilContactButton)
     int pencilContactButton;         // 0 = none yet (press withheld), BUTTON_LEFT or BUTTON_RIGHT held on the host
     NSTimer *pencilHoldTimer;        // fires when a withheld contact has stayed put for pencilHoldDelay
@@ -229,6 +231,13 @@ static __weak UIView *sMultiTouchExemptView = nil;
 // withheld tap still completes a 2-finger right click / lets a release be
 // skipped as "another finger is still down".
 static __weak NSHashTable<UITouch *> *sWithheldStreamTouches = nil;
+// Touches judged to be a palm (see palm_filterBeganTouches:): dropped from
+// every handler and from the multi-finger counting in streamTouchesFrom:.
+static __weak NSHashTable<UITouch *> *sPalmRejectedTouches = nil;
+// The live view that classifies palms: streamTouchesFrom: (which gesture
+// recognizers consult BEFORE the view's touchesBegan runs) classifies a
+// began touch on first sight through it, so recognizers never count a palm.
+static __weak StreamView *sPalmClassifier = nil;
 
 // Canonical snap-to-top offset. This is the single source of truth shared by
 // applySnapToTopIfNeeded (StreamView shift) and liftMetalVideoViewIfNeeded
@@ -282,6 +291,7 @@ static __weak NSHashTable<UITouch *> *sWithheldStreamTouches = nil;
     
     keysDown = [[NSMutableSet alloc] init];
     loggedFirstMousePosition = NO;
+    sPalmClassifier = self;
     suppressedGestureTouchAddrs = [NSMutableSet set];
     rightEdgeGestureSuppressionDepth = 0;
     oscGestureSuppressed = NO;
@@ -819,13 +829,22 @@ static __weak NSHashTable<UITouch *> *sWithheldStreamTouches = nil;
 + (NSSet<UITouch *> *)streamTouchesFrom:(NSSet<UITouch *> *)touches {
     UIView *exempt = sMultiTouchExemptView;
     NSHashTable<UITouch *> *withheld = sWithheldStreamTouches;
+    StreamView *classifier = sPalmClassifier;
+    if (classifier) {
+        for (UITouch *touch in touches) {
+            if (touch.phase == UITouchPhaseBegan && touch.type == UITouchTypeDirect) [classifier palm_classifyTouch:touch];
+        }
+    }
+    NSHashTable<UITouch *> *palms = sPalmRejectedTouches;
     BOOL anyWithheld = withheld.count > 0;
-    if ((exempt == nil && !anyWithheld) || touches.count == 0) return touches;
+    BOOL anyPalm = palms.count > 0;
+    if ((exempt == nil && !anyWithheld && !anyPalm) || touches.count == 0) return touches;
     NSMutableSet<UITouch *> *filtered = nil;
     for (UITouch *touch in touches) {
         UIView *touchView = touch.view;
         BOOL drop = (exempt != nil && touchView != nil && [touchView isDescendantOfView:exempt])
-                 || (anyWithheld && [withheld containsObject:touch]);
+                 || (anyWithheld && [withheld containsObject:touch])
+                 || (anyPalm && [palms containsObject:touch]);
         if (drop) {
             if (filtered == nil) filtered = [touches mutableCopy];
             [filtered removeObject:touch];
@@ -1623,6 +1642,81 @@ static __weak NSHashTable<UITouch *> *sWithheldStreamTouches = nil;
     [self pencilIndicatorReveal];
 }
 
+#pragma mark - Palm rejection
+
+// Decides, at touch-down, which direct touches are a resting palm rather than
+// a finger, and remembers them for the rest of their life. Decided from what
+// the began event already carries, so it adds no latency:
+//  - pencil tip on the glass → every new finger is a palm (nothing else is
+//    being tapped while the tip is down; this also covers what iPadOS's own
+//    contact-time rejection lets through);
+//  - pencil hovering → a touch whose majorRadius reaches the threshold;
+//  - no pencil in range → the same test at 1.5x the threshold, so only an
+//    unmistakable palm is dropped and a flat fingertip never is.
+// OSC widgets are separate views and never pass through here.
+- (BOOL)palm_classifyTouch:(UITouch *)touch {
+    if (touch.type != UITouchTypeDirect) return NO;
+    if (!palmClassifiedTouches) palmClassifiedTouches = [NSHashTable weakObjectsHashTable];
+    if ([palmClassifiedTouches containsObject:touch]) {
+        return [palmRejectedTouches containsObject:touch]; // judged once, at its began
+    }
+    [palmClassifiedTouches addObject:touch];
+    if (!settings.palmRejection) return NO;
+    CGFloat threshold = MAX(PalmRadiusThresholdMin, settings.palmRadiusThreshold.floatValue);
+    CGFloat radiusLimit = pencilContactActive ? 0 : (isPencilHovering ? threshold : threshold * 1.5);
+    CGFloat radius = touch.majorRadius;
+    BOOL palm = pencilContactActive || radius >= radiusLimit;
+    if (!palm) return NO;
+    if (!palmRejectedTouches) palmRejectedTouches = [NSHashTable weakObjectsHashTable];
+    sPalmRejectedTouches = palmRejectedTouches;
+    [palmRejectedTouches addObject:touch];
+    Log(LOG_I, @"Palm rejected: radius %.0fpt (limit %.0f, pencil %@)", radius,
+        radiusLimit, pencilContactActive ? @"down" : (isPencilHovering ? @"hovering" : @"away"));
+    return YES;
+}
+
+- (NSSet *)palm_filterBeganTouches:(NSSet *)touches {
+    if (touches.count == 0) return touches;
+    NSMutableSet *passed = nil;
+    for (UITouch *touch in touches) {
+        if (![self palm_classifyTouch:touch]) continue;
+        if (passed == nil) passed = [touches mutableCopy];
+        [passed removeObject:touch];
+    }
+    return passed ?: touches;
+}
+
+// Later phases of a rejected touch: dropped. On its terminal phase it is
+// forgotten only after this event delivery has fully run (next main-queue
+// turn): downstream handlers count the event's allTouches through
+// streamTouchesFrom:, and a palm forgotten too early would be counted there
+// while missing from the filtered set they are handed. UIKit recycles UITouch
+// objects, so the forget cannot be left to the weak table alone.
+- (NSSet *)palm_filterTouches:(NSSet *)touches ending:(BOOL)ending {
+    if (palmRejectedTouches.count == 0 && palmClassifiedTouches.count == 0) return touches;
+    if (touches.count == 0) return touches;
+    NSMutableSet *passed = nil;
+    NSMutableArray *finished = nil;
+    for (UITouch *touch in touches) {
+        if (ending) {
+            if (!finished) finished = [NSMutableArray array];
+            [finished addObject:touch];
+        }
+        if (![palmRejectedTouches containsObject:touch]) continue;
+        if (passed == nil) passed = [touches mutableCopy];
+        [passed removeObject:touch];
+    }
+    if (finished) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            for (UITouch *touch in finished) {
+                [self->palmRejectedTouches removeObject:touch];
+                [self->palmClassifiedTouches removeObject:touch];
+            }
+        });
+    }
+    return passed ?: touches;
+}
+
 // Routes every pencil touch in `touches` through sendStylusEvent and returns
 // the finger touches that remain for the touch-mode handlers (the same set
 // object when there was no pencil in it).
@@ -2047,6 +2141,7 @@ static __weak NSHashTable<UITouch *> *sWithheldStreamTouches = nil;
     // The pencil is a mouse in every touch mode: it never reaches the finger
     // handlers. Fingers sharing the same touches set still must.
     touches = [self consumePencilTouches:touches];
+    touches = [self palm_filterBeganTouches:touches];
     if (touches.count == 0) return;
     // Withheld touches still drive the legacy OSC layers (the OSC is what the
     // user is touching for); only the host side is skipped.
@@ -2211,6 +2306,7 @@ static __weak NSHashTable<UITouch *> *sWithheldStreamTouches = nil;
 #if !TARGET_OS_TV
     
     touches = [self consumePencilTouches:touches];
+    touches = [self palm_filterTouches:touches ending:NO];
     if (touches.count == 0) return;
     NSSet *hostTouches = [self stream_removeWithheldTouches:touches];
     if (hostTouches.count < touches.count && settings.touchMode.intValue != NativeTouchOnly) {
@@ -2324,6 +2420,7 @@ static __weak NSHashTable<UITouch *> *sWithheldStreamTouches = nil;
 #if !TARGET_OS_TV
 
     touches = [self consumePencilTouches:touches];
+    touches = [self palm_filterTouches:touches ending:YES];
     if (touches.count == 0) return;
     NSSet *hostTouches = [self stream_removeWithheldTouches:touches];
     if (hostTouches.count < touches.count) {
@@ -2370,6 +2467,7 @@ static __weak NSHashTable<UITouch *> *sWithheldStreamTouches = nil;
     // cancel fall through would make them emit an UP for pointer id 0 and
     // could release an unrelated active touch.
     nonStylusTouches = [self consumePencilTouches:touches];
+    nonStylusTouches = [self palm_filterTouches:nonStylusTouches ending:YES];
 #endif
     // Withheld touches never reached touchHandler; release them on the OSC
     // side only (same reasoning as the pencil above).
