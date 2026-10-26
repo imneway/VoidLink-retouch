@@ -14,6 +14,7 @@
 #import "OnScreenButtonState.h"
 //#import "OnScreenControls.h"
 #import "OSCProfilesManager.h"
+#import "OSCSceneManager.h"
 #import "LocalizationHelper.h"
 #import "VoidLink-Swift.h"
 #import "ThemeManager.h"
@@ -88,11 +89,6 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     CGFloat lastToolbarWidth;       // guards the adaptive-toolbar relayout against loops
 }
 
-// MARK: - 方向锁定 持久化Key（与列表页一致）
-static NSString * const kOSCLockedPortraitProfileName = @"OSCLockedPortraitProfileName";
-static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapeProfileName";
-static NSString * const kOSCLockedLandscapeFullProfileName = @"OSCLockedLandscapeFullProfileName";
-
 // Shared OSC-editor rotation-lock state. SWRevealViewController is the app's ROOT
 // view controller and authoritatively gates interface orientation — it returns its
 // OWN mask and does NOT delegate to its children, so overrides on the editor /
@@ -106,45 +102,19 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     return self.view.bounds.size.width > self.view.bounds.size.height;
 }
 
-// 获取锁定名
-- (NSString *)osc_lockedProfileNameForLandscape:(BOOL)isLandscape {
-    NSString *key = isLandscape ? kOSCLockedLandscapeProfileName : kOSCLockedPortraitProfileName;
-    return [[NSUserDefaults standardUserDefaults] stringForKey:key];
-}
-
-// 应用锁定并在需要时重载 UI
-- (void)osc_applyLockForCurrentOrientationAndReloadIfNeeded {
-    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
-    NSString *lockedName = [self osc_lockedProfileNameForLandscape:isLandscape];
-    if (lockedName.length == 0) {
-        return;
-    }
-    NSMutableArray *all = [profilesManager getAllProfiles];
-    OSCProfile *found = nil;
-    for (OSCProfile *p in all) {
-        if ([p.name isEqualToString:lockedName]) { found = p; break; }
-    }
-    if (!found) {
-        return;
-    }
-    if ([profilesManager isTemplateProfile:found.name]) {
-        return;
-    }
-    // The landscape full-display-game layout is edited under the landscape lock too.
-    NSString *fullName = [[NSUserDefaults standardUserDefaults] stringForKey:kOSCLockedLandscapeFullProfileName];
-    if (isLandscape && fullName.length > 0 && [[[profilesManager getSelectedProfile] name] isEqualToString:fullName]) {
-        return;
-    }
-    if (![[[profilesManager getSelectedProfile] name] isEqualToString:found.name]) {
-        // Persist in-progress edits into the profile they belong to BEFORE switching
-        // the selection — the reload below rebuilds from persisted data and would
-        // otherwise silently discard them.
-        [self saveTapped:nil];
-        [profilesManager setProfileToSelected:found.name];
-        // 在编辑界面需要重载两套控件
-        [self reloadLegacyOnScreenControls];
-        [self reloadOnScreenWidgetViews];
-    }
+// Scenes decide which orientation a layout is for. A layout bound only to the
+// portrait scene is edited in portrait, one bound only to landscape scenes in
+// landscape; anything else (unbound / both) is edited in whatever orientation
+// the editor is in. 0 = no preference.
+- (UIInterfaceOrientationMask)osc_sceneMaskForSelectedLayout {
+    NSString *name = [[profilesManager getSelectedProfile] name];
+    NSArray<NSNumber *> *scenes = [OSCSceneManager scenesBoundToProfileName:name];
+    if (scenes.count == 0) return 0;
+    BOOL portrait = [scenes containsObject:@(OSCScenePortrait)];
+    BOOL landscape = [scenes containsObject:@(OSCSceneLandscape)] || [scenes containsObject:@(OSCSceneLandscapeFullGame)];
+    if (portrait && !landscape) return UIInterfaceOrientationMaskPortrait;
+    if (landscape && !portrait) return UIInterfaceOrientationMaskLandscape;
+    return 0;
 }
 
 @synthesize trashCanButton;
@@ -180,6 +150,14 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 // Mask for the single orientation we are currently displayed in, so a locked
 // editor refuses to rotate to any other orientation.
 - (UIInterfaceOrientationMask)osc_currentInterfaceOrientationMask {
+    UIInterfaceOrientationMask displayed = [self osc_displayedInterfaceOrientationMask];
+    UIInterfaceOrientationMask sceneMask = [self osc_sceneMaskForSelectedLayout];
+    // The layout being edited belongs to the other orientation: rotate to it.
+    if (sceneMask != 0 && (sceneMask & displayed) == 0) return sceneMask;
+    return displayed;
+}
+
+- (UIInterfaceOrientationMask)osc_displayedInterfaceOrientationMask {
     UIInterfaceOrientation cur = UIInterfaceOrientationUnknown;
     if (@available(iOS 13.0, *)) {
         UIWindowScene *scene = self.view.window.windowScene;
@@ -710,8 +688,6 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     selectedWidgetView = nil;
     widgetPanelStoredCenter = self.widgetPanelStack.center;
     [super viewDidAppear:animated];
-    // 进入编辑界面时按当前方向应用锁定
-    [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
     // Enforce the screen-rotation lock (locked by default) now that we have a window.
     [self osc_publishRotationLockAndRefresh];
 }
@@ -806,10 +782,6 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     NSLog(@"✅ 设置 viewWillBeResized = true");
     [self hideStickIndicators];
     [self saveTapped:nil];
-    // 旋转开始时，先行应用方向锁定（下一个runloop再刷新全局UI）
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
-    });
 
     // viewWillBeResized gates handleOrientationChangeForOnScreenWidgets so it only
     // rebuilds widgets on a genuine interface resize. It is set true just above but
@@ -842,10 +814,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 - (void)handleScreenChanged:(NSNotification *)notification {
     NSLog(@"📺 handleScreenChanged 被调用 - 来自StreamFrameViewController");
     
-    // 只有在非布局编辑模式下才处理（即在串流界面中）
-    
-    // 应用方向锁定
-    [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
+    // Layout selection is driven by scenes; nothing to switch here while editing.
 }
 
 
@@ -863,9 +832,6 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     // "tilt the device and lose the unsaved widget" bug. Save first, always, so the
     // reload below is lossless no matter how the flag handshake misfires.
     [self saveTapped:nil];
-
-    // 应用方向锁定（编辑界面）
-    [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
 
     [self setupWidgetPanel];
     [self updateViewBounds];
@@ -1138,6 +1104,10 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
                                                                       preferredStyle:UIAlertControllerStyleAlert];
     
     if(self->selectedWidgetView == nil) return;
+    // The alert's handlers run later; by then a background/foreground round trip or a
+    // rotation may have rebuilt every widget and cleared selectedWidgetView (that was a
+    // removeObject:nil crash). Hold the widget being edited and re-resolve it on action.
+    OnScreenWidgetView *editedWidget = self->selectedWidgetView;
     
     [alertController addTextFieldWithConfigurationHandler:^(UITextField *textField) {
         textField.placeholder = [LocalizationHelper localizedStringForKey:@"Command"];
@@ -1184,7 +1154,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         [widgetInitParams setObject: alertController.textFields[1].text forKey:@"buttonLabel"];
         [widgetInitParams setObject: alertController.textFields[2].text forKey:@"minStickOffsetString"];
         [widgetInitParams setObject: alertController.textFields[3].text forKey:@"shape"];
-        [self updateWidget:self->selectedWidgetView byParams:widgetInitParams createNew:true];
+        [self updateWidget:[self osc_liveWidgetFor:editedWidget] byParams:widgetInitParams createNew:true];
     }];
 
     UIAlertAction *modifyAction = [UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Modify"]
@@ -1194,7 +1164,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         [widgetInitParams setObject: alertController.textFields[1].text forKey:@"buttonLabel"];
         [widgetInitParams setObject: alertController.textFields[2].text forKey:@"minStickOffsetString"];
         [widgetInitParams setObject: alertController.textFields[3].text forKey:@"shape"];
-        [self updateWidget:self->selectedWidgetView byParams:widgetInitParams createNew:false];
+        [self updateWidget:[self osc_liveWidgetFor:editedWidget] byParams:widgetInitParams createNew:false];
     }];
     
     [alertController addAction:createNewAction];
@@ -1257,7 +1227,35 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     return !paramInvalid;
 }
 
+// The widget to operate on after an async UI step: the same instance when it is
+// still on screen, else the rebuilt widget that stands for it (same command,
+// label, shape and position), else nil.
+- (OnScreenWidgetView *)osc_liveWidgetFor:(OnScreenWidgetView *)widget {
+    if (widget == nil) return nil;
+    if ([self.onScreenWidgetViews containsObject:widget] && widget.superview != nil) return widget;
+    OnScreenWidgetView *best = nil;
+    CGFloat bestDist = 8.0;
+    for (OnScreenWidgetView *w in self.onScreenWidgetViews) {
+        if (![w.cmdString isEqualToString:widget.cmdString]) continue;
+        if (![(w.buttonLabel ?: @"") isEqualToString:(widget.buttonLabel ?: @"")]) continue;
+        if (![(w.shape ?: @"") isEqualToString:(widget.shape ?: @"")]) continue;
+        CGFloat d = hypot(w.center.x - widget.center.x, w.center.y - widget.center.y);
+        if (d < bestDist) { bestDist = d; best = w; }
+    }
+    return best;
+}
+
 - (void) updateWidget:(OnScreenWidgetView* )widget byParams:(NSMutableDictionary* )widgetInitParams createNew:(bool)createNew{
+    if (widget == nil) {
+        self->selectedWidgetView = nil;
+        self->widgetViewSelected = false;
+        return;   // the edited widget is gone (rebuilt and not found); nothing to change
+    }
+    // The resolved widget is the one being edited: isWidgetParamsValid excludes
+    // selectedWidgetView from the duplicate-fullscreen-trigger check, so point it at
+    // the live instance (a rebuild may have cleared it).
+    self->selectedWidgetView = widget;
+    self->widgetViewSelected = true;
     if(![self isWidgetParamsValid:widgetInitParams]) return;
     // Creating a clone would leave us with two fullscreen triggers, which is forbidden.
     // (In modify mode the old widget is removed below, so the check in isWidgetParamsValid
@@ -1967,10 +1965,15 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
                                                                    message:nil
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
     NSArray<NSString *> *options = CommandManager.aimRelativeActivationOptions;
+    OnScreenWidgetView *editedWidget = self->selectedWidgetView;   // may be rebuilt before the sheet is answered
     for(NSString *option in options){
         NSString *title = [CommandManager aimRelativeActivationTitleForCommand:option];
         UIAlertAction *action = [UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-            self->selectedWidgetView.aimRelativeActivationButton = option;
+            OnScreenWidgetView *target = [self osc_liveWidgetFor:editedWidget];
+            if (target == nil) return;
+            target.aimRelativeActivationButton = option;
+            self->selectedWidgetView = target;
+            self->widgetViewSelected = true;
             [self updateAimRelativeModeButtonTitle];
             [self autoFitStack:self.widgetPanelStack];
         }];
@@ -2516,8 +2519,9 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 
 - (void)handleProfileTablViewDismiss{
     [self profileRefresh];
-    // 关闭列表后，按当前方向应用锁定
-    [self osc_applyLockForCurrentOrientationAndReloadIfNeeded];
+    // The picked layout may belong to the other orientation: let the rotation lock
+    // follow its scenes (rotates the editor when needed).
+    [self osc_publishRotationLockAndRefresh];
 }
 
 /* Basically the same method as loadTapped, without parameter*/

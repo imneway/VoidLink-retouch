@@ -118,6 +118,10 @@ extern NSString * const StreamViewBlockStreamTouchDefaultsKey;
 + (void)setMultiTouchExemptView:(UIView *)view;
 + (NSSet<UITouch *> *)streamTouchesForEvent:(UIEvent *)event;
 + (NSSet<UITouch *> *)streamTouchesFrom:(NSSet<UITouch *> *)touches;
+// Same filters, but touches withheld by the OSC touch block still count. For gestures
+// that must keep working while the stream itself ignores fingers (layout editor tap).
++ (NSSet<UITouch *> *)streamTouchesFrom:(NSSet<UITouch *> *)touches includingWithheld:(BOOL)includeWithheld;
++ (NSSet<UITouch *> *)streamTouchesForEvent:(UIEvent *)event includingWithheld:(BOOL)includeWithheld;
 
 - (CGSize) getVideoAreaSize;
 - (CGPoint) adjustCoordinatesForVideoArea:(CGPoint)point;

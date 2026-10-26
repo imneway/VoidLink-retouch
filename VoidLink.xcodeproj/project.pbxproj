@@ -21,6 +21,7 @@
 		84351B0F2C29ACCB00A77989 /* OnScreenButtonState.m in Sources */ = {isa = PBXBuildFile; fileRef = 84351B092C29ACCA00A77989 /* OnScreenButtonState.m */; };
 		84351B102C29ACCB00A77989 /* OSCProfile.m in Sources */ = {isa = PBXBuildFile; fileRef = 84351B0A2C29ACCA00A77989 /* OSCProfile.m */; };
 		84351B112C29ACCB00A77989 /* OSCProfilesManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 84351B0B2C29ACCB00A77989 /* OSCProfilesManager.m */; };
+		A1B2C3D401OSCSCENEB00001 /* OSCSceneManager.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D401OSCSCENEM00001 /* OSCSceneManager.m */; };
 		84351B2B2C29AD6100A77989 /* LayoutOnScreenControlsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 84351B252C29AD6000A77989 /* LayoutOnScreenControlsViewController.m */; };
 		84351B2C2C29AD6100A77989 /* OSCProfilesTableViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 84351B272C29AD6000A77989 /* OSCProfilesTableViewController.m */; };
 		84351B2D2C29AD6100A77989 /* ToolBarContainerView.m in Sources */ = {isa = PBXBuildFile; fileRef = 84351B292C29AD6000A77989 /* ToolBarContainerView.m */; };
@@ -182,6 +183,8 @@
 		84351B092C29ACCA00A77989 /* OnScreenButtonState.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = OnScreenButtonState.m; sourceTree = "<group>"; };
 		84351B0A2C29ACCA00A77989 /* OSCProfile.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = OSCProfile.m; sourceTree = "<group>"; };
 		84351B0B2C29ACCB00A77989 /* OSCProfilesManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = OSCProfilesManager.m; sourceTree = "<group>"; };
+		A1B2C3D401OSCSCENEH00001 /* OSCSceneManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OSCSceneManager.h; sourceTree = "<group>"; };
+		A1B2C3D401OSCSCENEM00001 /* OSCSceneManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OSCSceneManager.m; sourceTree = "<group>"; };
 		84351B0C2C29ACCB00A77989 /* LayoutOnScreenControls.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = LayoutOnScreenControls.h; sourceTree = "<group>"; };
 		84351B0D2C29ACCB00A77989 /* OSCProfile.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = OSCProfile.h; sourceTree = "<group>"; };
 		84351B252C29AD6000A77989 /* LayoutOnScreenControlsViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = LayoutOnScreenControlsViewController.m; sourceTree = "<group>"; };
@@ -440,6 +443,8 @@
 				84351B0A2C29ACCA00A77989 /* OSCProfile.m */,
 				84351B082C29ACCA00A77989 /* OSCProfilesManager.h */,
 				84351B0B2C29ACCB00A77989 /* OSCProfilesManager.m */,
+				A1B2C3D401OSCSCENEH00001 /* OSCSceneManager.h */,
+				A1B2C3D401OSCSCENEM00001 /* OSCSceneManager.m */,
 			);
 			path = CustomOSC;
 			sourceTree = "<group>";
@@ -1055,6 +1060,7 @@
 				189AD29A2DE7446000E24B88 /* HostCollectionViewController.m in Sources */,
 				9897B6A1221260EF00966419 /* VoidController.m in Sources */,
 				84351B112C29ACCB00A77989 /* OSCProfilesManager.m in Sources */,
+				A1B2C3D401OSCSCENEB00001 /* OSCSceneManager.m in Sources */,
 				FB89462919F646E200339C8A /* mkcert.c in Sources */,
 				FB9AFD281A7C84ED00872C98 /* HttpResponse.m in Sources */,
 				FB89463019F646E200339C8A /* StreamConfiguration.m in Sources */,

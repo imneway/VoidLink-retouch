@@ -16,6 +16,7 @@
 
 
 @property (nonatomic, assign) uint8_t numberOfTouchesRequired;
+@property (nonatomic, assign) bool countsWithheldTouches; // count fingers the OSC touch block withholds from the stream (layout-editor gesture)
 @property (nonatomic, assign) bool immediateTriggering; // if enabled,  trigger the signal on touchesBegan stage.
 @property (nonatomic, assign) double tapDownTimeThreshold; // tap down threshold in seconds.
 @property (nonatomic, assign) bool isOnScreenControllerBeingPressed; // will be set by the onscreencontrol class

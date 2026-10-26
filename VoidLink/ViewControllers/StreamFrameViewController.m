@@ -31,6 +31,7 @@
 #import "LocalizationHelper.h"
 #import "VoidLink-Swift.h"
 #import "OSCProfilesManager.h"
+#import "OSCSceneManager.h"
 #import "ThemeManager.h"
 #import "HttpManager.h"
 #import "ServerInfoResponse.h"
@@ -302,7 +303,6 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // Layout slot: YES while the full-display-game layout should be on.
     BOOL _layoutFullSlotActive;
     NSUInteger _layoutToken;
-    NSString *_layoutRestoreProfileName;     // what the full slot replaced, when no orientation slot is bound
     StreamContentClass _oscDetectedContent;  // last debounced detector verdict
     // YES from viewDidLoad until osc_configureForStream: the OSC stays fully
     // Off (not translucent) while connecting, whatever the hide mode says.
@@ -327,11 +327,6 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
 
 }
 
-// MARK: - 方向锁定 持久化Key（与其它页面一致）
-static NSString * const kOSCLockedPortraitProfileName = @"OSCLockedPortraitProfileName";
-static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapeProfileName";
-// Third slot: landscape while a full-display game is on (see layout_update).
-static NSString * const kOSCLockedLandscapeFullProfileName = @"OSCLockedLandscapeFullProfileName";
 static NSString * const kStreamOrientationLockEnabledKey = @"streamOrientationLockEnabled";
 
 BOOL gStreamOrientationLocked = NO;
@@ -353,49 +348,37 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
     return self.view.bounds.size.width > self.view.bounds.size.height;
 }
 
-// 读取锁定的布局名
-- (NSString *)osc_lockedProfileNameForLandscape:(BOOL)isLandscape {
-    NSString *key = isLandscape ? kOSCLockedLandscapeProfileName : kOSCLockedPortraitProfileName;
-    return [[NSUserDefaults standardUserDefaults] stringForKey:key];
+// The scene the stream is in right now: portrait, landscape, or landscape with a
+// full-display game on (see layout_update).
+- (OSCScene)osc_currentScene {
+    if (![self osc_isCurrentLandscapeInViewBounds]) return OSCScenePortrait;
+    return _layoutFullSlotActive ? OSCSceneLandscapeFullGame : OSCSceneLandscape;
 }
 
-static OSCProfile *OscUsableProfileNamed(OSCProfilesManager *pm, NSString *name) {
-    if (name.length == 0 || [pm isTemplateProfile:name]) return nil;
-    for (OSCProfile *p in [pm getAllProfiles]) {
-        if ([p.name isEqualToString:name]) return p;
-    }
-    return nil;
-}
-
-// The layout the stream should be showing now: portrait slot in portrait;
-// in landscape the full-display-game slot while one is on (and bound),
-// else the landscape slot.
-- (OSCProfile *)osc_desiredLockedProfile:(OSCProfilesManager *)pm {
-    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
-    if (isLandscape && _layoutFullSlotActive) {
-        OSCProfile *full = OscUsableProfileNamed(pm, [[NSUserDefaults standardUserDefaults] stringForKey:kOSCLockedLandscapeFullProfileName]);
-        if (full) return full;
-    }
-    return OscUsableProfileNamed(pm, [self osc_lockedProfileNameForLandscape:isLandscape]);
-}
-
-// 在串流界面应用锁定：切换选中布局并刷新OSC与Widget
-- (void)osc_applyLockForCurrentOrientationInStreamingIfNeeded {
+// Make the layout bound to the current scene the selected one (falls back to the
+// landscape layout / Default, never to "nothing"). Returns YES when it changed;
+// the caller reloads.
+- (BOOL)osc_selectSceneLayout {
+    // While the editor is open the selected layout is the one being edited; switching
+    // it underneath would make the next save write those widgets into another layout.
+    // oscLayoutClosed re-runs this once the editor is gone.
+    if (self->_streamView.widgetToolOpened) return NO;
+    [OSCSceneManager migrateIfNeeded];
     OSCProfilesManager *pm = [OSCProfilesManager sharedManager:self.view.bounds];
-    OSCProfile *found = [self osc_desiredLockedProfile:pm];
-    // Only the full slot bound: leaving a full-display game goes back to
-    // whatever the full layout replaced, not nowhere.
-    if (!found && !_layoutFullSlotActive && _layoutRestoreProfileName) {
-        found = OscUsableProfileNamed(pm, _layoutRestoreProfileName);
-    }
-    if (!_layoutFullSlotActive) _layoutRestoreProfileName = nil;
-    if (!found) {
-        return;
-    }
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    for (OSCProfile *p in [pm getAllProfiles]) if (p.name) [names addObject:p.name];
+    if (names.count == 0) return NO;   // profiles not readable right now; keep what is showing
+    NSString *wanted = [OSCSceneManager resolvedProfileNameForScene:[self osc_currentScene] existingNames:names];
+    if (![names containsObject:wanted]) return NO;
     NSString *current = [[pm getSelectedProfile] name];
-    if (![current isEqualToString:found.name]) {
-        if (_layoutFullSlotActive && !_layoutRestoreProfileName) _layoutRestoreProfileName = current;
-        [pm setProfileToSelected:found.name];
+    if ([current isEqualToString:wanted]) return NO;
+    [pm setProfileToSelected:wanted];
+    return YES;
+}
+
+// Show the scene's layout, reloading OSC + widgets only when it changes.
+- (void)osc_applyLockForCurrentOrientationInStreamingIfNeeded {
+    if ([self osc_selectSceneLayout]) {
         // 刷新串流界面上的 OSC 与键盘控件
         if (self->_controllerSupport && self->_streamConfig) {
             [self->_streamView reloadOnScreenControlsRealtimeWith:(ControllerSupport*)self->_controllerSupport
@@ -727,6 +710,7 @@ static OSCProfile *OscUsableProfileNamed(OSCProfilesManager *pm, NSString *name)
         _oscLayoutTapRecoginizer = [[CustomTapGestureRecognizer alloc] initWithTarget:self action:@selector(handleWidgetLayoutGesture)];
         _oscLayoutTapRecoginizer.numberOfTouchesRequired = _settings.oscLayoutToolFingers.intValue; //tap a predefined number of fingers to open osc layout tool
         _oscLayoutTapRecoginizer.tapDownTimeThreshold = 0.2;
+        _oscLayoutTapRecoginizer.countsWithheldTouches = true;   // must open the editor even while the OSC touch block eats the fingers
         _oscLayoutTapRecoginizer.delaysTouchesBegan = NO;
         _oscLayoutTapRecoginizer.delaysTouchesEnded = NO;
         if(_settings.touchMode.intValue == AbsoluteTouch) _oscLayoutTapRecoginizer.immediateTriggering = true; // make immediate triggering on for absolute touch mode
@@ -3597,6 +3581,9 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
 - (void)oscLayoutClosed{
     // Handle the callback
     _streamView.widgetToolOpened = false;
+    // The editor leaves whatever layout was being edited selected; the stream shows
+    // the scene's layout. Pick it before the reloads below.
+    [self osc_selectSceneLayout];
     [self->_streamView disableOnScreenControls]; // add this to get realtime back menu working.
     [self->_streamView reloadOnScreenControlsWith:(ControllerSupport*)_controllerSupport
                                         andConfig:(StreamConfiguration*)_streamConfig];

@@ -43,8 +43,8 @@ static CGFloat screenWidthInPoints;
     // OSC ON/OFF button — so the finger holding that button is delivered here
     // and sits in allTouches for the whole hold. Drop it from both sets, or a
     // hold + one tap reads as a 2-finger right click and + two as the keyboard.
-    NSSet<UITouch *> *streamTouches = [StreamView streamTouchesForEvent:event];
-    NSSet<UITouch *> *ownTouches = [StreamView streamTouchesFrom:touches];
+    NSSet<UITouch *> *streamTouches = [StreamView streamTouchesForEvent:event includingWithheld:_countsWithheldTouches];
+    NSSet<UITouch *> *ownTouches = [StreamView streamTouchesFrom:touches includingWithheld:_countsWithheldTouches];
     if ([ownTouches count] != [touches count]) {
         // Untrack the exempt finger: these recognizers keep cancelsTouchesInView,
         // so a recognized right click / keyboard tap would otherwise cancel the
@@ -87,9 +87,9 @@ static CGFloat screenWidthInPoints;
     // [super touchesEnded:touches withEvent:event];
     
     if(_immediateTriggering) return;
-    NSSet<UITouch *> *ownTouches = [StreamView streamTouchesFrom:touches];
+    NSSet<UITouch *> *ownTouches = [StreamView streamTouchesFrom:touches includingWithheld:_countsWithheldTouches];
     if ([ownTouches count] == 0) return; // only the exempt finger lifted
-    uint8_t allTouchesCount = [[StreamView streamTouchesForEvent:event] count];
+    uint8_t allTouchesCount = [[StreamView streamTouchesForEvent:event includingWithheld:_countsWithheldTouches] count];
     if(allTouchesCount > _numberOfTouchesRequired) {
         _gestureCaptured = false;
         self.state = UIGestureRecognizerStateFailed;

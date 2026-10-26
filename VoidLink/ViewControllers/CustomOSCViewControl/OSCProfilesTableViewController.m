@@ -8,6 +8,11 @@
 //  Modified by True砖家 since 2024.6.24
 //  Copyright © 2024 True砖家 on Bilibili. All rights reserved.
 //
+//  Scene-based rewrite: three scene cards (portrait / landscape / full-screen game)
+//  on top decide which layout the stream shows; the list below is a plain list of
+//  layouts. Tapping a row opens it in the editor; swipe actions bind, copy, rename
+//  and delete. There is no lock and no "selected" state in this UI any more.
+//
 
 #import "OSCProfilesTableViewController.h"
 #import "LayoutOnScreenControlsViewController.h"
@@ -15,37 +20,40 @@
 #import "OSCProfile.h"
 #import "OnScreenButtonState.h"
 #import "OSCProfilesManager.h"
+#import "OSCSceneManager.h"
 #import "LocalizationHelper.h"
 
 const double NAV_BAR_HEIGHT = 50;
+static const CGFloat kSceneCardsHeight = 92.0;
+static NSString * const kDefaultLayoutName = @"Default";
 
 @interface OSCProfilesTableViewController () <UIGestureRecognizerDelegate>
-
+@property (nonatomic, strong) UIView *sceneHeaderView;
+@property (nonatomic, strong) NSArray<UIControl *> *sceneCards;
 @end
 
 @implementation OSCProfilesTableViewController {
     OSCProfilesManager *profilesManager;
 }
 
-// 新增：按方向锁定相关的持久化 Key
-static NSString * const kOSCLockedPortraitProfileName = @"OSCLockedPortraitProfileName";
-static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapeProfileName";
-static NSString * const kOSCLockedLandscapeFullProfileName = @"OSCLockedLandscapeFullProfileName"; // landscape, full-display game
-
-@synthesize tableView;
+#pragma mark - Orientation
 
 - (UIInterfaceOrientationMask)getCurrentOrientation{
     CGFloat screenHeightInPoints = CGRectGetHeight([[UIScreen mainScreen] bounds]);
     CGFloat screenWidthInPoints = CGRectGetWidth([[UIScreen mainScreen] bounds]);
-    //lock the orientation accordingly after streaming is started
     if(screenWidthInPoints > screenHeightInPoints) return UIInterfaceOrientationMaskLandscape;
     else return UIInterfaceOrientationMaskPortrait|UIInterfaceOrientationMaskPortraitUpsideDown;
 }
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    // Return the supported interface orientations acoordingly
-    return [self getCurrentOrientation]; // 90 Degree rotation not allowed in streaming or app view
+    return [self getCurrentOrientation];
 }
+
+- (BOOL)osc_isCurrentLandscapeInViewBounds {
+    return self.view.bounds.size.width > self.view.bounds.size.height;
+}
+
+#pragma mark - Lifecycle
 
 - (void) viewDidDisappear:(BOOL)animated{
     [[NSNotificationCenter defaultCenter] postNotificationName:@"OscLayoutTableViewCloseNotification" object:self]; // notify other view that oscLayoutManager is closing
@@ -57,61 +65,49 @@ static NSString * const kOSCLockedLandscapeFullProfileName = @"OSCLockedLandscap
     [[NSNotificationCenter defaultCenter] postNotificationName:@"OSCProfilesOverlayRemove" object:nil];
 }
 
-
 - (void) viewDidLayoutSubviews {
     CGRect bounds = self.profileTableViewNavigationBar.bounds;
     CGSize cornerSize = CGSizeMake(15, 15);
-    
-    // 创建一个 UIBezierPath，设置顶部圆角
     UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:bounds byRoundingCorners:(UIRectCornerTopLeft | UIRectCornerTopRight) cornerRadii:cornerSize];
-                                               //byRoundingCorners:(UIRectCornerTopLeft | UIRectCornerTopRight)  // 只设置上半部分圆角
-                                                 //    cornerRadius:10];  // 圆角半径
-
-    // 创建一个 CAShapeLayer 并将圆角路径应用到该图层
     CAShapeLayer *maskLayer = [CAShapeLayer layer];
     maskLayer.frame = bounds;
     maskLayer.path = path.CGPath;
-
-    self.profileTableViewNavigationBar.layer.masksToBounds = true;  // 使圆角生效
+    self.profileTableViewNavigationBar.layer.masksToBounds = true;
     self.profileTableViewNavigationBar.layer.mask = maskLayer;
-    
-    self.tableView.layer.cornerRadius = 15;  // 设置圆角半径
-    self.tableView.layer.masksToBounds = true;  // 使圆角生效
 
-    // 恢复底部系统 UIToolbar 的圆角（下边两个角）
+    self.tableView.layer.cornerRadius = 15;
+    self.tableView.layer.masksToBounds = true;
+
     if (self.systemBottomToolbar) {
         self.systemBottomToolbar.clipsToBounds = YES;
         self.systemBottomToolbar.layer.cornerRadius = 15;
-#ifdef __IPHONE_11_0
         if ([self.systemBottomToolbar.layer respondsToSelector:@selector(setMaskedCorners:)]) {
             self.systemBottomToolbar.layer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
         }
-#endif
+    }
+    // Keep the header as wide as the table (tableHeaderView does not autoresize its width).
+    if (self.sceneHeaderView && self.sceneHeaderView.bounds.size.width != self.tableView.bounds.size.width) {
+        self.sceneHeaderView.frame = CGRectMake(0, 0, self.tableView.bounds.size.width, NAV_BAR_HEIGHT + kSceneCardsHeight);
+        self.tableView.tableHeaderView = self.sceneHeaderView;
     }
 }
 
 - (void) viewDidLoad {
     [super viewDidLoad];
-    
-    // self.profileTableViewNavigationBar.layer.cornerRadius = 15;  // 设置圆角半径
-    
+    [OSCSceneManager migrateIfNeeded];
     profilesManager = [OSCProfilesManager sharedManager:_layoutViewBounds];
-    
-    self.tableView.tableHeaderView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, NAV_BAR_HEIGHT)];
-    
+
     self.tableView.delegate = self;
     self.tableView.dataSource = self;
-    
     [self.tableView registerNib:[UINib nibWithNibName:@"ProfileTableViewCell" bundle:nil]
-         forCellReuseIdentifier:@"Cell"]; // Register the custom cell nib file with the table view
+         forCellReuseIdentifier:@"Cell"];
     self.view.backgroundColor = [UIColor clearColor];
     self.tableView.alpha = 1.0;
-    // 列表主体使用白色 95% 透明背景
     self.tableView.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.95];
-    // 顶部文字按钮统一使用青色
+    self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
+
     if (self.navigationController) {
         self.navigationController.navigationBar.tintColor = [UIColor systemTealColor];
-        // 移除顶部工具栏透明度
         self.navigationController.navigationBar.translucent = NO;
         self.navigationController.navigationBar.barTintColor = [UIColor whiteColor];
     }
@@ -119,298 +115,410 @@ static NSString * const kOSCLockedLandscapeFullProfileName = @"OSCLockedLandscap
         self.profileTableViewNavigationBar.tintColor = [UIColor systemTealColor];
         self.profileTableViewNavigationBar.translucent = NO;
         self.profileTableViewNavigationBar.barTintColor = [UIColor whiteColor];
+        self.profileTableViewNavigationBar.topItem.title = [LocalizationHelper localizedStringForKey:@"Layouts"];
     }
-    
-    // 移除系统自带分隔线，避免与自定义分隔线叠加
-    self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
+    [self osc_removeLegacyNavItems];
 
-    // 添加点击背景关闭的手势（仅在点击 tableView 以外区域时生效）
+    [self osc_buildSceneHeader];
+
     UITapGestureRecognizer *bgTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleBackgroundTap:)];
     bgTap.cancelsTouchesInView = NO;
     bgTap.delegate = self;
     [self.view addGestureRecognizer:bgTap];
-    
-    // 初始化状态
+
     self.isProcessingOrientationChange = NO;
-    
-    // 设置底部工具栏（自定义bar 与 系统UIToolbar 二选一，系统UIToolbar优先）
+
     if (self.systemBottomToolbar) {
-        // 系统 Toolbar 存在：优先使用系统 Toolbar
         [self updateSystemToolbarItems];
     } else {
-        // 兼容旧版自定义工具栏
         [self setupBottomToolbar];
     }
-    
-    // 调整tableView的底部边距，为工具栏留出空间（系统或自定义）
     CGFloat tbHeight = self.systemBottomToolbar ? self.systemBottomToolbar.bounds.size.height : 50.0;
     CGFloat bottomInset = MAX(64.0, tbHeight + 30.0);
     self.tableView.contentInset = UIEdgeInsetsMake(0, 0, bottomInset, 0);
     self.tableView.scrollIndicatorInsets = UIEdgeInsetsMake(0, 0, bottomInset, 0);
-    
-    // 监听设备方向变化
+
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(deviceOrientationDidChange:)
                                                  name:UIDeviceOrientationDidChangeNotification
                                                object:nil];
-    
-    // 初始更新删除按钮状态
-    [self updateDeleteButtonState];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(osc_sceneBindingsChanged:)
+                                                 name:OSCSceneBindingsDidChangeNotification
+                                               object:nil];
 }
 
 - (void) viewDidAppear:(BOOL)animated {
     [super viewDidAppear: animated];
-    
+    [self osc_reloadAll];
+}
 
-    self.tableView.tableHeaderView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, NAV_BAR_HEIGHT)];
-    self.tableView.delegate = self;
-    self.tableView.dataSource = self;
-    
-    [self.tableView registerNib:[UINib nibWithNibName:@"ProfileTableViewCell" bundle:nil]
-                                        forCellReuseIdentifier:@"Cell"]; // Register the custom cell nib file with the table view
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
 
-    if ([[profilesManager getAllProfiles] count] > 0) { // scroll to selected profile if user has any saved profiles
-        NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[profilesManager getIndexOfSelectedProfile] inSection:0];
-        [self.tableView scrollToRowAtIndexPath:indexPath atScrollPosition:UITableViewScrollPositionMiddle animated:YES];
-     }
-     
-     // 更新工具栏按钮状态
-     [self updateToolbarButtons];
-    if (self.systemBottomToolbar) {
-        [self updateSystemToolbarItems];
+// Duplicate / Delete used to act on the "selected" row; they live in swipe actions now.
+- (void)osc_removeLegacyNavItems {
+    UINavigationItem *item = self.profileTableViewNavigationBar.topItem;
+    if (!item) return;
+    NSMutableArray *keep = [NSMutableArray array];
+    for (UIBarButtonItem *b in item.rightBarButtonItems) {
+        if (b.action == @selector(duplicateTapped:) || b.action == @selector(deleteTapped:)) continue;
+        [keep addObject:b];
     }
-    // 进入时应用当前方向锁定，并滚动到选中项
-    [self osc_applyLockForCurrentOrientation];
-    NSInteger idx = [profilesManager getIndexOfSelectedProfile];
-    if (idx >= 0 && idx < [[profilesManager getAllProfiles] count]) {
-        NSIndexPath *ip = [NSIndexPath indexPathForRow:idx inSection:0];
-        [self.tableView scrollToRowAtIndexPath:ip atScrollPosition:UITableViewScrollPositionMiddle animated:YES];
+    item.rightBarButtonItems = keep;
+    keep = [NSMutableArray array];
+    for (UIBarButtonItem *b in item.leftBarButtonItems) {
+        if (b.action == @selector(duplicateTapped:) || b.action == @selector(deleteTapped:)) continue;
+        [keep addObject:b];
     }
+    item.leftBarButtonItems = keep;
 }
 
+#pragma mark - Data helpers
 
-#pragma mark - UIButton Actions
-
-/* Loads the OSC profile that user selected, dismisses this VC, then tells the presenting view controller to lay out the on screen buttons according to the selected profile's instructions */
-- (IBAction) duplicateTapped:(id)sender {
-
-        UIAlertController * inputNameAlertController = [UIAlertController alertControllerWithTitle: [LocalizationHelper localizedStringForKey:@"Enter the name you want to save this profile as"] message: @"" preferredStyle:UIAlertControllerStyleAlert];
-        [inputNameAlertController addTextFieldWithConfigurationHandler:^(UITextField *textField) {  // pop up notification with text field where user can enter the text they wish to name their OSC layout profile
-            textField.placeholder = [LocalizationHelper localizedStringForKey:@"name"];
-            textField.textColor = [UIColor lightGrayColor];
-            textField.clearButtonMode = UITextFieldViewModeWhileEditing;
-            textField.borderStyle = UITextBorderStyleNone;
-        }];
-        [inputNameAlertController addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) { // adds a button that allows user to decline the option to save the controller layout they currently see on screen
-            [inputNameAlertController dismissViewControllerAnimated:NO completion:nil];
-        }]];
-        [inputNameAlertController addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Save"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {   // add save button to allow user to save the on screen controller configuration
-            NSArray *textFields = inputNameAlertController.textFields;
-            UITextField *nameField = textFields[0];
-            NSString *enteredProfileName = nameField.text;
-            
-            if ([profilesManager isTemplateProfile:enteredProfileName]) {  // 不允许覆盖模板布局
-                NSString *message = [NSString stringWithFormat:@"不允许覆盖模板布局'%@'", enteredProfileName];
-                UIAlertController *alertController = [UIAlertController alertControllerWithTitle: [NSString stringWithFormat:@""] message: message preferredStyle:UIAlertControllerStyleAlert];
-                
-                [alertController addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                    [alertController dismissViewControllerAnimated:NO completion:^{
-                        [self presentViewController:inputNameAlertController animated:YES completion:nil];
-                    }];
-                }]];
-                [self presentViewController:alertController animated:YES completion:nil];
-            }
-            else if ([enteredProfileName length] == 0) {    // if user entered no text and taps the 'Save' button let them know they can't do that
-                UIAlertController * savedAlertController = [UIAlertController alertControllerWithTitle: [NSString stringWithFormat:@""] message: [LocalizationHelper localizedStringForKey:@"Profile name cannot be blank!"] preferredStyle:UIAlertControllerStyleAlert];
-                
-                [savedAlertController addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) { // show pop up notification letting user know they must enter a name in the text field if they wish to save the controller profile
-                    
-                    [savedAlertController dismissViewControllerAnimated:NO completion:^{
-                        [self presentViewController:inputNameAlertController animated:YES completion:nil];
-                    }];
-                }]];
-                [self presentViewController:savedAlertController animated:YES completion:nil];
-            }
-            else if ([self->profilesManager profileNameAlreadyExist:enteredProfileName] == YES) {  // if the entered profile name already
-                UIAlertController * savedAlertController = [UIAlertController alertControllerWithTitle: [NSString stringWithFormat:@""] message: [LocalizationHelper localizedStringForKey:@"Profile name already exists"] preferredStyle:UIAlertControllerStyleAlert];
-                
-                [savedAlertController addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                    //[savedAlertController dismissViewControllerAnimated:NO completion:nil];
-                    //[self profileViewRefresh]; //refresh profile view after saving new profile;
-                }]];
-                [self presentViewController:savedAlertController animated:YES completion:nil];
-            }
-            else {  // if user entered a valid name that doesn't already exist then save the profile to persistent storage
-                [self->profilesManager saveProfileWithName: enteredProfileName andButtonLayers:self.currentOSCButtonLayers]; // the OSC layout here is passed from parent LayoutOSCViewController;
-                [self->profilesManager setProfileToSelected: enteredProfileName];
-                
-                UIAlertController * savedAlertController = [UIAlertController alertControllerWithTitle: [NSString stringWithFormat:@""] message: [LocalizationHelper localizedStringForKey:@"Profile %@ duplicated from current layout", enteredProfileName] preferredStyle:UIAlertControllerStyleAlert];  // Let user know this profile has been duplicated & saved
-                
-                [savedAlertController addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                    [savedAlertController dismissViewControllerAnimated:NO completion:nil];
-                    [self profileViewRefresh]; //refresh profile view after saving new profile;
-                }]];
-                [self presentViewController:savedAlertController animated:YES completion:nil];
-            }
-        }]];
-
-        [self presentViewController:inputNameAlertController animated:YES completion:nil];
-        
-        // 复制流程创建后，可能从模板切换到新布局，需要同步底部 toolbar 状态
-        // 在下一个 runloop 刷新，确保 selectedProfile 已更新
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self updateToolbarButtons];
-            if (self.systemBottomToolbar) {
-                [self updateSystemToolbarItems];
-            }
-        });
+- (NSArray<NSString *> *)osc_allNames {
+    NSMutableArray *names = [NSMutableArray array];
+    for (OSCProfile *p in [profilesManager getAllProfiles]) if (p.name) [names addObject:p.name];
+    return names;
 }
 
-/* basically the same with loadTapped */
-- (void) profileViewRefresh{
-    //[self dismissViewControllerAnimated:YES completion:nil];
-    //[selfparentLayoutOSCViewController]
-    [self osc_validateFullGameBinding]; // a deleted / renamed full-game layout must not keep the slot
-    [self.tableView reloadData]; // table view will be refreshed by calling reloadData
-    [self updateDeleteButtonState]; // 更新顶部删除按钮状态
-    [self updateToolbarButtons]; // 同步底部 toolbar（系统/自定义）状态
-    if (self.needToUpdateOscLayoutTVC) {    // tells the presenting view controller to lay out the on screen buttons according to the selected profile's instructions
-        self.needToUpdateOscLayoutTVC();
-    }
-    [[NSNotificationCenter defaultCenter] postNotificationName:@"OscLayoutProfileSelctedInTableView" object:self]; // notify other view that oscLayoutManager is closing
-}
-
-// MARK: - 方向锁定 辅助方法
-
-// 当前是否横屏（以视图 bounds 判断更稳妥）
-- (BOOL)osc_isCurrentLandscapeInViewBounds {
-    return self.view.bounds.size.width > self.view.bounds.size.height;
-}
-
-// 获取当前方向对应的锁定名 Key
-- (NSString *)osc_lockKeyForLandscape:(BOOL)isLandscape {
-    return isLandscape ? kOSCLockedLandscapeProfileName : kOSCLockedPortraitProfileName;
-}
-
-// 读取某方向锁定的布局名
-- (NSString *)osc_lockedProfileNameForLandscape:(BOOL)isLandscape {
-    NSString *key = [self osc_lockKeyForLandscape:isLandscape];
-    return [[NSUserDefaults standardUserDefaults] stringForKey:key];
-}
-
-// 设置某方向锁定的布局名（nil 表示解除锁定）
-- (void)osc_setLockedProfileName:(NSString *)profileName forLandscape:(BOOL)isLandscape {
-    NSString *key = [self osc_lockKeyForLandscape:isLandscape];
-    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    if (profileName) {
-        [ud setObject:profileName forKey:key];
-    } else {
-        [ud removeObjectForKey:key];
-    }
-    [ud synchronize];
-}
-
-// 横屏·全屏游戏槽
-- (NSString *)osc_fullGameProfileName {
-    return [[NSUserDefaults standardUserDefaults] stringForKey:kOSCLockedLandscapeFullProfileName];
-}
-
-- (void)osc_setFullGameProfileName:(NSString *)profileName {
-    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    if (profileName) [ud setObject:profileName forKey:kOSCLockedLandscapeFullProfileName];
-    else [ud removeObjectForKey:kOSCLockedLandscapeFullProfileName];
-    [ud synchronize];
-}
-
-- (BOOL)osc_isFullGameProfile:(NSString *)name {
-    NSString *full = [self osc_fullGameProfileName];
-    return full.length > 0 && [full isEqualToString:name];
-}
-
-// 全屏游戏槽指向的布局没了（删除、改名）：清掉，免得工具栏一直显示“已锁定”
-- (void)osc_validateFullGameBinding {
-    NSString *full = [self osc_fullGameProfileName];
-    if (full.length == 0) return;
-    OSCProfile *found = [profilesManager findProfileByName:full inProfileArray:[profilesManager getAllProfiles]];
-    if (!found || [profilesManager isTemplateProfile:full]) [self osc_setFullGameProfileName:nil];
-}
-
-// 当前方向是否已锁定
-- (BOOL)osc_isLockedForCurrentOrientation {
-    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
-    NSString *locked = [self osc_lockedProfileNameForLandscape:isLandscape];
-    return (locked.length > 0);
-}
-
-// 应用当前方向的锁定：若存在锁定，则强制切换到被锁定的布局
-- (void)osc_applyLockForCurrentOrientation {
-    [self osc_validateFullGameBinding];
-    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
-    NSString *lockedName = [self osc_lockedProfileNameForLandscape:isLandscape];
-    if (lockedName.length == 0) {
-        return;
-    }
-    // 若锁定的布局不存在或为模板，忽略（自动解除）
+- (OSCProfile *)osc_profileAtRow:(NSInteger)row {
     NSMutableArray *all = [profilesManager getAllProfiles];
-    OSCProfile *found = nil;
-    for (OSCProfile *p in all) {
-        if ([p.name isEqualToString:lockedName]) { found = p; break; }
+    if (row < 0 || row >= all.count) return nil;
+    return all[row];
+}
+
+- (void)osc_persistProfiles:(NSArray<OSCProfile *> *)profiles {
+    NSMutableArray *profilesEncoded = [[NSMutableArray alloc] init];
+    for (OSCProfile *profile in profiles) {
+        NSData *d = [NSKeyedArchiver archivedDataWithRootObject:profile requiringSecureCoding:YES error:nil];
+        if (d) [profilesEncoded addObject:d];
     }
-    if (!found) {
-        [self osc_setLockedProfileName:nil forLandscape:isLandscape];
-        return;
+    NSData *data = [NSKeyedArchiver archivedDataWithRootObject:profilesEncoded requiringSecureCoding:YES error:nil];
+    if (!data) return;
+    [[NSUserDefaults standardUserDefaults] setObject:data forKey:@"OSCProfiles"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+// Deep copy through the archiver so button states are not shared with the source.
+- (OSCProfile *)osc_cloneProfile:(OSCProfile *)source named:(NSString *)name {
+    NSData *d = [NSKeyedArchiver archivedDataWithRootObject:source requiringSecureCoding:YES error:nil];
+    NSSet *classes = [NSSet setWithObjects:[NSString class], [NSMutableData class], [NSMutableArray class], [OSCProfile class], [OnScreenButtonState class], nil];
+    OSCProfile *copy = d ? [NSKeyedUnarchiver unarchivedObjectOfClasses:classes fromData:d error:nil] : nil;
+    if (!copy) return nil;
+    copy.name = name;
+    copy.isSelected = NO;
+    return copy;
+}
+
+- (void)osc_reloadAll {
+    [self osc_refreshSceneCards];
+    [self.tableView reloadData];
+    [self updateToolbarButtons];
+}
+
+- (void)osc_sceneBindingsChanged:(NSNotification *)note {
+    [self osc_reloadAll];
+}
+
+- (void)osc_presentMessage:(NSString *)message {
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"" message:message preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:a animated:YES completion:nil];
+}
+
+#pragma mark - Scene cards
+
+- (void)osc_buildSceneHeader {
+    // The navigation bar sits over the top NAV_BAR_HEIGHT points of the table.
+    UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, MAX(self.tableView.bounds.size.width, 300), NAV_BAR_HEIGHT + kSceneCardsHeight)];
+    header.backgroundColor = [UIColor clearColor];
+
+    UIStackView *row = [[UIStackView alloc] init];
+    row.axis = UILayoutConstraintAxisHorizontal;
+    row.distribution = UIStackViewDistributionFillEqually;
+    row.spacing = 10;
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    [header addSubview:row];
+    [NSLayoutConstraint activateConstraints:@[
+        [row.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:16],
+        [row.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-16],
+        [row.topAnchor constraintEqualToAnchor:header.topAnchor constant:NAV_BAR_HEIGHT + 14],
+        [row.bottomAnchor constraintEqualToAnchor:header.bottomAnchor constant:-10],
+    ]];
+
+    NSMutableArray *cards = [NSMutableArray array];
+    for (NSInteger s = 0; s < OSCSceneCount; s++) {
+        UIControl *card = [[UIControl alloc] init];
+        card.tag = s;
+        card.layer.cornerRadius = 12;
+        card.layer.borderWidth = 1.5;
+        card.clipsToBounds = YES;
+        [card addTarget:self action:@selector(osc_sceneCardTapped:) forControlEvents:UIControlEventTouchUpInside];
+
+        UILabel *title = [[UILabel alloc] init];
+        title.tag = 1001;   // card.tag is the scene index, keep label tags out of that range
+        title.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+        title.textColor = [[UIColor blackColor] colorWithAlphaComponent:0.55];
+        title.translatesAutoresizingMaskIntoConstraints = NO;
+        title.text = [OSCSceneManager localizedNameForScene:(OSCScene)s];
+        [card addSubview:title];
+
+        UILabel *value = [[UILabel alloc] init];
+        value.tag = 1002;
+        value.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+        value.textColor = [UIColor blackColor];
+        value.numberOfLines = 2;
+        value.adjustsFontSizeToFitWidth = YES;
+        value.minimumScaleFactor = 0.7;
+        value.translatesAutoresizingMaskIntoConstraints = NO;
+        [card addSubview:value];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [title.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
+            [title.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
+            [title.topAnchor constraintEqualToAnchor:card.topAnchor constant:10],
+            [value.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+            [value.trailingAnchor constraintEqualToAnchor:title.trailingAnchor],
+            [value.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:4],
+            [value.bottomAnchor constraintLessThanOrEqualToAnchor:card.bottomAnchor constant:-8],
+        ]];
+        [row addArrangedSubview:card];
+        [cards addObject:card];
     }
-    if ([profilesManager isTemplateProfile:found.name]) {
-        [self osc_setLockedProfileName:nil forLandscape:isLandscape];
-        return;
+    self.sceneCards = cards;
+    self.sceneHeaderView = header;
+    self.tableView.tableHeaderView = header;
+    [self osc_refreshSceneCards];
+}
+
+- (OSCScene)osc_sceneForCurrentOrientation {
+    return [self osc_isCurrentLandscapeInViewBounds] ? OSCSceneLandscape : OSCScenePortrait;
+}
+
+- (void)osc_refreshSceneCards {
+    NSArray<NSString *> *names = [self osc_allNames];
+    OSCScene nowScene = [self osc_sceneForCurrentOrientation];
+    UIColor *teal = [UIColor systemTealColor];
+    for (UIControl *card in self.sceneCards) {
+        OSCScene scene = (OSCScene)card.tag;
+        UILabel *value = [card viewWithTag:1002];
+        NSString *bound = [OSCSceneManager boundProfileNameForScene:scene];
+        NSString *resolved = [OSCSceneManager resolvedProfileNameForScene:scene existingNames:names];
+        BOOL dangling = bound.length > 0 && ![names containsObject:bound];
+        if (scene == OSCSceneLandscapeFullGame && bound.length == 0) {
+            value.text = [LocalizationHelper localizedStringForKey:@"Same as landscape"];
+            value.textColor = [[UIColor blackColor] colorWithAlphaComponent:0.45];
+        } else if (dangling) {
+            value.text = [NSString stringWithFormat:@"%@ → %@", bound, resolved];
+            value.textColor = [UIColor systemOrangeColor];
+        } else {
+            value.text = resolved;
+            value.textColor = bound.length > 0 ? [UIColor blackColor] : [[UIColor blackColor] colorWithAlphaComponent:0.45];
+        }
+        BOOL current = (scene == nowScene) || (scene == OSCSceneLandscapeFullGame && nowScene == OSCSceneLandscape);
+        card.backgroundColor = current ? [teal colorWithAlphaComponent:0.10] : [[UIColor blackColor] colorWithAlphaComponent:0.04];
+        card.layer.borderColor = (current ? [teal colorWithAlphaComponent:0.6] : [[UIColor blackColor] colorWithAlphaComponent:0.08]).CGColor;
     }
-    // 横屏下全屏游戏布局也允许保持选中（以便编辑）
-    if (isLandscape && [self osc_isFullGameProfile:[[profilesManager getSelectedProfile] name]]) {
-        return;
+}
+
+- (void)osc_sceneCardTapped:(UIControl *)card {
+    OSCScene scene = (OSCScene)card.tag;
+    NSString *bound = [OSCSceneManager boundProfileNameForScene:scene];
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:[OSCSceneManager localizedNameForScene:scene]
+                                                                   message:[LocalizationHelper localizedStringForKey:@"Pick the layout this scene shows"]
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    if (scene == OSCSceneLandscapeFullGame) {
+        NSString *t = [LocalizationHelper localizedStringForKey:@"Same as landscape"];
+        if (bound.length == 0) t = [@"✓ " stringByAppendingString:t];
+        [sheet addAction:[UIAlertAction actionWithTitle:t style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            [OSCSceneManager bindProfileName:nil toScene:scene];
+        }]];
     }
-    if (![[[profilesManager getSelectedProfile] name] isEqualToString:found.name]) {
-        [profilesManager setProfileToSelected:found.name];
-        // 使用统一刷新：包含表格刷新、工具栏状态同步与外部视图通知
+    for (OSCProfile *p in [profilesManager getAllProfiles]) {
+        if (!p.name) continue;
+        NSString *t = p.name;
+        BOOL isBound = bound && [bound isEqualToString:p.name];
+        BOOL isImplicitDefault = (bound.length == 0 && scene != OSCSceneLandscapeFullGame && [p.name isEqualToString:kDefaultLayoutName]);
+        if (isBound || isImplicitDefault) t = [@"✓ " stringByAppendingString:t];
+        [sheet addAction:[UIAlertAction actionWithTitle:t style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            [OSCSceneManager bindProfileName:p.name toScene:scene];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+    UIPopoverPresentationController *pop = sheet.popoverPresentationController;
+    if (pop) {
+        pop.sourceView = card;
+        pop.sourceRect = card.bounds;
+        pop.permittedArrowDirections = UIPopoverArrowDirectionUp | UIPopoverArrowDirectionDown;
+    }
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+#pragma mark - Row actions
+
+// Open the layout in the editor: make it the edited layout, refresh the editor, dismiss.
+- (void)osc_openProfileInEditor:(OSCProfile *)profile {
+    if (!profile.name) return;
+    if (![[[profilesManager getSelectedProfile] name] isEqualToString:profile.name]) {
+        [profilesManager setProfileToSelected:profile.name];
         [self profileViewRefresh];
     }
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)osc_promptCopyProfile:(OSCProfile *)source {
+    NSString *title = [LocalizationHelper localizedStringForKey:@"Copy layout"];
+    UIAlertController *input = [UIAlertController alertControllerWithTitle:title
+                                                                   message:[LocalizationHelper localizedStringForKey:@"Enter the name you want to save this profile as"]
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [input addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.placeholder = [LocalizationHelper localizedStringForKey:@"name"];
+        textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+        textField.text = [self osc_suggestedCopyNameFor:source.name];
+    }];
+    __weak UIAlertController *weakInput = input;   // the alert owns the action; don't let the handler own the alert
+    [input addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+    [input addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Save"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *name = [weakInput.textFields.firstObject.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        NSString *problem = [self osc_validateNewName:name];
+        if (problem) { [self osc_presentMessage:problem]; return; }
+        NSMutableArray *all = [self->profilesManager getAllProfiles];
+        OSCProfile *copy = [self osc_cloneProfile:source named:name];
+        if (!copy) { [self osc_presentMessage:[LocalizationHelper localizedStringForKey:@"Failed to copy layout"]]; return; }
+        [all addObject:copy];
+        [self osc_persistProfiles:all];
+        [self osc_reloadAll];
+        // A copy of a template is the way to start editing one: open it right away.
+        if ([self->profilesManager isTemplateProfile:source.name]) {
+            [self osc_openProfileInEditor:copy];
+        }
+    }]];
+    [self presentViewController:input animated:YES completion:nil];
+}
+
+- (NSString *)osc_suggestedCopyNameFor:(NSString *)base {
+    NSString *stem = base ?: @"Layout";
+    if ([stem rangeOfString:@" / "].location != NSNotFound) {
+        stem = [[stem componentsSeparatedByString:@" / "] firstObject];   // bilingual template names
+    }
+    NSArray *names = [self osc_allNames];
+    NSString *candidate = [NSString stringWithFormat:@"%@ 2", stem];
+    NSInteger n = 2;
+    while ([names containsObject:candidate]) {
+        n++;
+        candidate = [NSString stringWithFormat:@"%@ %ld", stem, (long)n];
+    }
+    return candidate;
+}
+
+- (NSString *)osc_validateNewName:(NSString *)name {
+    if (name.length == 0) return [LocalizationHelper localizedStringForKey:@"Profile name cannot be blank!"];
+    if ([profilesManager isTemplateProfile:name]) return [LocalizationHelper localizedStringForKey:@"Template names are reserved"];
+    if ([profilesManager profileNameAlreadyExist:name]) return [LocalizationHelper localizedStringForKey:@"Profile name already exists"];
+    return nil;
+}
+
+- (void)osc_promptRenameProfile:(OSCProfile *)profile {
+    UIAlertController *input = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Rename layout"]
+                                                                   message:nil
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [input addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.text = profile.name;
+        textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    }];
+    __weak UIAlertController *weakInput = input;
+    [input addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+    [input addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Save"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *name = [weakInput.textFields.firstObject.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([name isEqualToString:profile.name]) return;
+        NSString *problem = [self osc_validateNewName:name];
+        if (problem) { [self osc_presentMessage:problem]; return; }
+        NSMutableArray *all = [self->profilesManager getAllProfiles];
+        OSCProfile *target = [self->profilesManager findProfileByName:profile.name inProfileArray:all];
+        if (!target) return;
+        NSString *oldName = target.name;
+        target.name = name;
+        [self osc_persistProfiles:all];
+        [OSCSceneManager noteProfileRenamedFrom:oldName to:name];
+        [self osc_reloadAll];
+        if (self.needToUpdateOscLayoutTVC) self.needToUpdateOscLayoutTVC();   // editor label shows the name
+    }]];
+    [self presentViewController:input animated:YES completion:nil];
+}
+
+- (void)osc_confirmDeleteProfile:(OSCProfile *)profile {
+    if ([profilesManager isTemplateProfile:profile.name]) {
+        [self osc_presentMessage:[LocalizationHelper localizedStringForKey:@"DeleteTemplateNotAllowed:%@", profile.name]];
+        return;
+    }
+    NSArray<NSNumber *> *scenes = [OSCSceneManager scenesBoundToProfileName:profile.name];
+    NSString *message = [LocalizationHelper localizedStringForKey:@"ConfirmDeleteProfile:%@", profile.name];
+    if (scenes.count > 0) {
+        NSMutableArray *sceneNames = [NSMutableArray array];
+        for (NSNumber *s in scenes) [sceneNames addObject:[OSCSceneManager localizedNameForScene:(OSCScene)s.integerValue]];
+        message = [message stringByAppendingFormat:@"\n\n%@", [LocalizationHelper localizedStringForKey:@"Scenes using it fall back to Default: %@", [sceneNames componentsJoinedByString:@", "]]];
+    }
+    UIAlertController *confirm = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"ConfirmDelete"] message:message preferredStyle:UIAlertControllerStyleAlert];
+    [confirm addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+    [confirm addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Delete"] style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        [self osc_deleteProfile:profile];
+    }]];
+    [self presentViewController:confirm animated:YES completion:nil];
+}
+
+- (void)osc_deleteProfile:(OSCProfile *)profile {
+    NSMutableArray *all = [profilesManager getAllProfiles];
+    OSCProfile *target = [profilesManager findProfileByName:profile.name inProfileArray:all];
+    if (!target) return;
+    BOOL wasEdited = target.isSelected;
+    [all removeObject:target];
+    if (wasEdited) {
+        // The editor was on this layout: fall back to Default (or whatever is left).
+        OSCProfile *fallback = [profilesManager findProfileByName:kDefaultLayoutName inProfileArray:all] ?: all.firstObject;
+        for (OSCProfile *p in all) p.isSelected = (p == fallback);
+    }
+    [self osc_persistProfiles:all];
+    [OSCSceneManager noteProfileDeleted:profile.name];
+    [self osc_reloadAll];
+    if (wasEdited) [self profileViewRefresh];
+}
+
+- (void)osc_toggleProfile:(OSCProfile *)profile forScene:(OSCScene)scene {
+    NSString *bound = [OSCSceneManager boundProfileNameForScene:scene];
+    if (bound && [bound isEqualToString:profile.name]) {
+        [OSCSceneManager bindProfileName:nil toScene:scene];      // back to Default / same as landscape
+    } else {
+        [OSCSceneManager bindProfileName:profile.name toScene:scene];
+    }
+}
+
+#pragma mark - Legacy IBActions (kept for storyboard wiring)
+
+- (IBAction) duplicateTapped:(id)sender {
+    OSCProfile *current = [profilesManager getSelectedProfile];
+    if (current) [self osc_promptCopyProfile:current];
 }
 
 - (IBAction) deleteTapped:(id)sender {
-    OSCProfile *currentProfile = [profilesManager getSelectedProfile];
-    if (!currentProfile || !currentProfile.name) {
-        return;
+    OSCProfile *current = [profilesManager getSelectedProfile];
+    if (current) [self osc_confirmDeleteProfile:current];
+}
+
+/* Refresh this list and tell the editor to reload the edited layout from storage. */
+- (void) profileViewRefresh{
+    [self osc_reloadAll];
+    if (self.needToUpdateOscLayoutTVC) {
+        self.needToUpdateOscLayoutTVC();
     }
-    
-    // 检查是否为模板布局
-    if ([profilesManager isTemplateProfile:currentProfile.name]) {
-        NSString *message = [NSString stringWithFormat:@"模板布局'%@'不允许删除", currentProfile.name];
-        UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"" message:message preferredStyle:UIAlertControllerStyleAlert];
-        
-        [alertController addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:nil]];
-        [self presentViewController:alertController animated:YES completion:nil];
-        return;
-    }
-    
-    // 删除确认弹窗
-    NSString *confirmMessage = [LocalizationHelper localizedStringForKey:@"ConfirmDeleteProfile:%@", currentProfile.name];
-    UIAlertController *confirmController = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"ConfirmDelete"] message:confirmMessage preferredStyle:UIAlertControllerStyleAlert];
-    
-    [confirmController addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
-    [confirmController addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Delete"] style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
-        [self->profilesManager deleteCurrentSelectedProfile];
-        [self profileViewRefresh];
-    }]];
-    
-    [self presentViewController:confirmController animated:YES completion:nil];
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"OscLayoutProfileSelctedInTableView" object:self];
 }
 
 - (IBAction) exportDataTapped:(id)sender {
-    // 创建临时占位文件（仅用于提供文件名）
     self.currentFileOperation = Export;
     NSString *tempPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"profiles.bin"];
-    [[NSData new] writeToFile:tempPath atomically:YES]; // 空文件
-    
-    // 初始化选择器
+    [[NSData new] writeToFile:tempPath atomically:YES];
     UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithURL:[NSURL fileURLWithPath:tempPath] inMode:UIDocumentPickerModeExportToService];
     picker.delegate = self;
     [self presentViewController:picker animated:YES completion:nil];
@@ -418,12 +526,9 @@ static NSString * const kOSCLockedLandscapeFullProfileName = @"OSCLockedLandscap
 
 - (IBAction) importDataTapped:(id)sender {
     self.currentFileOperation = Import;
-    // 2. 创建文件选择器
-    // UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:supportedTypes inMode:UIDocumentPickerModeImport];
-    // UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.data"] inMode:UIDocumentPickerModeOpen];
     UIDocumentPickerViewController *documentPicker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.item"] inMode:UIDocumentPickerModeOpen];
     documentPicker.delegate = self;
-    documentPicker.allowsMultipleSelection = NO; // 只允许选择一个文件
+    documentPicker.allowsMultipleSelection = NO;
     [self presentViewController:documentPicker animated:YES completion:nil];
 }
 
@@ -435,6 +540,7 @@ static NSString * const kOSCLockedLandscapeFullProfileName = @"OSCLockedLandscap
 - (void)documentPicker:(UIDocumentPickerViewController *)controller
 didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     NSURL* url = urls.firstObject;
+    if (!url) return;
     switch(self.currentFileOperation){
         case Export:
             [self profilesToFile:url];break;
@@ -445,16 +551,12 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 }
 
 - (void)profilesToFile:(NSURL* )destinationURL{
-    
-    // NSArray *profiles = [profilesManager getAllProfiles];
-    // 1. 序列化数据
     NSError *error;
     NSData *data = [NSKeyedArchiver archivedDataWithRootObject:[profilesManager getEncodedProfiles] requiringSecureCoding:YES error:&error];
     if (!data) {
         NSLog(@"序列化失败: %@", error);
         return;
     }
-    // 2. 安全写入
     [destinationURL startAccessingSecurityScopedResource];
     BOOL success = [data writeToURL:destinationURL options:NSDataWritingAtomic error:&error];
     [destinationURL stopAccessingSecurityScopedResource];
@@ -469,46 +571,33 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
         restoreFailed = true;
     }
     NSError* error;
-    NSData* fileData = [NSData dataWithContentsOfURL:sourceURL options:0 error:&error];// 读取数据
-    [sourceURL stopAccessingSecurityScopedResource]; // 立即释放权限
+    NSData* fileData = [NSData dataWithContentsOfURL:sourceURL options:0 error:&error];
+    [sourceURL stopAccessingSecurityScopedResource];
     if (!fileData) {
         restoreFailed = true;
     }
-    else NSLog(@"profile file read: %d", (uint32_t)fileData.length);
-    // 定义需要解码的类集
     NSSet *classes = [NSSet setWithObjects: [NSMutableData class], [NSMutableArray class], nil];
-    NSMutableArray *profilesEncoded;
-    // 解码原始的NSArray对象，得到包含编码对象的数组
-    error = nil;
-    profilesEncoded = [NSKeyedUnarchiver unarchivedObjectOfClasses:classes fromData:fileData error:&error];
-    restoreFailed = error != nil;
+    NSMutableArray *profilesEncoded = nil;
+    if (!restoreFailed) {
+        error = nil;
+        profilesEncoded = [NSKeyedUnarchiver unarchivedObjectOfClasses:classes fromData:fileData error:&error];
+        restoreFailed = (error != nil) || profilesEncoded == nil;
+    }
 
-    UIAlertController *restoredAlertController = [UIAlertController alertControllerWithTitle: [LocalizationHelper localizedStringForKey:@""] message: [LocalizationHelper localizedStringForKey:@"Pofiles imported"] preferredStyle:UIAlertControllerStyleAlert];
-    UIAlertController *failedAlertController = [UIAlertController alertControllerWithTitle: [LocalizationHelper localizedStringForKey:@""] message: [LocalizationHelper localizedStringForKey:@"Failed to import profiles"] preferredStyle:UIAlertControllerStyleAlert];
-
-
-    UIAlertAction *okAction = [UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"OK"]
-                                                           style:UIAlertActionStyleDefault
-                                                     handler:nil];
-    
+    UIAlertAction *okAction = [UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"OK"] style:UIAlertActionStyleDefault handler:nil];
     if(restoreFailed){
-        [failedAlertController addAction:okAction];
-        [self presentViewController:failedAlertController animated:YES completion:nil];
+        UIAlertController *failed = [UIAlertController alertControllerWithTitle:@"" message:[LocalizationHelper localizedStringForKey:@"Failed to import profiles"] preferredStyle:UIAlertControllerStyleAlert];
+        [failed addAction:okAction];
+        [self presentViewController:failed animated:YES completion:nil];
     }
     else{
         [profilesManager importEncodedProfiles:profilesEncoded];
-        [restoredAlertController addAction:okAction];
-        [self presentViewController:restoredAlertController animated:YES completion:nil];
+        UIAlertController *restored = [UIAlertController alertControllerWithTitle:@"" message:[LocalizationHelper localizedStringForKey:@"Pofiles imported"] preferredStyle:UIAlertControllerStyleAlert];
+        [restored addAction:okAction];
+        [self presentViewController:restored animated:YES completion:nil];
     }
-    
     [self profileViewRefresh];
-    NSLog(@"profile test: %d", (uint32_t)profilesEncoded.count);
-    if (error) {
-        NSLog(@"解码失败: %@", error);
-        return;
-    }
 }
-
 
 #pragma mark - TableView DataSource
 
@@ -518,695 +607,242 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 
 - (UITableViewCell *) tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     ProfileTableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell" forIndexPath:indexPath];
-    NSMutableArray *allProfiles = [profilesManager getAllProfiles];
-    
-    // 安全检查：确保索引有效且profile不为nil
-    if (indexPath.row >= allProfiles.count) {
-        NSLog(@"错误：索引超出范围 %ld >= %lu", (long)indexPath.row, (unsigned long)allProfiles.count);
-        cell.name.text = @"错误：无效配置";
-        return cell;
-    }
-    
-    OSCProfile *profile = [allProfiles objectAtIndex:indexPath.row];
+    OSCProfile *profile = [self osc_profileAtRow:indexPath.row];
     if (profile == nil) {
-        NSLog(@"错误：配置文件为nil，索引：%ld", (long)indexPath.row);
-        cell.name.text = @"错误：配置文件损坏";
+        cell.name.text = @"—";
         return cell;
     }
-    
-    // 名称 + 可选“横屏/竖屏”胶囊 + 锁定标识
-    NSString *baseName = profile.name ?: @"未命名配置";  // 防止name为nil
-
-    // 模板布局不再添加 emoji
-
-    // 方向锁定状态下的可选性与配色
-    BOOL isLandscapeNow = [self osc_isCurrentLandscapeInViewBounds];
-    NSString *lockedNameNow = [self osc_lockedProfileNameForLandscape:isLandscapeNow];
-    BOOL lockedActive = lockedNameNow.length > 0;
-    BOOL isCurrentSelectedProfileRow = [[[profilesManager getSelectedProfile] name] isEqualToString:profile.name];
-    
-    // 在锁定状态下，只有锁定的布局可选，其他布局置灰（横屏下全屏游戏布局也可选）
-    BOOL isFullGameRow = isLandscapeNow && [self osc_isFullGameProfile:profile.name];
-    BOOL canSelect = !lockedActive || [profile.name isEqualToString:lockedNameNow] || isFullGameRow;
-    UIColor *nameColor = [UIColor blackColor];
-    if (!canSelect) {
-        // 其它不可选：灰
-        nameColor = [UIColor colorWithWhite:0 alpha:0.3];
-        cell.userInteractionEnabled = NO;
-        cell.contentView.alpha = 0.7; // 整体降低 30% 透明度
-    } else {
-        nameColor = [UIColor blackColor];
-        cell.userInteractionEnabled = YES;
-        cell.contentView.alpha = 1.0;
-    }
+    NSString *baseName = profile.name ?: @"未命名配置";
+    BOOL isTemplate = [profilesManager isTemplateProfile:profile.name];
 
     UIFont *nameFont = [UIFont systemFontOfSize:20 weight:UIFontWeightMedium];
-    NSMutableAttributedString *line = [[NSMutableAttributedString alloc] initWithString:baseName attributes:@{NSFontAttributeName:nameFont, NSForegroundColorAttributeName:nameColor}];
-     
+    NSMutableAttributedString *line = [[NSMutableAttributedString alloc] initWithString:baseName attributes:@{NSFontAttributeName:nameFont, NSForegroundColorAttributeName:[UIColor blackColor]}];
 
-     // 锁定场景：在标题右侧追加 lock.fill 图标（iOS13+），否则回退“🔒”
-     if (lockedActive && [profile.name isEqualToString:lockedNameNow]) {
-         NSAttributedString *space2 = [[NSAttributedString alloc] initWithString:@" " attributes:@{NSKernAttributeName:@(4)}];
-         [line appendAttributedString:space2];
-         BOOL appended = NO;
-         #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 130000
-         if (@available(iOS 13.0, *)) {
-             UIImage *sys = [UIImage systemImageNamed:@"lock.fill"];
-             if (sys) {
-                 UIImage *tinted = [sys imageWithTintColor:[UIColor systemTealColor]];
-                 if (tinted) {
-                     NSTextAttachment *lockAtt = [[NSTextAttachment alloc] init];
-                     CGFloat s = 16.0;
-                     lockAtt.image = tinted;
-                     lockAtt.bounds = CGRectMake(0, -2, s, s);
-                     [line appendAttributedString:[NSAttributedString attributedStringWithAttachment:lockAtt]];
-                     appended = YES;
-                 }
-             }
-         }
-         #endif
-         if (!appended) {
-             NSAttributedString *fallback = [[NSAttributedString alloc] initWithString:@"🔒" attributes:@{NSForegroundColorAttributeName:[UIColor systemTealColor]}];
-             [line appendAttributedString:fallback];
-         }
-     }
-     // 横屏·全屏游戏槽：橙色锁 + 标签
-     if (isFullGameRow) {
-         UIFont *tagFont = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
-         NSString *tag = [NSString stringWithFormat:@"  🔒 %@", [LocalizationHelper localizedStringForKey:@"Full-screen game"]];
-         [line appendAttributedString:[[NSAttributedString alloc] initWithString:tag attributes:@{NSFontAttributeName:tagFont, NSForegroundColorAttributeName:[UIColor systemOrangeColor]}]];
-     }
-     
-     cell.name.attributedText = line;
-     cell.name.backgroundColor = [UIColor clearColor];
-     cell.name.alpha = 1.0;
-     cell.name.font = nameFont;
-     // 去掉阴影
-     cell.name.shadowColor = nil;
-     cell.name.shadowOffset = CGSizeZero;
+    // Scene badges: which scenes show this layout.
+    for (NSNumber *s in [OSCSceneManager scenesBoundToProfileName:profile.name]) {
+        OSCScene scene = (OSCScene)s.integerValue;
+        UIColor *color = scene == OSCSceneLandscapeFullGame ? [UIColor systemOrangeColor] : [UIColor systemTealColor];
+        [line appendAttributedString:[self osc_pillAttachment:[OSCSceneManager shortLocalizedNameForScene:scene] color:color]];
+    }
+    if (isTemplate) {
+        [line appendAttributedString:[self osc_pillAttachment:[LocalizationHelper localizedStringForKey:@"Template"] color:[[UIColor blackColor] colorWithAlphaComponent:0.45]]];
+    }
 
-    // Set cell and contentView background colors
+    cell.name.attributedText = line;
+    cell.name.backgroundColor = [UIColor clearColor];
+    cell.name.alpha = 1.0;
+    cell.name.shadowColor = nil;
+    cell.name.shadowOffset = CGSizeZero;
+    cell.contentView.alpha = 1.0;
+    cell.userInteractionEnabled = YES;
+
     cell.backgroundColor = [UIColor clearColor];
     cell.contentView.backgroundColor = [UIColor clearColor];
-    
-    // Configure the checkmark accessory
-    // 统一取消 accessoryView/Type，避免系统小勾遗留或样式干扰
     cell.accessoryView = nil;
-    cell.accessoryType = UITableViewCellAccessoryNone;
-    
-    // Remove existing custom separators to avoid duplicates
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    cell.tintColor = [[UIColor blackColor] colorWithAlphaComponent:0.3];
+
     UIView *existingSeparator = [cell viewWithTag:100];
-    if (existingSeparator) {
-        [existingSeparator removeFromSuperview];
-    }
-
-    // Add custom separator with increased height (thickness)
-    CGFloat separatorHeight = 1.0; // Adjust this value for thicker line
-    // 使用 cell 的宽度，确保分隔线在 accessory 区域下方也能显示完整
+    if (existingSeparator) [existingSeparator removeFromSuperview];
+    CGFloat separatorHeight = 1.0;
     UIView *separatorView = [[UIView alloc] initWithFrame:CGRectMake(0, cell.bounds.size.height - separatorHeight, cell.bounds.size.width, separatorHeight)];
-    
-    // 分隔线：黑色 12% 透明度
     separatorView.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.12];
-    separatorView.tag = 100;  // Assign a tag to identify the separator view
+    separatorView.tag = 100;
     separatorView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
-
-    // 加到 cell 上以避免 contentView 宽度被 accessory 缩短导致分隔线变短
     [cell addSubview:separatorView];
-    [cell bringSubviewToFront:separatorView];
-
-
-    // Replace the default checkmark with a UILabel displaying a checkmark character
-    if (isCurrentSelectedProfileRow) {
-        UILabel *checkmarkLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 20, 20)];
-        checkmarkLabel.text = @"✓";
-        checkmarkLabel.font = [UIFont systemFontOfSize:25];
-        checkmarkLabel.textAlignment = NSTextAlignmentCenter;
-        checkmarkLabel.textColor = [UIColor systemTealColor];
-        cell.accessoryView = checkmarkLabel;
-        checkmarkLabel.layer.zPosition = 0;
-    } else {
-        cell.accessoryView = nil;
-    }
-    [cell.contentView bringSubviewToFront:separatorView];
-    separatorView.layer.zPosition = 1; // Bring separator to the top layer
-
-    
+    separatorView.layer.zPosition = 1;
     return cell;
 }
 
-- (BOOL) tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
-    NSMutableArray *profiles = [profilesManager getAllProfiles];
-    
-    // 安全检查：确保索引有效
-    if (indexPath.row >= profiles.count) {
-        return NO;
-    }
-    
-    OSCProfile *profile = [profiles objectAtIndex:indexPath.row];
-    if (!profile || !profile.name) {
-        return NO;
-    }
-    
-    // 模板布局不允许删除
-    return ![profilesManager isTemplateProfile:profile.name];
+- (NSAttributedString *)osc_pillAttachment:(NSString *)text color:(UIColor *)color {
+    NSMutableAttributedString *out = [[NSMutableAttributedString alloc] initWithString:@" " attributes:@{NSKernAttributeName:@(4)}];
+    UIImage *pill = [self osc_makePill:text color:color];
+    NSTextAttachment *att = [[NSTextAttachment alloc] init];
+    att.image = pill;
+    att.bounds = CGRectMake(0, -3, pill.size.width, pill.size.height);
+    [out appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
+    return out;
 }
 
-
+- (BOOL) tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+    return [self osc_profileAtRow:indexPath.row] != nil;
+}
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-    return 60.0; // Set your desired cell height here
+    return 60.0;
 }
 
-
-- (void) tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (editingStyle == UITableViewCellEditingStyleDelete) {
-        NSMutableArray *profiles = [profilesManager getAllProfiles];
-        
-        // 安全检查：确保索引有效
-        if (indexPath.row >= profiles.count) {
-            return;
-        }
-        
-        OSCProfile *profileToDelete = [profiles objectAtIndex:indexPath.row];
-        if (!profileToDelete || !profileToDelete.name) {
-            return;
-        }
-        
-        // 检查是否为模板布局
-        if ([profilesManager isTemplateProfile:profileToDelete.name]) {
-            NSString *message = [LocalizationHelper localizedStringForKey:@"DeleteTemplateNotAllowed:%@", profileToDelete.name];
-            UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"" message:message preferredStyle:UIAlertControllerStyleAlert];
-            
-            [alertController addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                [alertController dismissViewControllerAnimated:NO completion:nil];
-            }]];
-            [self presentViewController:alertController animated:YES completion:nil];
-            return;
-        }
-        
-        // 删除确认弹窗
-        NSString *confirmMessage = [LocalizationHelper localizedStringForKey:@"ConfirmDeleteProfile:%@", profileToDelete.name];
-        UIAlertController *confirmController = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"ConfirmDelete"] message:confirmMessage preferredStyle:UIAlertControllerStyleAlert];
-        
-        [confirmController addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
-        [confirmController addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Delete"] style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
-            [self performDeleteProfile:profileToDelete atIndexPath:indexPath];
-        }]];
-        
-        [self presentViewController:confirmController animated:YES completion:nil];
+// Leading swipe: scene bindings for this layout.
+- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView leadingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath {
+    OSCProfile *profile = [self osc_profileAtRow:indexPath.row];
+    if (!profile) return nil;
+    NSMutableArray *actions = [NSMutableArray array];
+    OSCScene order[3] = { OSCSceneLandscapeFullGame, OSCSceneLandscape, OSCScenePortrait };
+    for (int i = 0; i < 3; i++) {
+        OSCScene scene = order[i];
+        NSString *bound = [OSCSceneManager boundProfileNameForScene:scene];
+        BOOL isBound = bound && [bound isEqualToString:profile.name];
+        NSString *title = isBound
+            ? [LocalizationHelper localizedStringForKey:@"Unbind %@", [OSCSceneManager shortLocalizedNameForScene:scene]]
+            : [LocalizationHelper localizedStringForKey:@"Use for %@", [OSCSceneManager shortLocalizedNameForScene:scene]];
+        UIContextualAction *a = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:title handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
+            [self osc_toggleProfile:profile forScene:scene];
+            completionHandler(YES);
+        }];
+        if (isBound) a.backgroundColor = [UIColor systemGrayColor];
+        else a.backgroundColor = scene == OSCSceneLandscapeFullGame ? [UIColor systemOrangeColor] : [UIColor systemTealColor];
+        [actions addObject:a];
     }
+    UISwipeActionsConfiguration *cfg = [UISwipeActionsConfiguration configurationWithActions:actions];
+    cfg.performsFirstActionWithFullSwipe = NO;
+    return cfg;
 }
 
-- (void)performDeleteProfile:(OSCProfile *)profileToDelete atIndexPath:(NSIndexPath *)indexPath {
-    NSMutableArray *profiles = [profilesManager getAllProfiles];
-    
-    // 处理删除选中布局的情况
-    if (profileToDelete.isSelected) {
-        if (indexPath.row > 0) {
-            OSCProfile *previousProfile = [profiles objectAtIndex:indexPath.row - 1];
-            previousProfile.isSelected = YES;
-        } else if (profiles.count > 1) {
-            OSCProfile *nextProfile = [profiles objectAtIndex:1];
-            nextProfile.isSelected = YES;
-        }
+// Trailing swipe: copy / rename / delete.
+- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath {
+    OSCProfile *profile = [self osc_profileAtRow:indexPath.row];
+    if (!profile) return nil;
+    BOOL isTemplate = [profilesManager isTemplateProfile:profile.name];
+    NSMutableArray *actions = [NSMutableArray array];
+    if (!isTemplate) {
+        UIContextualAction *del = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive title:[LocalizationHelper localizedStringForKey:@"Delete"] handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
+            [self osc_confirmDeleteProfile:profile];
+            completionHandler(YES);
+        }];
+        [actions addObject:del];
+        UIContextualAction *rename = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:[LocalizationHelper localizedStringForKey:@"Rename"] handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
+            [self osc_promptRenameProfile:profile];
+            completionHandler(YES);
+        }];
+        rename.backgroundColor = [UIColor systemIndigoColor];
+        [actions addObject:rename];
     }
-    
-    
-    [profiles removeObjectAtIndex:indexPath.row];
-    
-    /* save OSC profiles array to persistent storage */
-    NSMutableArray *profilesEncoded = [[NSMutableArray alloc] init];
-    for (OSCProfile *profileDecoded in profiles) {  // encode each OSC profile object and add them to an array
-        NSData *profileEncoded = [NSKeyedArchiver archivedDataWithRootObject:profileDecoded requiringSecureCoding:YES error:nil];
-        [profilesEncoded addObject:profileEncoded];
-    }
-    NSData *data = [NSKeyedArchiver archivedDataWithRootObject:profilesEncoded
-                                         requiringSecureCoding:YES error:nil];  // encode the array itself, NOT the objects in the array
-    [[NSUserDefaults standardUserDefaults] setObject:data forKey:@"OSCProfiles"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-    
-    [self.tableView reloadData];
-    [self updateToolbarButtons];  // 更新工具栏按钮状态
+    UIContextualAction *copy = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:[LocalizationHelper localizedStringForKey:@"Copy"] handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
+        [self osc_promptCopyProfile:profile];
+        completionHandler(YES);
+    }];
+    copy.backgroundColor = [UIColor systemBlueColor];
+    [actions addObject:copy];
+    UISwipeActionsConfiguration *cfg = [UISwipeActionsConfiguration configurationWithActions:actions];
+    cfg.performsFirstActionWithFullSwipe = NO;
+    return cfg;
 }
-
 
 #pragma mark - TableView Delegate
 
-/* When user taps a cell it moves the checkmark to that cell indicating to the user the profile associated with that cell is now the selected profile. It also sets that cell's associated OSCProfile object's 'isSelected' property to YES  */
+/* Tap a row: open that layout in the editor. Templates cannot be edited, offer a copy. */
 - (void) tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
 {
-    NSMutableArray *allProfiles = [profilesManager getAllProfiles];
-    
-    // 安全检查：确保索引有效
-    if (indexPath.row >= allProfiles.count) {
-        NSLog(@"错误：选择的索引超出范围 %ld >= %lu", (long)indexPath.row, (unsigned long)allProfiles.count);
-        [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    OSCProfile *profile = [self osc_profileAtRow:indexPath.row];
+    if (!profile) return;
+    if ([profilesManager isTemplateProfile:profile.name]) {
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:profile.name
+                                                                   message:[LocalizationHelper localizedStringForKey:@"Templates cannot be edited. Copy it to a new layout to edit, or assign it to a scene with a swipe."]
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+        [a addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Copy and edit"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [self osc_promptCopyProfile:profile];
+        }]];
+        [self presentViewController:a animated:YES completion:nil];
         return;
     }
-    
-    OSCProfile *profile = [allProfiles objectAtIndex:indexPath.row];
-    if (profile == nil) {
-        NSLog(@"错误：选择的配置文件为nil，索引：%ld", (long)indexPath.row);
-        [tableView deselectRowAtIndexPath:indexPath animated:YES];
-        return;
-    }
-    
-    
-    // 锁定生效：当前方向锁定时，禁止切换到其它布局
-    BOOL isLandscapeNow = [self osc_isCurrentLandscapeInViewBounds];
-    NSString *lockedNameNow = [self osc_lockedProfileNameForLandscape:isLandscapeNow];
-    if (lockedNameNow.length > 0) {
-        if (isLandscapeNow && [self osc_isFullGameProfile:profile.name]) {
-            // 全屏游戏布局可以选中（编辑用），串流时按游戏比例在两者间切换
-            if (![[[profilesManager getSelectedProfile] name] isEqualToString:profile.name]) {
-                [profilesManager setProfileToSelected:profile.name];
-                [self profileViewRefresh];
-            }
-            [tableView deselectRowAtIndexPath:indexPath animated:YES];
-            return;
-        }
-        // 点的是横屏锁定布局本身：从全屏游戏布局切回来（编辑用）
-        if ([profile.name isEqualToString:lockedNameNow]
-            && ![[[profilesManager getSelectedProfile] name] isEqualToString:profile.name]) {
-            [profilesManager setProfileToSelected:profile.name];
-            [self profileViewRefresh];
-            [tableView deselectRowAtIndexPath:indexPath animated:YES];
-            return;
-        }
-        // 强制保持当前选中为锁定布局
-        [self osc_applyLockForCurrentOrientation];
-        [tableView deselectRowAtIndexPath:indexPath animated:YES];
-        return;
-    }
-
-    // 普通模式：选择布局逻辑
-    NSIndexPath *selectedIndexPath = [NSIndexPath indexPathForRow:indexPath.row inSection:0];
-    NSIndexPath *lastSelectedIndexPath = [NSIndexPath indexPathForRow:[profilesManager getIndexOfSelectedProfile] inSection:0];
-
-    if (selectedIndexPath != lastSelectedIndexPath) {
-        
-        /* 仅更新选中，不再使用系统 accessory 勾号，避免残留 */
-        [profilesManager setProfileToSelected: profile.name];   // set the profile associated with this cell's 'isSelected' property to YES
-        
-        /* 刷新可见行，统一由 cellForRow 绘制 */
-        [tableView reloadRowsAtIndexPaths:@[selectedIndexPath, lastSelectedIndexPath] withRowAnimation:UITableViewRowAnimationNone];
-        [tableView deselectRowAtIndexPath:lastSelectedIndexPath animated:YES];
-        
-        // 更新工具栏按钮
-        [self updateToolbarButtons];
-    }
-    [self profileViewRefresh]; // update OSC layout when table view option is changed
+    [self osc_openProfileInEditor:profile];
 }
 
 #pragma mark - Toolbar Management
 
 - (void)setupBottomToolbar {
-    NSLog(@"开始设置底部工具栏");
-    
-    // 创建底部工具栏视图（如果不存在）
     if (!self.bottomToolbarView) {
-        NSLog(@"创建新的底部工具栏视图");
         self.bottomToolbarView = [[UIView alloc] init];
-        if (!self.bottomToolbarView) {
-            NSLog(@"错误：无法创建bottomToolbarView");
-            return;
-        }
-        
-        // 设置工具栏样式
         self.bottomToolbarView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.8];
         self.bottomToolbarView.layer.cornerRadius = 8;
         self.bottomToolbarView.layer.masksToBounds = YES;
-        
         self.bottomToolbarView.translatesAutoresizingMaskIntoConstraints = NO;
         [self.view addSubview:self.bottomToolbarView];
-        NSLog(@"工具栏视图已添加到视图");
-        
-        // 创建约束
-        NSLayoutConstraint *leadingConstraint = [self.bottomToolbarView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:16];
-        NSLayoutConstraint *trailingConstraint = [self.bottomToolbarView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-16];
-        NSLayoutConstraint *bottomConstraint = [self.bottomToolbarView.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-16];
-        NSLayoutConstraint *heightConstraint = [self.bottomToolbarView.heightAnchor constraintEqualToConstant:50];
-        
-        // 检查约束是否创建成功
-        NSMutableArray *constraints = [[NSMutableArray alloc] init];
-        if (leadingConstraint) [constraints addObject:leadingConstraint];
-        if (trailingConstraint) [constraints addObject:trailingConstraint];
-        if (bottomConstraint) [constraints addObject:bottomConstraint];
-        if (heightConstraint) [constraints addObject:heightConstraint];
-        
-        if (constraints.count == 4) {
-            [NSLayoutConstraint activateConstraints:constraints];
-            NSLog(@"工具栏约束设置成功");
-        } else {
-            NSLog(@"错误：约束创建失败，成功创建 %lu/4 个约束", (unsigned long)constraints.count);
-        }
-        
-        // 确保工具栏在最前面
+        [NSLayoutConstraint activateConstraints:@[
+            [self.bottomToolbarView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:16],
+            [self.bottomToolbarView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-16],
+            [self.bottomToolbarView.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-16],
+            [self.bottomToolbarView.heightAnchor constraintEqualToConstant:50],
+        ]];
         [self.view bringSubviewToFront:self.bottomToolbarView];
-    } else {
-        NSLog(@"工具栏已存在，跳过创建");
     }
-    
     [self updateToolbarButtons];
 }
 
 - (void)updateToolbarButtons {
-    // 系统 UIToolbar 优先：如果 storyboard 连接了系统 toolbar，则同步系统 toolbar
     if (self.systemBottomToolbar) {
         [self updateSystemToolbarItems];
         return;
     }
-    // 如果工具栏不存在，直接返回
-    if (!self.bottomToolbarView) {
-        return;
-    }
-    
-    // 清除现有按钮
-    for (UIView *subview in self.bottomToolbarView.subviews) {
-        [subview removeFromSuperview];
-    }
-    
-    OSCProfile *selectedProfile = [profilesManager getSelectedProfile];
-    if (selectedProfile && [profilesManager isTemplateProfile:selectedProfile.name]) {
-        return;
-    }
-
-    // 新逻辑：方向锁定按钮
-    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
-    NSString *lockedName = [self osc_lockedProfileNameForLandscape:isLandscape];
-    BOOL isLocked = (lockedName.length > 0) || (isLandscape && [self osc_fullGameProfileName].length > 0);
-    NSString *title = isLocked ? @"解除锁定" : @"锁定为当前方向布局";
-    SEL action = isLocked ? @selector(osc_unlockCurrentOrientationTapped:) : @selector(osc_lockCurrentOrientationTapped:);
-    [self createNormalModeButtonWithTitle:title action:action];
+    if (!self.bottomToolbarView) return;
+    for (UIView *subview in self.bottomToolbarView.subviews) [subview removeFromSuperview];
+    [self createNormalModeButtonWithTitle:[LocalizationHelper localizedStringForKey:@"How scenes work"] action:@selector(helpToolbarTapped:)];
 }
 
 #pragma mark - System UIToolbar Support
 
 - (void)updateSystemToolbarItems {
-    if (!self.systemBottomToolbar || !self.pairRotationalToolbarItem) {
-        return;
-    }
-
-    OSCProfile *selectedProfile = [profilesManager getSelectedProfile];
-    BOOL isTemplate = selectedProfile && [profilesManager isTemplateProfile:selectedProfile.name];
-    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
-
-    // 新逻辑：系统 UIToolbar 的主按钮作为“锁定/解除锁定”
-    self.pairRotationalToolbarItem.enabled = !isTemplate;
-    self.pairRotationalToolbarItem.target = self;
-    NSString *lockedName = [self osc_lockedProfileNameForLandscape:isLandscape];
-    BOOL isLocked = (lockedName.length > 0) || (isLandscape && [self osc_fullGameProfileName].length > 0);
-    self.pairRotationalToolbarItem.action = isLocked ? @selector(osc_unlockCurrentOrientationTapped:) : @selector(osc_lockCurrentOrientationTapped:);
-    // 英文不加空格；同时支持中文本地化键
-    self.pairRotationalToolbarItem.title = isLocked ? [LocalizationHelper localizedStringForKey:@"UnlockOrientation"] : [LocalizationHelper localizedStringForKey:@"LockToCurrentOrientation"];
-
+    if (!self.systemBottomToolbar) return;
+    UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+    UIBarButtonItem *hint = [[UIBarButtonItem alloc] initWithTitle:[LocalizationHelper localizedStringForKey:@"Tap a layout to edit it · swipe for more"] style:UIBarButtonItemStylePlain target:nil action:nil];
+    hint.enabled = NO;
     if (self.helpToolbarItem) {
-        // 问号作为“帮助”，点击弹出说明
-        self.helpToolbarItem.title = nil; // 保持问号图标
-        // 恢复问号图标
-        #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 130000
         if (@available(iOS 13.0, *)) {
             self.helpToolbarItem.image = [UIImage systemImageNamed:@"questionmark.circle"];
         }
-        #endif
+        self.helpToolbarItem.title = nil;
         self.helpToolbarItem.target = self;
         self.helpToolbarItem.action = @selector(helpToolbarTapped:);
-        self.helpToolbarItem.enabled = !isTemplate; // 模板布局置灰
-    }
-
-    // 强制保持 items 排列：flexibleSpace + lock + help
-    UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-    if (self.helpToolbarItem) {
-        [self.systemBottomToolbar setItems:@[flex, self.pairRotationalToolbarItem, self.helpToolbarItem] animated:NO];
+        self.helpToolbarItem.enabled = YES;
+        [self.systemBottomToolbar setItems:@[hint, flex, self.helpToolbarItem] animated:NO];
+    } else {
+        [self.systemBottomToolbar setItems:@[hint, flex] animated:NO];
     }
 }
 
 - (IBAction)pairRotationalToolbarTapped:(id)sender {
-    // 此方法保留用于兼容性，实际功能已由系统 item 直接绑定
+    [self helpToolbarTapped:sender];
 }
 
 - (IBAction)helpToolbarTapped:(id)sender {
-    // 更新为锁定功能的帮助
-    NSString *message = [LocalizationHelper localizedStringForKey:@"LockOrientationHelpMessage"];
-    if (!message || message.length == 0 || [message isEqualToString:@"LockOrientationHelpMessage"]) {
-        message = @"点击后会把此布局锁定到当前屏幕方向。横屏和竖屏可各自锁定不同布局，旋转时系统会自动切换.\n\nTapping will lock this layout to the current screen orientation. You can lock different layouts for Landscape and Portrait. The system will auto switch when rotating.";
-    }
-    NSString *title = [LocalizationHelper localizedStringForKey:@"LockOrientationHelpTitle"];
-    if (!title || title.length == 0 || [title isEqualToString:@"LockOrientationHelpTitle"]) {
-        title = @"方向锁定 / Orientation Lock";
-    }
+    NSString *title = [LocalizationHelper localizedStringForKey:@"Scenes"];
+    NSString *message = [LocalizationHelper localizedStringForKey:@"ScenesHelpMessage"];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"OK"] style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-
 - (void)createNormalModeButtonWithTitle:(NSString *)title action:(SEL)action {
-    // 创建主按钮
     UIButton *mainButton = [UIButton buttonWithType:UIButtonTypeSystem];
     [mainButton setTitle:title forState:UIControlStateNormal];
     [mainButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     [mainButton addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     mainButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.bottomToolbarView addSubview:mainButton];
-    
-    // 设置约束 - 居中显示
     [NSLayoutConstraint activateConstraints:@[
         [mainButton.centerXAnchor constraintEqualToAnchor:self.bottomToolbarView.centerXAnchor],
         [mainButton.centerYAnchor constraintEqualToAnchor:self.bottomToolbarView.centerYAnchor]
     ]];
-    
-    NSLog(@"普通模式按钮创建成功：%@", title);
 }
-
-// 横屏下两个槽位：横屏布局，横屏·全屏游戏布局。弹单选择对当前选中布局做什么。
-- (void)osc_presentLandscapeLockSheet:(id)sender {
-    OSCProfile *current = [profilesManager getSelectedProfile];
-    if (!current || [profilesManager isTemplateProfile:current.name]) return;
-    NSString *landscapeName = [self osc_lockedProfileNameForLandscape:YES];
-    BOOL isLandscapeLock = landscapeName.length > 0 && [landscapeName isEqualToString:current.name];
-    BOOL isFullLock = [self osc_isFullGameProfile:current.name];
-
-    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:current.name
-                                                                   message:[LocalizationHelper localizedStringForKey:@"LandscapeLockSheetMessage"]
-                                                            preferredStyle:UIAlertControllerStyleActionSheet];
-    __weak typeof(self) weakSelf = self;
-    [sheet addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:(isLandscapeLock ? @"Unlock landscape layout" : @"Lock as landscape layout")]
-                                              style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        [weakSelf osc_setLockedProfileName:(isLandscapeLock ? nil : current.name) forLandscape:YES];
-        [weakSelf osc_lockStateChanged];
-    }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:(isFullLock ? @"Unlock full-screen game layout" : @"Lock as full-screen game layout")]
-                                              style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        [weakSelf osc_setFullGameProfileName:(isFullLock ? nil : current.name)];
-        [weakSelf osc_lockStateChanged];
-    }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
-    UIPopoverPresentationController *pop = sheet.popoverPresentationController;
-    if (pop) {
-        if ([sender isKindOfClass:[UIBarButtonItem class]]) pop.barButtonItem = sender;
-        else if ([sender isKindOfClass:[UIView class]]) { pop.sourceView = sender; pop.sourceRect = ((UIView *)sender).bounds; }
-        else { pop.sourceView = self.view; pop.sourceRect = CGRectMake(CGRectGetMidX(self.view.bounds), CGRectGetMaxY(self.view.bounds) - 44, 1, 1); }
-    }
-    [self presentViewController:sheet animated:YES completion:nil];
-}
-
-- (void)osc_lockStateChanged {
-    [self osc_applyLockForCurrentOrientation];
-    [self updateToolbarButtons];
-    if (self.systemBottomToolbar) [self updateSystemToolbarItems];
-    [self.tableView reloadData];
-}
-
-- (IBAction)osc_lockCurrentOrientationTapped:(id)sender {
-    OSCProfile *current = [profilesManager getSelectedProfile];
-    if (!current || [profilesManager isTemplateProfile:current.name]) {
-        return;
-    }
-    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
-    if (isLandscape) { [self osc_presentLandscapeLockSheet:sender]; return; }
-    [self osc_setLockedProfileName:current.name forLandscape:isLandscape];
-    // 锁定后立即应用（可避免闪烁）
-    [self osc_applyLockForCurrentOrientation];
-    [self updateToolbarButtons];
-    if (self.systemBottomToolbar) {
-        [self updateSystemToolbarItems];
-    }
-    // 锁定后，立即刷新列表以更新置灰、锁图标等状态
-    [self.tableView reloadData];
-    // 滚动到选中项，确保可见
-    NSInteger idx = [profilesManager getIndexOfSelectedProfile];
-    if (idx >= 0 && idx < [[profilesManager getAllProfiles] count]) {
-        NSIndexPath *ip = [NSIndexPath indexPathForRow:idx inSection:0];
-        [self.tableView scrollToRowAtIndexPath:ip atScrollPosition:UITableViewScrollPositionMiddle animated:YES];
-    }
-}
-
-- (IBAction)osc_unlockCurrentOrientationTapped:(id)sender {
-    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
-    if (isLandscape) { [self osc_presentLandscapeLockSheet:sender]; return; }
-    [self osc_setLockedProfileName:nil forLandscape:isLandscape];
-    [self updateToolbarButtons];
-    if (self.systemBottomToolbar) {
-        [self updateSystemToolbarItems];
-    }
-    // 解除锁定后，立即刷新列表以更新置灰与锁图标
-    [self.tableView reloadData];
-}
-
-
-
-
-
-- (NSString *)getOrientationDisplayText:(BOOL)isLandscape {
-    return isLandscape ? @"[横]" : @"[竖]";
-}
-
 
 - (void)deviceOrientationDidChange:(NSNotification *)notification {
-    
-    // 如果正在处理方向变化，跳过重复处理
-    if (self.isProcessingOrientationChange) {
-        return;
-    }
-    
+    if (self.isProcessingOrientationChange) return;
     self.isProcessingOrientationChange = YES;
-    
-    // 延迟一小段时间，让旋转完成后再检测方向
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        // 优先应用方向锁定，并统一刷新
-        [self osc_applyLockForCurrentOrientation];
-        // 无论是否切换了选中布局，强制刷新列表与工具栏，确保UI同步
-        [self.tableView reloadData];
-        [self updateToolbarButtons];
-        if (self.systemBottomToolbar) {
-            [self updateSystemToolbarItems];
-        }
-        // 旋转后滚动到选中项，保持 UI 同步
-        NSInteger idx = [self->profilesManager getIndexOfSelectedProfile];
-        if (idx >= 0 && idx < [[self->profilesManager getAllProfiles] count]) {
-            NSIndexPath *ip = [NSIndexPath indexPathForRow:idx inSection:0];
-            [self.tableView scrollToRowAtIndexPath:ip atScrollPosition:UITableViewScrollPositionMiddle animated:YES];
-        }
-        // 简化：处理完成后立即重置标志
+        [self osc_reloadAll];   // the highlighted "current" scene card follows the orientation
         self.isProcessingOrientationChange = NO;
     });
 }
 
-
-- (void)dealloc {
-    // 移除通知监听
-    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIDeviceOrientationDidChangeNotification object:nil];
-}
-
-#pragma mark - Delete Button State Management
-
-- (void)updateDeleteButtonState {
-    OSCProfile *currentProfile = [profilesManager getSelectedProfile];
-    BOOL isTemplateProfile = currentProfile && [profilesManager isTemplateProfile:currentProfile.name];
-    
-    // 尝试通过多种方式找到删除按钮并更新其状态
-    [self updateDeleteButtonWithTemplateState:isTemplateProfile];
-}
-
-- (void)updateDeleteButtonWithTemplateState:(BOOL)isTemplate {
-    // 方法1: 通过NavigationBar的rightBarButtonItems查找
-    if (self.navigationController && self.navigationController.navigationBar) {
-        UINavigationBar *navBar = self.navigationController.navigationBar;
-        UINavigationItem *navItem = navBar.topItem;
-        
-        if (navItem.rightBarButtonItems) {
-            for (UIBarButtonItem *item in navItem.rightBarButtonItems) {
-                // 检查按钮标题或者action来识别删除按钮
-                if ([item.title isEqualToString:@"删除"] || 
-                    [item.title isEqualToString:@"Delete"] ||
-                    item.action == @selector(deleteTapped:)) {
-                    item.enabled = !isTemplate;
-                    NSLog(@"通过NavigationBar找到删除按钮，设置enabled=%@", isTemplate ? @"NO" : @"YES");
-                    return;
-                }
-            }
-        }
-        
-        if (navItem.rightBarButtonItem) {
-            UIBarButtonItem *item = navItem.rightBarButtonItem;
-            if ([item.title isEqualToString:@"删除"] || 
-                [item.title isEqualToString:@"Delete"] ||
-                item.action == @selector(deleteTapped:)) {
-                item.enabled = !isTemplate;
-                NSLog(@"通过NavigationBar找到删除按钮，设置enabled=%@", isTemplate ? @"NO" : @"YES");
-                return;
-            }
-        }
-    }
-    
-    // 方法2: 通过profileTableViewNavigationBar查找
-    if (self.profileTableViewNavigationBar) {
-        UINavigationItem *navItem = self.profileTableViewNavigationBar.topItem;
-        
-        if (navItem.rightBarButtonItems) {
-            for (UIBarButtonItem *item in navItem.rightBarButtonItems) {
-                if ([item.title isEqualToString:@"删除"] || 
-                    [item.title isEqualToString:@"Delete"] ||
-                    item.action == @selector(deleteTapped:)) {
-                    item.enabled = !isTemplate;
-                    NSLog(@"通过profileTableViewNavigationBar找到删除按钮，设置enabled=%@", isTemplate ? @"NO" : @"YES");
-                    return;
-                }
-            }
-        }
-        
-        if (navItem.rightBarButtonItem) {
-            UIBarButtonItem *item = navItem.rightBarButtonItem;
-            if ([item.title isEqualToString:@"删除"] || 
-                [item.title isEqualToString:@"Delete"] ||
-                item.action == @selector(deleteTapped:)) {
-                item.enabled = !isTemplate;
-                NSLog(@"通过profileTableViewNavigationBar找到删除按钮，设置enabled=%@", isTemplate ? @"NO" : @"YES");
-                return;
-            }
-        }
-    }
-    
-    // 方法3: 递归搜索view hierarchy中的删除按钮
-    [self findAndUpdateDeleteButtonInView:self.view isTemplate:isTemplate];
-}
-
-- (void)findAndUpdateDeleteButtonInView:(UIView *)view isTemplate:(BOOL)isTemplate {
-    for (UIView *subview in view.subviews) {
-        if ([subview isKindOfClass:[UIButton class]]) {
-            UIButton *button = (UIButton *)subview;
-            NSString *title = [button titleForState:UIControlStateNormal];
-            
-            // 检查按钮的标题或action
-            if ([title isEqualToString:@"删除"] || 
-                [title isEqualToString:@"Delete"] ||
-                [button actionsForTarget:self forControlEvent:UIControlEventTouchUpInside].count > 0) {
-                
-                // 检查action是否为deleteTapped
-                NSArray *actions = [button actionsForTarget:self forControlEvent:UIControlEventTouchUpInside];
-                for (NSString *action in actions) {
-                    if ([action isEqualToString:@"deleteTapped:"]) {
-                        button.enabled = !isTemplate;
-                        button.alpha = isTemplate ? 0.5 : 1.0; // 置灰效果
-                        NSLog(@"通过view hierarchy找到删除按钮，设置enabled=%@", isTemplate ? @"NO" : @"YES");
-                        return;
-                    }
-                }
-            }
-        }
-        
-        // 递归搜索子视图
-        [self findAndUpdateDeleteButtonInView:subview isTemplate:isTemplate];
-    }
-}
+#pragma mark - Gestures
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
-    // 仅当点击在 tableView 之外时，才触发手势
     CGPoint p = [touch locationInView:self.view];
-    if (CGRectContainsPoint(self.tableView.frame, p)) {
-        return NO;
-    }
+    if (CGRectContainsPoint(self.tableView.frame, p)) return NO;
+    if (self.systemBottomToolbar && CGRectContainsPoint(self.systemBottomToolbar.frame, p)) return NO;
+    if (CGRectContainsPoint(self.profileTableViewNavigationBar.frame, p)) return NO;
     return YES;
 }
 
@@ -1217,39 +853,22 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     }
 }
 
-// 绘制“横屏/竖屏”胶囊
-- (UIImage *)osc_makeOrientationPill:(NSString *)text selected:(BOOL)selected disabled:(BOOL)disabled {
-    const CGFloat pillHeight = 18.0; // 调整为 18pt 高
-    const CGFloat cornerRadius = 3.0;
-    const CGFloat horizontalPadding = 4.0; // 左右各 4pt
-    UIFont *font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightRegular]; // 字号 13pt
-    UIColor *teal = [UIColor systemTealColor];
-    UIColor *fillColor;
-    UIColor *textColor;
-    if (disabled) {
-        fillColor = [[UIColor blackColor] colorWithAlphaComponent:0.08];
-        textColor = [[UIColor blackColor] colorWithAlphaComponent:0.3];
-    } else {
-        fillColor = selected ? [teal colorWithAlphaComponent:0.12] : [[UIColor blackColor] colorWithAlphaComponent:0.12];
-        textColor = selected ? [teal colorWithAlphaComponent:0.8] : [[UIColor blackColor] colorWithAlphaComponent:0.8];
-    }
+#pragma mark - Drawing
 
-    NSDictionary *attrs = @{ NSFontAttributeName: font, NSForegroundColorAttributeName: textColor };
+- (UIImage *)osc_makePill:(NSString *)text color:(UIColor *)color {
+    const CGFloat pillHeight = 18.0;
+    const CGFloat cornerRadius = 4.0;
+    const CGFloat horizontalPadding = 5.0;
+    UIFont *font = [UIFont systemFontOfSize:12.0 weight:UIFontWeightSemibold];
+    NSDictionary *attrs = @{ NSFontAttributeName: font, NSForegroundColorAttributeName: color };
     CGSize textSize = [text sizeWithAttributes:attrs];
-    CGFloat pillWidth = ceil(textSize.width) + horizontalPadding * 2.0;
-    CGSize canvas = CGSizeMake(pillWidth, pillHeight);
-
+    CGSize canvas = CGSizeMake(ceil(textSize.width) + horizontalPadding * 2.0, pillHeight);
     UIGraphicsBeginImageContextWithOptions(canvas, NO, 0);
-    CGContextRef ctx = UIGraphicsGetCurrentContext();
-    if (ctx) {
+    if (UIGraphicsGetCurrentContext()) {
         UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, canvas.width, canvas.height) cornerRadius:cornerRadius];
-        [fillColor setFill];
+        [[color colorWithAlphaComponent:0.14] setFill];
         [path fill];
-        
-        // 居中绘制文字
-        CGFloat tx = horizontalPadding;
-        CGFloat ty = floor((pillHeight - textSize.height) * 0.5);
-        [text drawAtPoint:CGPointMake(tx, ty) withAttributes:attrs];
+        [text drawAtPoint:CGPointMake(horizontalPadding, floor((pillHeight - textSize.height) * 0.5)) withAttributes:attrs];
     }
     UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();

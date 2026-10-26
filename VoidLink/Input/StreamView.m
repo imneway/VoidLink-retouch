@@ -827,8 +827,16 @@ static __weak StreamView *sPalmClassifier = nil;
 }
 
 + (NSSet<UITouch *> *)streamTouchesFrom:(NSSet<UITouch *> *)touches {
+    return [self streamTouchesFrom:touches includingWithheld:NO];
+}
+
++ (NSSet<UITouch *> *)streamTouchesForEvent:(UIEvent *)event includingWithheld:(BOOL)includeWithheld {
+    return [self streamTouchesFrom:[event allTouches] includingWithheld:includeWithheld];
+}
+
++ (NSSet<UITouch *> *)streamTouchesFrom:(NSSet<UITouch *> *)touches includingWithheld:(BOOL)includeWithheld {
     UIView *exempt = sMultiTouchExemptView;
-    NSHashTable<UITouch *> *withheld = sWithheldStreamTouches;
+    NSHashTable<UITouch *> *withheld = includeWithheld ? nil : sWithheldStreamTouches;
     StreamView *classifier = sPalmClassifier;
     if (classifier) {
         for (UITouch *touch in touches) {
