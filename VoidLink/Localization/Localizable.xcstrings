@@ -6971,6 +6971,29 @@
         }
       }
     },
+    "Built-in command" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "内置命令"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "內建命令"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "內建命令"
+          }
+        }
+      }
+    },
     "Block stream touch while OSC is on" : {
       "extractionState" : "manual",
       "localizations" : {

@@ -1396,6 +1396,10 @@ static const CGFloat kQuickMenuSpacing = 12;
     if (sender.tag < 0 || (NSUInteger)sender.tag >= _quickMenuCommands.count) return;
     RemoteCommand *command = _quickMenuCommands[(NSUInteger)sender.tag];
     [self quickMenu_dismissAnimated:YES];
+    if ([command.cmdString.uppercaseString isEqualToString:CommandManager.softKeyboardCommand]) {
+        [self toggleSoftKeyboard];
+        return;
+    }
     NSArray<NSString *> *keys = [CommandManager.shared extractKeyStringsFromComboCommandFrom:command.cmdString];
     if (keys.count > 0) [CommandManager.shared sendKeyComboCommandWithKeyboardCmdStrings:keys];
 }
@@ -3543,6 +3547,13 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
 
 - (void)bringUpSoftKeyboard{
     [self->_streamView readyToBringUpSoftKeyboardByToolbox];
+}
+
+// Built-in "soft keyboard" command (command manager / quick menu): open or close
+// the keyboard right away, no extra tap on the stream.
+- (void)toggleSoftKeyboard{
+    if (!_hasConnectionStarted || self->_streamView.widgetToolOpened) return;
+    [self->_streamView toggleKeyboard];
 }
 
 - (void)enterPip{

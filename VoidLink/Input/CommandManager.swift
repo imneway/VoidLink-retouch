@@ -508,6 +508,25 @@ import UIKit
     public weak var viewController: ToolboxViewController?
 
     @objc public static let maxPinnedCommands = 8
+
+    // Built-in commands live in the same list as user commands (so they can be
+    // reordered, renamed, given an icon and pinned to the quick menu) but are
+    // not keystrokes: the stream performs them. They cannot be deleted and their
+    // command string cannot be changed.
+    @objc public static let softKeyboardCommand = "@SOFTKEYBOARD"
+    private static let builtInCommands: [(cmd: String, alias: String, icon: String)] = [
+        (softKeyboardCommand, "软键盘(Soft Keyboard)", "keyboard"),
+    ]
+    private static let builtInsSeededKey = "builtInCommandsSeededV1"
+
+    @objc public static func isBuiltInCommandString(_ cmd: String?) -> Bool {
+        guard let cmd = cmd?.uppercased() else { return false }
+        return builtInCommands.contains { $0.cmd == cmd }
+    }
+
+    @objc public func isBuiltIn(_ command: RemoteCommand?) -> Bool {
+        return CommandManager.isBuiltInCommandString(command?.cmdString)
+    }
     private static let savedCommandsKey = "savedCommands"
     private static let savedCommandsBackupKey = "savedCommands.backupV1"
     private static let savedCommandsUnreadableKey = "savedCommands.unreadable"
@@ -873,6 +892,7 @@ import UIKit
         if(command.alias.trimmingCharacters(in: .whitespacesAndNewlines).count == 0) {command.alias = command.cmdString} // copy cmd string as alias when alias is empty
         let keyStrings = extractKeyStringsFromComboCommand(from: command.cmdString)
         if (keyStrings == nil) {return false}  // in case of non-keyboard command strings, return false
+        if CommandManager.isBuiltInCommandString(command.cmdString) { return false }
         if command.pinned && pinnedCount() >= CommandManager.maxPinnedCommands { command.pinned = false }
         commands.append(command)
         saveCommands()
@@ -884,8 +904,10 @@ import UIKit
     // non-keyboard command string, or for pinning past maxPinnedCommands.
     @objc public func updateCommand(at index: Int, cmdString: String, alias: String, pinned: Bool, iconName: String?) -> Bool {
         guard index >= 0 && index < commands.count else { return false }
-        let cmd = cmdString.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard extractKeyStringsFromComboCommand(from: cmd) != nil else { return false }
+        let builtIn = isBuiltIn(commands[index])
+        // A built-in keeps its command string; only alias / icon / pin change.
+        let cmd = builtIn ? commands[index].cmdString : cmdString.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard builtIn || extractKeyStringsFromComboCommand(from: cmd) != nil else { return false }
         if pinned && !commands[index].pinned && pinnedCount() >= CommandManager.maxPinnedCommands { return false }
         let command = commands[index]
         command.cmdString = cmd
@@ -910,6 +932,7 @@ import UIKit
         guard index >= 0 && index < commands.count else {
             return
         }
+        if isBuiltIn(commands[index]) { return }
         commands.remove(at: index)
         saveCommands()
     }
@@ -942,9 +965,17 @@ import UIKit
         // any later save (add / edit) replaces it.
         if loaded {
             seedQuickMenuCommandsIfNeeded()
-        } else if let raw = UserDefaults.standard.data(forKey: CommandManager.savedCommandsKey),
-                  UserDefaults.standard.data(forKey: CommandManager.savedCommandsUnreadableKey) == nil {
-            UserDefaults.standard.set(raw, forKey: CommandManager.savedCommandsUnreadableKey)
+            ensureBuiltInCommands()
+        } else {
+            if let raw = UserDefaults.standard.data(forKey: CommandManager.savedCommandsKey),
+               UserDefaults.standard.data(forKey: CommandManager.savedCommandsUnreadableKey) == nil {
+                UserDefaults.standard.set(raw, forKey: CommandManager.savedCommandsUnreadableKey)
+            }
+            // Built-ins still work this session; nothing is written until the user
+            // saves a change (the unreadable bytes are parked above).
+            for b in CommandManager.builtInCommands where !commands.contains(where: { $0.cmdString.uppercased() == b.cmd }) {
+                commands.append(RemoteCommand(cmdString: b.cmd, alias: b.alias, pinned: true, iconName: b.icon))
+            }
         }
     }
 
@@ -978,6 +1009,24 @@ import UIKit
     }
     
     
+    // Every built-in is always in the list. First time it appears it is pinned
+    // (when the quick menu has room); after that the user's choice sticks.
+    private func ensureBuiltInCommands() {
+        let defaults = UserDefaults.standard
+        var seeded = Set(defaults.stringArray(forKey: CommandManager.builtInsSeededKey) ?? [])
+        var changed = false
+        for b in CommandManager.builtInCommands where !commands.contains(where: { $0.cmdString.uppercased() == b.cmd }) {
+            let pin = !seeded.contains(b.cmd) && pinnedCount() < CommandManager.maxPinnedCommands
+            commands.append(RemoteCommand(cmdString: b.cmd, alias: b.alias, pinned: pin, iconName: b.icon))
+            seeded.insert(b.cmd)
+            changed = true
+        }
+        if changed {
+            saveCommands()
+            defaults.set(Array(seeded), forKey: CommandManager.builtInsSeededKey)
+        }
+    }
+
     private func saveCommands() {
         if let data = try? NSKeyedArchiver.archivedData(withRootObject: commands, requiringSecureCoding: false) {
             UserDefaults.standard.set(data, forKey: CommandManager.savedCommandsKey)

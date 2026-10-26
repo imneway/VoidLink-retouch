@@ -142,6 +142,7 @@ typedef NS_ENUM(NSInteger, SnapRatioOverride) {
 - (OnScreenControlsLevel) getCurrentOscState;
 
 -(void)readyToBringUpSoftKeyboardByToolbox;
+- (void)toggleKeyboard;
 - (void)keyboardWillShow:(NSNotification *)notification;
 - (void)keyboardWillHide;
 - (void)liftMetalVideoViewIfNeeded:(CGFloat)liftHeight;

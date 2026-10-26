@@ -302,6 +302,7 @@ final class CommandEditorViewController: UITableViewController {
     private let editIndex: Int?
     private var iconName: String?
     private var wasPinned = false
+    private var isBuiltIn = false
 
     private let commandCell: TextFieldCell
     private let aliasCell: TextFieldCell
@@ -319,6 +320,7 @@ final class CommandEditorViewController: UITableViewController {
         aliasCell = TextFieldCell(placeholder: L("Alias (optional)"), text: existing?.alias)
         iconName = existing?.iconName
         wasPinned = existing?.pinned ?? false
+        isBuiltIn = CommandManager.shared.isBuiltIn(existing)
         super.init(style: .insetGrouped)
         pinSwitch.isOn = wasPinned
     }
@@ -336,6 +338,12 @@ final class CommandEditorViewController: UITableViewController {
         }
         commandCell.field.keyboardType = .asciiCapable
         commandCell.field.autocapitalizationType = .allCharacters
+        if isBuiltIn {
+            // Built-in: the action is fixed, only alias / icon / pin are editable.
+            commandCell.field.isEnabled = false
+            commandCell.field.text = L("Built-in command")
+            commandCell.field.textColor = .secondaryLabel
+        }
         aliasCell.field.addTarget(self, action: #selector(aliasChanged), for: .editingChanged)
 
         pinCell.textLabel?.text = L("Pin to Quick Menu")
@@ -383,7 +391,7 @@ final class CommandEditorViewController: UITableViewController {
 
     @objc private func saveTapped() {
         let cmd = (commandCell.field.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard CommandManager.shared.extractKeyStringsFromComboCommand(from: cmd) != nil else {
+        guard isBuiltIn || CommandManager.shared.extractKeyStringsFromComboCommand(from: cmd) != nil else {
             showMessage(L("Invalid command"), L("Use key names joined with +, e.g. CTRL+SHIFT+ESC"))
             return
         }

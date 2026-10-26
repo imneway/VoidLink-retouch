@@ -14,6 +14,7 @@ import UIKit
     @objc optional func enterPip()
     @objc optional func toggleStatsOverlay()
     @objc optional func disconnectAndQuitApp()
+    @objc optional func toggleSoftKeyboard()
 }
 
 
@@ -208,7 +209,8 @@ import UIKit
         var prefill: String? = nil
         if let selectedIndexPath = self.tableView.indexPathForSelectedRow {
             if isSpecialEntrySelected() {return}
-            prefill = CommandManager.shared.getAllCommands()[selectedIndexPath.row-specialEntries.count].cmdString
+            let source = CommandManager.shared.getAllCommands()[selectedIndexPath.row-specialEntries.count]
+            if !CommandManager.shared.isBuiltIn(source) { prefill = source.cmdString }
         }
         presentCommandEditor(editIndex: nil, prefill: prefill)
     }
@@ -255,6 +257,8 @@ import UIKit
         }
         
         if isSpecialEntrySelected() {return}
+        if let index = commandIndex(for: selectedIndexPath),
+           CommandManager.shared.isBuiltIn(CommandManager.shared.getAllCommands()[index]) { return } // built-ins can't be deleted
         
         let previouslySelectedIndexPath = selectedIndexPath // memorize selected row before reloading tableview
         
@@ -335,6 +339,7 @@ import UIKit
         else {
             let command = CommandManager.shared.getAllCommands()[indexPath.row-specialEntries.count]
             cell.textLabel?.text = command.alias
+            cell.detailTextLabel?.text = nil
             // Only pinned commands show their quick-menu icon; the rest keep an
             // empty slot of the same size so every alias stays aligned.
             cell.imageView?.image = command.pinned
@@ -390,14 +395,22 @@ import UIKit
             }
             else {
                 let command = CommandManager.shared.getAllCommands()[indexPath.row-specialEntries.count]
+                if CommandManager.shared.isBuiltIn(command) {
+                    // Performed by the stream once this sheet is gone (the keyboard
+                    // can't become first responder under a dismissing modal).
+                    let delegate = specialEntryDelegate
+                    dismiss(animated: true) { delegate?.toggleSoftKeyboard?() }
+                    return
+                }
                 sendKeyboardCommand(command)
             }
             dismiss(animated: true, completion: nil) // sending mode: one command per visit
         }
         else {
             let specialEntrySelected = indexPath.row < specialEntries.count
-            addButton.isEnabled = !specialEntrySelected
-            deleteButton.isEnabled = !specialEntrySelected
+            let builtIn = commandIndex(for: indexPath).map { CommandManager.shared.isBuiltIn(CommandManager.shared.getAllCommands()[$0]) } ?? false
+            addButton.isEnabled = !specialEntrySelected && !builtIn
+            deleteButton.isEnabled = !specialEntrySelected && !builtIn
         }
     }
 
