@@ -173,6 +173,18 @@ static NSString * const kDefaultLayoutName = @"Default";
         [keep addObject:b];
     }
     item.leftBarButtonItems = keep;
+    [self osc_stripGlass:item.leftBarButtonItems];
+    [self osc_stripGlass:item.rightBarButtonItems];
+}
+
+// iOS 26 puts a Liquid Glass capsule behind bar items; this sheet is flat.
+- (void)osc_stripGlass:(NSArray<UIBarButtonItem *> *)items {
+    for (UIBarButtonItem *b in items) {
+        if (@available(iOS 26.0, *)) {
+            b.hidesSharedBackground = YES;
+            b.sharesBackground = NO;
+        }
+    }
 }
 
 #pragma mark - Data helpers
@@ -253,7 +265,6 @@ static NSString * const kDefaultLayoutName = @"Default";
         UIControl *card = [[UIControl alloc] init];
         card.tag = s;
         card.layer.cornerRadius = 12;
-        card.layer.borderWidth = 1.5;
         card.clipsToBounds = YES;
         [card addTarget:self action:@selector(osc_sceneCardTapped:) forControlEvents:UIControlEventTouchUpInside];
 
@@ -318,8 +329,7 @@ static NSString * const kDefaultLayoutName = @"Default";
             value.textColor = bound.length > 0 ? [UIColor blackColor] : [[UIColor blackColor] colorWithAlphaComponent:0.45];
         }
         BOOL current = (scene == nowScene) || (scene == OSCSceneLandscapeFullGame && nowScene == OSCSceneLandscape);
-        card.backgroundColor = current ? [teal colorWithAlphaComponent:0.10] : [[UIColor blackColor] colorWithAlphaComponent:0.04];
-        card.layer.borderColor = (current ? [teal colorWithAlphaComponent:0.6] : [[UIColor blackColor] colorWithAlphaComponent:0.08]).CGColor;
+        card.backgroundColor = current ? [teal colorWithAlphaComponent:0.14] : [[UIColor blackColor] colorWithAlphaComponent:0.05];
     }
 }
 
@@ -786,8 +796,13 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 - (void)updateSystemToolbarItems {
     if (!self.systemBottomToolbar) return;
     UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-    UIBarButtonItem *hint = [[UIBarButtonItem alloc] initWithTitle:[LocalizationHelper localizedStringForKey:@"Tap a layout to edit it · swipe for more"] style:UIBarButtonItemStylePlain target:nil action:nil];
-    hint.enabled = NO;
+    UILabel *hintLabel = [[UILabel alloc] init];
+    hintLabel.text = [LocalizationHelper localizedStringForKey:@"Tap a layout to edit it · swipe for more"];
+    hintLabel.font = [UIFont systemFontOfSize:14];
+    hintLabel.textColor = [[UIColor blackColor] colorWithAlphaComponent:0.4];
+    [hintLabel sizeToFit];
+    UIBarButtonItem *hint = [[UIBarButtonItem alloc] initWithCustomView:hintLabel];   // a plain label: no glass capsule
+    [self osc_stripGlass:@[hint]];
     if (self.helpToolbarItem) {
         if (@available(iOS 13.0, *)) {
             self.helpToolbarItem.image = [UIImage systemImageNamed:@"questionmark.circle"];
@@ -796,6 +811,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
         self.helpToolbarItem.target = self;
         self.helpToolbarItem.action = @selector(helpToolbarTapped:);
         self.helpToolbarItem.enabled = YES;
+        [self osc_stripGlass:@[self.helpToolbarItem]];
         [self.systemBottomToolbar setItems:@[hint, flex, self.helpToolbarItem] animated:NO];
     } else {
         [self.systemBottomToolbar setItems:@[hint, flex] animated:NO];
