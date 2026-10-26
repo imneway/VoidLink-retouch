@@ -3626,6 +3626,23 @@ import UIKit
     // Slide-captured buttons (handleButtonSliding) leave `pressed=false` but
     // still hold capturedTouches and may have pushed motion-button state, so
     // we widen the guard to cover all "this widget owns active input" cases.
+    // A finger (or a coasting pad) still drives this widget: the same test the
+    // teardown guard below uses. The host VC defers an OSC layout switch while
+    // any widget says so, instead of yanking a held button away.
+    @objc public var hasActiveInput: Bool {
+        return self.pressed
+            || self.motionButtonHeld
+            || self.capturedTouches.count > 0
+            || self.activePointerIds.count > 0
+            || aimTrackpadDisplayLink != nil
+            || trackballDecelerationTimer != nil
+    }
+
+    @objc public static func anyWidgetHasActiveInput(in container: UIView?) -> Bool {
+        guard let container = container else { return false }
+        return container.subviews.contains { ($0 as? OnScreenWidgetView)?.hasActiveInput == true }
+    }
+
     override func willMove(toSuperview newSuperview: UIView?) {
         super.willMove(toSuperview: newSuperview)
         guard newSuperview == nil else { return }

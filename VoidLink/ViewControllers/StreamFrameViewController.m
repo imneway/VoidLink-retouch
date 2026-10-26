@@ -299,6 +299,10 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     BOOL _hostGameExclusive169;              // covers the display and its client area is 16:9 (mode change)
     CFTimeInterval _hostGameSince;           // CACurrentMediaTime of the last change of the above
     NSUInteger _learn169Token;               // pending "fit held long enough" check
+    // Layout slot: YES while the full-display-game layout should be on.
+    BOOL _layoutFullSlotActive;
+    NSUInteger _layoutToken;
+    NSString *_layoutRestoreProfileName;     // what the full slot replaced, when no orientation slot is bound
     StreamContentClass _oscDetectedContent;  // last debounced detector verdict
     // YES from viewDidLoad until osc_configureForStream: the OSC stays fully
     // Off (not translucent) while connecting, whatever the hide mode says.
@@ -326,6 +330,8 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
 // MARK: - 方向锁定 持久化Key（与其它页面一致）
 static NSString * const kOSCLockedPortraitProfileName = @"OSCLockedPortraitProfileName";
 static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapeProfileName";
+// Third slot: landscape while a full-display game is on (see layout_update).
+static NSString * const kOSCLockedLandscapeFullProfileName = @"OSCLockedLandscapeFullProfileName";
 static NSString * const kStreamOrientationLockEnabledKey = @"streamOrientationLockEnabled";
 
 BOOL gStreamOrientationLocked = NO;
@@ -353,26 +359,42 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
     return [[NSUserDefaults standardUserDefaults] stringForKey:key];
 }
 
+static OSCProfile *OscUsableProfileNamed(OSCProfilesManager *pm, NSString *name) {
+    if (name.length == 0 || [pm isTemplateProfile:name]) return nil;
+    for (OSCProfile *p in [pm getAllProfiles]) {
+        if ([p.name isEqualToString:name]) return p;
+    }
+    return nil;
+}
+
+// The layout the stream should be showing now: portrait slot in portrait;
+// in landscape the full-display-game slot while one is on (and bound),
+// else the landscape slot.
+- (OSCProfile *)osc_desiredLockedProfile:(OSCProfilesManager *)pm {
+    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
+    if (isLandscape && _layoutFullSlotActive) {
+        OSCProfile *full = OscUsableProfileNamed(pm, [[NSUserDefaults standardUserDefaults] stringForKey:kOSCLockedLandscapeFullProfileName]);
+        if (full) return full;
+    }
+    return OscUsableProfileNamed(pm, [self osc_lockedProfileNameForLandscape:isLandscape]);
+}
+
 // 在串流界面应用锁定：切换选中布局并刷新OSC与Widget
 - (void)osc_applyLockForCurrentOrientationInStreamingIfNeeded {
-    BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
-    NSString *lockedName = [self osc_lockedProfileNameForLandscape:isLandscape];
-    if (lockedName.length == 0) {
-        return;
-    }
     OSCProfilesManager *pm = [OSCProfilesManager sharedManager:self.view.bounds];
-    NSMutableArray *all = [pm getAllProfiles];
-    OSCProfile *found = nil;
-    for (OSCProfile *p in all) {
-        if ([p.name isEqualToString:lockedName]) { found = p; break; }
+    OSCProfile *found = [self osc_desiredLockedProfile:pm];
+    // Only the full slot bound: leaving a full-display game goes back to
+    // whatever the full layout replaced, not nowhere.
+    if (!found && !_layoutFullSlotActive && _layoutRestoreProfileName) {
+        found = OscUsableProfileNamed(pm, _layoutRestoreProfileName);
     }
+    if (!_layoutFullSlotActive) _layoutRestoreProfileName = nil;
     if (!found) {
         return;
     }
-    if ([pm isTemplateProfile:found.name]) {
-        return;
-    }
-    if (![[[pm getSelectedProfile] name] isEqualToString:found.name]) {
+    NSString *current = [[pm getSelectedProfile] name];
+    if (![current isEqualToString:found.name]) {
+        if (_layoutFullSlotActive && !_layoutRestoreProfileName) _layoutRestoreProfileName = current;
         [pm setProfileToSelected:found.name];
         // 刷新串流界面上的 OSC 与键盘控件
         if (self->_controllerSupport && self->_streamConfig) {
@@ -1060,7 +1082,10 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     // the snap feature, and the toggles follow the OSC: when the OSC is hidden
     // (so the video can own the whole iPad-size screen) they go too.
     BOOL isPad = [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad;
-    BOOL chromeHidden = !isPad || _oscHidden;
+    // A full-display game owns the whole screen: no chrome at all (the two
+    // corner hit areas stay, invisible as they already are).
+    BOOL fullGame = [self osc_fullDisplayGame];
+    BOOL chromeHidden = !isPad || _oscHidden || fullGame;
     _snapRatioButton.hidden = chromeHidden || !_settings.snapScreenToTop;
     _oscModeButton.hidden = chromeHidden;
     _rotationLockToggleButton.hidden = chromeHidden;
@@ -1068,7 +1093,7 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     _toggleRowBackground.hidden = chromeHidden;
     // The two corner capsules stay put whatever the OSC does.
     _quickMenuButton.hidden = !isPad;
-    _quickMenuBackdrop.hidden = !isPad;
+    _quickMenuBackdrop.hidden = !isPad || fullGame;
     _modeSwitchButton.hidden = !isPad;
     if (!isPad) [self quickMenu_dismissAnimated:NO];
 
@@ -1824,9 +1849,10 @@ static const CGFloat kQuickMenuSpacing = 12;
         return;
     }
     // Bottom-left info follows the OSC visibility, like the bottom-right buttons.
-    _timeLabel.hidden = _oscHidden;
-    _batteryLabel.hidden = _oscHidden;
-    _countdownHitAreaView.hidden = _oscHidden;
+    BOOL hidden = _oscHidden || [self osc_fullDisplayGame];
+    _timeLabel.hidden = hidden;
+    _batteryLabel.hidden = hidden;
+    _countdownHitAreaView.hidden = hidden;
 
     // Layout labels at bottom-left.
     CGFloat spacing = 16.0f;
@@ -2581,6 +2607,8 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     _snapRatioOverride = SnapRatioOverrideNone;
     _snapDetectedFits = NO;
     _detectorFits = NO;
+    _layoutFullSlotActive = NO;   // a stream starts on the orientation's own layout
+    _layoutToken++;
 
     CGFloat streamAspect = (_streamConfig.height > 0) ? (CGFloat)_streamConfig.width / (CGFloat)_streamConfig.height : 0;
     self->_streamMan.videoRenderer.letterboxDetector.delegate = self;
@@ -2643,6 +2671,7 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     _snapRatioOverride = SnapRatioOverrideNone;
     _oscModeOverride = OscHideModeAuto;
     _oscManualVisibility = NO;
+    [self layout_update];                    // Unknown content: back to the orientation's layout
     if (!applicable) {
         // Back on a non-matching screen: the old manual visibility applies again.
         _oscHidden = [[NSUserDefaults standardUserDefaults] boolForKey:kOscHiddenKey];
@@ -2680,6 +2709,7 @@ static NSString *OscContentClassName(StreamContentClass c) {
 
 - (void)osc_applyContentClass:(StreamContentClass)contentClass fits:(BOOL)fitsSixteenNine source:(NSString *)source {
     StreamContentClass previous = _oscDetectedContent;
+    BOOL oscWasOut = _oscHidden || _oscAwaitingStream;   // for layout_update: switch unseen if it was out before this change
     BOOL classChanged = (contentClass != previous);
     BOOL fitChanged = (fitsSixteenNine != _snapDetectedFits);
     _oscDetectedContent = contentClass;
@@ -2716,7 +2746,9 @@ static NSString *OscContentClassName(StreamContentClass c) {
     // Never yank widgets out from under the layout editor; the state is kept and
     // applied by the next user action / reConfig.
     if (self->_streamView.widgetToolOpened) return;
+    if (fitChanged || classChanged) [self layout_updateOutOfSight:oscWasOut];   // before the OSC comes up, so it comes up in the right layout
     if (classChanged) [self osc_applyPresentation];
+    else if (fitChanged) { [self updateSnapRatioButton]; [self layoutTimeBatteryCountdownDisplay]; }
     if (fitChanged || classChanged) [self applySnapToTopAnimated:YES];
 }
 
@@ -2767,6 +2799,66 @@ static const NSTimeInterval kLearn169Hold = 30.0;
         [[GameAspectMemory shared] setLearnedSixteenNineForProcess:process];
         Log(LOG_I, @"[Aspect] %@: fit 16:9 for %.0fs -> learned as 16:9", process, kLearn169Hold);
     });
+}
+
+// Full-display game: the snap's own verdict (class game, picture not inside
+// the 16:9 region), so chrome, layout slot and snap always agree.
+- (BOOL)osc_fullDisplayGame {
+    return _oscDetectedContent == StreamContentClassGame && !_snapDetectedFits;
+}
+
+// Is the current fit backed by memory (manual, display mode, learned)
+// rather than by the detector's live reading?
+- (BOOL)aspect_fitsSettled {
+    if (![self aspect_hasGameProcess]) return NO;
+    GameAspectMemory *memory = [GameAspectMemory shared];
+    return [memory manualFitsForProcess:_hostGameProcess] != nil
+        || _hostGameExclusive169
+        || [memory isLearnedFullForProcess:_hostGameProcess]
+        || [memory isLearnedSixteenNineForProcess:_hostGameProcess];
+}
+
+#pragma mark Layout slot (16:9 vs full-display game)
+
+// Switching layouts rebuilds the OSC, so it happens at once only when the
+// OSC is out of sight or the ratio is known for sure; a detector-only
+// verdict has to hold for a while, and a finger on the OSC defers it.
+static const NSTimeInterval kLayoutSwitchHold = 2.0;
+static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
+
+- (void)layout_update {
+    [self layout_updateOutOfSight:(_oscHidden || _oscAwaitingStream)];
+}
+
+- (void)layout_updateOutOfSight:(BOOL)outOfSight {
+    BOOL want = [self osc_fullDisplayGame];
+    _layoutToken++;
+    if (want == _layoutFullSlotActive) return;
+    if (outOfSight || [self aspect_fitsSettled]) {
+        [self layout_applyFullSlot:want];
+        return;
+    }
+    NSUInteger token = _layoutToken;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kLayoutSwitchHold * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (token != self->_layoutToken) return;
+        [self layout_applyFullSlot:want];
+    });
+}
+
+- (void)layout_applyFullSlot:(BOOL)full {
+    if (self->_streamView.widgetToolOpened) return;   // picked up by the next content change
+    if ([OnScreenControls touchAddrsCapturedByOnScreenControls].count > 0
+        || [OnScreenWidgetView anyWidgetHasActiveInputIn:self->_streamView.streamFrameTopLayerView]) {
+        NSUInteger token = _layoutToken;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kLayoutSwitchFingerRetry * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (token != self->_layoutToken) return;
+            [self layout_applyFullSlot:full];
+        });
+        return;
+    }
+    _layoutFullSlotActive = full;
+    Log(LOG_I, @"[Layout] slot -> %@", full ? @"landscape full-display game" : @"orientation default");
+    [self osc_applyLockForCurrentOrientationInStreamingIfNeeded];
 }
 
 - (void)aspect_memoryCleared:(NSNotification *)note {
@@ -3489,6 +3581,7 @@ static const NSTimeInterval kLearn169Hold = 30.0;
         _oscDetectedContent = StreamContentClassUnknown;
         _snapDetectedFits = NO;
         _snapRatioOverride = SnapRatioOverrideNone;
+        [self layout_update];                // Unknown content: back to the orientation's layout
         if (wasApplicable && !_oscAutoDetectApplicable) {
             _oscModeOverride = OscHideModeAuto;
             _oscManualVisibility = NO;
@@ -3512,6 +3605,7 @@ static const NSTimeInterval kLearn169Hold = 30.0;
     [self stream_publishOrientationLockAndRefresh];
     // A detector verdict that arrived while the editor was open was recorded but
     // not applied (never yank widgets out from under the editor); apply it now.
+    [self layout_update];
     [self osc_applyPresentation];
     [self applySnapToTopIfNeeded];
 }

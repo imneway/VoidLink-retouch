@@ -6210,6 +6210,150 @@
         }
       }
     },
+    "Full-screen game" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全屏游戏"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全螢幕遊戲"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全螢幕遊戲"
+          }
+        }
+      }
+    },
+    "Lock as landscape layout" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "锁定为横屏布局"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "鎖定為橫屏佈局"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "鎖定為橫屏佈局"
+          }
+        }
+      }
+    },
+    "Unlock landscape layout" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解除横屏锁定"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解除橫屏鎖定"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解除橫屏鎖定"
+          }
+        }
+      }
+    },
+    "Lock as full-screen game layout" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "锁定为横屏·全屏游戏布局"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "鎖定為橫屏·全螢幕遊戲佈局"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "鎖定為橫屏·全螢幕遊戲佈局"
+          }
+        }
+      }
+    },
+    "Unlock full-screen game layout" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解除全屏游戏锁定"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解除全螢幕遊戲鎖定"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解除全螢幕遊戲鎖定"
+          }
+        }
+      }
+    },
+    "LandscapeLockSheetMessage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The landscape layout is for 16:9 games and the desktop; the full-screen game layout takes over while a game fills the display."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "横屏布局用于 16:9 游戏和桌面；全屏游戏布局在游戏铺满屏幕时自动换上。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "橫屏佈局用於 16:9 遊戲和桌面；全螢幕遊戲佈局在遊戲鋪滿螢幕時自動換上。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "橫屏佈局用於 16:9 遊戲和桌面；全螢幕遊戲佈局在遊戲鋪滿螢幕時自動換上。"
+          }
+        }
+      }
+    },
     "Block stream touch while OSC is on" : {
       "extractionState" : "manual",
       "localizations" : {

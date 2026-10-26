@@ -91,6 +91,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 // MARK: - 方向锁定 持久化Key（与列表页一致）
 static NSString * const kOSCLockedPortraitProfileName = @"OSCLockedPortraitProfileName";
 static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapeProfileName";
+static NSString * const kOSCLockedLandscapeFullProfileName = @"OSCLockedLandscapeFullProfileName";
 
 // Shared OSC-editor rotation-lock state. SWRevealViewController is the app's ROOT
 // view controller and authoritatively gates interface orientation — it returns its
@@ -127,6 +128,11 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         return;
     }
     if ([profilesManager isTemplateProfile:found.name]) {
+        return;
+    }
+    // The landscape full-display-game layout is edited under the landscape lock too.
+    NSString *fullName = [[NSUserDefaults standardUserDefaults] stringForKey:kOSCLockedLandscapeFullProfileName];
+    if (isLandscape && fullName.length > 0 && [[[profilesManager getSelectedProfile] name] isEqualToString:fullName]) {
         return;
     }
     if (![[[profilesManager getSelectedProfile] name] isEqualToString:found.name]) {

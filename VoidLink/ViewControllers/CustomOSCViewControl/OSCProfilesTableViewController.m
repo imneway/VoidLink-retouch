@@ -30,6 +30,7 @@ const double NAV_BAR_HEIGHT = 50;
 // 新增：按方向锁定相关的持久化 Key
 static NSString * const kOSCLockedPortraitProfileName = @"OSCLockedPortraitProfileName";
 static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapeProfileName";
+static NSString * const kOSCLockedLandscapeFullProfileName = @"OSCLockedLandscapeFullProfileName"; // landscape, full-display game
 
 @synthesize tableView;
 
@@ -269,6 +270,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 - (void) profileViewRefresh{
     //[self dismissViewControllerAnimated:YES completion:nil];
     //[selfparentLayoutOSCViewController]
+    [self osc_validateFullGameBinding]; // a deleted / renamed full-game layout must not keep the slot
     [self.tableView reloadData]; // table view will be refreshed by calling reloadData
     [self updateDeleteButtonState]; // 更新顶部删除按钮状态
     [self updateToolbarButtons]; // 同步底部 toolbar（系统/自定义）状态
@@ -308,6 +310,31 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     [ud synchronize];
 }
 
+// 横屏·全屏游戏槽
+- (NSString *)osc_fullGameProfileName {
+    return [[NSUserDefaults standardUserDefaults] stringForKey:kOSCLockedLandscapeFullProfileName];
+}
+
+- (void)osc_setFullGameProfileName:(NSString *)profileName {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    if (profileName) [ud setObject:profileName forKey:kOSCLockedLandscapeFullProfileName];
+    else [ud removeObjectForKey:kOSCLockedLandscapeFullProfileName];
+    [ud synchronize];
+}
+
+- (BOOL)osc_isFullGameProfile:(NSString *)name {
+    NSString *full = [self osc_fullGameProfileName];
+    return full.length > 0 && [full isEqualToString:name];
+}
+
+// 全屏游戏槽指向的布局没了（删除、改名）：清掉，免得工具栏一直显示“已锁定”
+- (void)osc_validateFullGameBinding {
+    NSString *full = [self osc_fullGameProfileName];
+    if (full.length == 0) return;
+    OSCProfile *found = [profilesManager findProfileByName:full inProfileArray:[profilesManager getAllProfiles]];
+    if (!found || [profilesManager isTemplateProfile:full]) [self osc_setFullGameProfileName:nil];
+}
+
 // 当前方向是否已锁定
 - (BOOL)osc_isLockedForCurrentOrientation {
     BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
@@ -317,6 +344,7 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
 
 // 应用当前方向的锁定：若存在锁定，则强制切换到被锁定的布局
 - (void)osc_applyLockForCurrentOrientation {
+    [self osc_validateFullGameBinding];
     BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
     NSString *lockedName = [self osc_lockedProfileNameForLandscape:isLandscape];
     if (lockedName.length == 0) {
@@ -334,6 +362,10 @@ static NSString * const kOSCLockedLandscapeProfileName = @"OSCLockedLandscapePro
     }
     if ([profilesManager isTemplateProfile:found.name]) {
         [self osc_setLockedProfileName:nil forLandscape:isLandscape];
+        return;
+    }
+    // 横屏下全屏游戏布局也允许保持选中（以便编辑）
+    if (isLandscape && [self osc_isFullGameProfile:[[profilesManager getSelectedProfile] name]]) {
         return;
     }
     if (![[[profilesManager getSelectedProfile] name] isEqualToString:found.name]) {
@@ -513,8 +545,9 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     BOOL lockedActive = lockedNameNow.length > 0;
     BOOL isCurrentSelectedProfileRow = [[[profilesManager getSelectedProfile] name] isEqualToString:profile.name];
     
-    // 在锁定状态下，只有锁定的布局可选，其他布局置灰
-    BOOL canSelect = !lockedActive || [profile.name isEqualToString:lockedNameNow];
+    // 在锁定状态下，只有锁定的布局可选，其他布局置灰（横屏下全屏游戏布局也可选）
+    BOOL isFullGameRow = isLandscapeNow && [self osc_isFullGameProfile:profile.name];
+    BOOL canSelect = !lockedActive || [profile.name isEqualToString:lockedNameNow] || isFullGameRow;
     UIColor *nameColor = [UIColor blackColor];
     if (!canSelect) {
         // 其它不可选：灰
@@ -556,6 +589,12 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
              NSAttributedString *fallback = [[NSAttributedString alloc] initWithString:@"🔒" attributes:@{NSForegroundColorAttributeName:[UIColor systemTealColor]}];
              [line appendAttributedString:fallback];
          }
+     }
+     // 横屏·全屏游戏槽：橙色锁 + 标签
+     if (isFullGameRow) {
+         UIFont *tagFont = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+         NSString *tag = [NSString stringWithFormat:@"  🔒 %@", [LocalizationHelper localizedStringForKey:@"Full-screen game"]];
+         [line appendAttributedString:[[NSAttributedString alloc] initWithString:tag attributes:@{NSFontAttributeName:tagFont, NSForegroundColorAttributeName:[UIColor systemOrangeColor]}]];
      }
      
      cell.name.attributedText = line;
@@ -737,6 +776,23 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     BOOL isLandscapeNow = [self osc_isCurrentLandscapeInViewBounds];
     NSString *lockedNameNow = [self osc_lockedProfileNameForLandscape:isLandscapeNow];
     if (lockedNameNow.length > 0) {
+        if (isLandscapeNow && [self osc_isFullGameProfile:profile.name]) {
+            // 全屏游戏布局可以选中（编辑用），串流时按游戏比例在两者间切换
+            if (![[[profilesManager getSelectedProfile] name] isEqualToString:profile.name]) {
+                [profilesManager setProfileToSelected:profile.name];
+                [self profileViewRefresh];
+            }
+            [tableView deselectRowAtIndexPath:indexPath animated:YES];
+            return;
+        }
+        // 点的是横屏锁定布局本身：从全屏游戏布局切回来（编辑用）
+        if ([profile.name isEqualToString:lockedNameNow]
+            && ![[[profilesManager getSelectedProfile] name] isEqualToString:profile.name]) {
+            [profilesManager setProfileToSelected:profile.name];
+            [self profileViewRefresh];
+            [tableView deselectRowAtIndexPath:indexPath animated:YES];
+            return;
+        }
         // 强制保持当前选中为锁定布局
         [self osc_applyLockForCurrentOrientation];
         [tableView deselectRowAtIndexPath:indexPath animated:YES];
@@ -838,7 +894,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     // 新逻辑：方向锁定按钮
     BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
     NSString *lockedName = [self osc_lockedProfileNameForLandscape:isLandscape];
-    BOOL isLocked = (lockedName.length > 0);
+    BOOL isLocked = (lockedName.length > 0) || (isLandscape && [self osc_fullGameProfileName].length > 0);
     NSString *title = isLocked ? @"解除锁定" : @"锁定为当前方向布局";
     SEL action = isLocked ? @selector(osc_unlockCurrentOrientationTapped:) : @selector(osc_lockCurrentOrientationTapped:);
     [self createNormalModeButtonWithTitle:title action:action];
@@ -859,7 +915,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     self.pairRotationalToolbarItem.enabled = !isTemplate;
     self.pairRotationalToolbarItem.target = self;
     NSString *lockedName = [self osc_lockedProfileNameForLandscape:isLandscape];
-    BOOL isLocked = (lockedName.length > 0);
+    BOOL isLocked = (lockedName.length > 0) || (isLandscape && [self osc_fullGameProfileName].length > 0);
     self.pairRotationalToolbarItem.action = isLocked ? @selector(osc_unlockCurrentOrientationTapped:) : @selector(osc_lockCurrentOrientationTapped:);
     // 英文不加空格；同时支持中文本地化键
     self.pairRotationalToolbarItem.title = isLocked ? [LocalizationHelper localizedStringForKey:@"UnlockOrientation"] : [LocalizationHelper localizedStringForKey:@"LockToCurrentOrientation"];
@@ -923,12 +979,52 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     NSLog(@"普通模式按钮创建成功：%@", title);
 }
 
+// 横屏下两个槽位：横屏布局，横屏·全屏游戏布局。弹单选择对当前选中布局做什么。
+- (void)osc_presentLandscapeLockSheet:(id)sender {
+    OSCProfile *current = [profilesManager getSelectedProfile];
+    if (!current || [profilesManager isTemplateProfile:current.name]) return;
+    NSString *landscapeName = [self osc_lockedProfileNameForLandscape:YES];
+    BOOL isLandscapeLock = landscapeName.length > 0 && [landscapeName isEqualToString:current.name];
+    BOOL isFullLock = [self osc_isFullGameProfile:current.name];
+
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:current.name
+                                                                   message:[LocalizationHelper localizedStringForKey:@"LandscapeLockSheetMessage"]
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    __weak typeof(self) weakSelf = self;
+    [sheet addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:(isLandscapeLock ? @"Unlock landscape layout" : @"Lock as landscape layout")]
+                                              style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [weakSelf osc_setLockedProfileName:(isLandscapeLock ? nil : current.name) forLandscape:YES];
+        [weakSelf osc_lockStateChanged];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:(isFullLock ? @"Unlock full-screen game layout" : @"Lock as full-screen game layout")]
+                                              style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [weakSelf osc_setFullGameProfileName:(isFullLock ? nil : current.name)];
+        [weakSelf osc_lockStateChanged];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+    UIPopoverPresentationController *pop = sheet.popoverPresentationController;
+    if (pop) {
+        if ([sender isKindOfClass:[UIBarButtonItem class]]) pop.barButtonItem = sender;
+        else if ([sender isKindOfClass:[UIView class]]) { pop.sourceView = sender; pop.sourceRect = ((UIView *)sender).bounds; }
+        else { pop.sourceView = self.view; pop.sourceRect = CGRectMake(CGRectGetMidX(self.view.bounds), CGRectGetMaxY(self.view.bounds) - 44, 1, 1); }
+    }
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)osc_lockStateChanged {
+    [self osc_applyLockForCurrentOrientation];
+    [self updateToolbarButtons];
+    if (self.systemBottomToolbar) [self updateSystemToolbarItems];
+    [self.tableView reloadData];
+}
+
 - (IBAction)osc_lockCurrentOrientationTapped:(id)sender {
     OSCProfile *current = [profilesManager getSelectedProfile];
     if (!current || [profilesManager isTemplateProfile:current.name]) {
         return;
     }
     BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
+    if (isLandscape) { [self osc_presentLandscapeLockSheet:sender]; return; }
     [self osc_setLockedProfileName:current.name forLandscape:isLandscape];
     // 锁定后立即应用（可避免闪烁）
     [self osc_applyLockForCurrentOrientation];
@@ -948,6 +1044,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 
 - (IBAction)osc_unlockCurrentOrientationTapped:(id)sender {
     BOOL isLandscape = [self osc_isCurrentLandscapeInViewBounds];
+    if (isLandscape) { [self osc_presentLandscapeLockSheet:sender]; return; }
     [self osc_setLockedProfileName:nil forLandscape:isLandscape];
     [self updateToolbarButtons];
     if (self.systemBottomToolbar) {
