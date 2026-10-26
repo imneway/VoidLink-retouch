@@ -3549,11 +3549,19 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     [self->_streamView readyToBringUpSoftKeyboardByToolbox];
 }
 
-// Built-in "soft keyboard" command (command manager / quick menu): open or close
-// the keyboard right away, no extra tap on the stream.
+// Built-in "soft keyboard" command (command manager / quick menu): show or hide
+// the Windows touch keyboard on the host. An explicit tap, so unlike the Pencil
+// double tap it works in game mode too. No agent: Win+Ctrl+O (on-screen keyboard).
 - (void)toggleSoftKeyboard{
     if (!_hasConnectionStarted || self->_streamView.widgetToolOpened) return;
-    [self->_streamView toggleKeyboard];
+    if (_hostStateClient && _hostAgentLive) {
+        Log(LOG_I, @"[HostAgent] touch keyboard toggle from command");
+        [_hostStateClient sendCommand:@"toggle_touch_keyboard"];
+        return;
+    }
+    Log(LOG_I, @"[HostAgent] touch keyboard command with no live agent, sending Win+Ctrl+O");
+    NSArray<NSString *> *keys = [CommandManager.shared extractKeyStringsFromComboCommandFrom:@"WIN+CTRL+O"];
+    if (keys.count > 0) [CommandManager.shared sendKeyComboCommandWithKeyboardCmdStrings:keys];
 }
 
 - (void)enterPip{

@@ -515,7 +515,7 @@ import UIKit
     // command string cannot be changed.
     @objc public static let softKeyboardCommand = "@SOFTKEYBOARD"
     private static let builtInCommands: [(cmd: String, alias: String, icon: String)] = [
-        (softKeyboardCommand, "软键盘(Soft Keyboard)", "keyboard"),
+        (softKeyboardCommand, "触摸键盘(Touch Keyboard)", "keyboard"),   // the Windows touch keyboard, via the host agent
     ]
     private static let builtInsSeededKey = "builtInCommandsSeededV1"
 
@@ -1015,6 +1015,13 @@ import UIKit
         let defaults = UserDefaults.standard
         var seeded = Set(defaults.stringArray(forKey: CommandManager.builtInsSeededKey) ?? [])
         var changed = false
+        // The first build called it the iPad soft keyboard; it drives the host's
+        // touch keyboard. Rename only if the user kept the default alias.
+        if let c = commands.first(where: { $0.cmdString.uppercased() == CommandManager.softKeyboardCommand }),
+           c.alias == "软键盘(Soft Keyboard)" {
+            c.alias = "触摸键盘(Touch Keyboard)"
+            changed = true
+        }
         for b in CommandManager.builtInCommands where !commands.contains(where: { $0.cmdString.uppercased() == b.cmd }) {
             let pin = !seeded.contains(b.cmd) && pinnedCount() < CommandManager.maxPinnedCommands
             commands.append(RemoteCommand(cmdString: b.cmd, alias: b.alias, pinned: pin, iconName: b.icon))
