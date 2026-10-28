@@ -297,6 +297,10 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     BOOL _audioOverrideTracked;        // a manual GAME is in force...
     NSString *_audioOverrideProcess;   // ...for the process that was on top when it was set
     NSUInteger _audioRetryCount;
+    NSInteger _audioManual;            // AudioOutputAuto / iPad / PC (command manager "Audio Output")
+    UILabel *_audioToast;
+    NSString *_audioShownStatus;       // last status the visible indicators were built with
+    NSUInteger _audioToastToken;
     NSUInteger _nudgeGeneration;             // bumped by every mode switch and by stream stop: queued nudges die
     // OSC visibility model — see "OSC visibility & hide mode".
     BOOL _oscHidden;                         // right-edge swipe / detector
@@ -1306,8 +1310,12 @@ static const CGFloat kQuickMenuSpacing = 12;
     UIImage *more = [QuickMenuIcon imageWithSymbolName:@"ellipsis.circle.fill" alias:@"" diameter:kQuickMenuItemDiameter];
     [items addObject:[self quickMenu_itemWithImage:more label:@"命令管理器" action:@selector(quickMenu_openCommandManager)]];
     [_quickMenuCommands enumerateObjectsUsingBlock:^(RemoteCommand *command, NSUInteger idx, BOOL *stop) {
-        UIButton *item = [self quickMenu_itemWithImage:[QuickMenuIcon imageFor:command diameter:kQuickMenuItemDiameter]
-                                                 label:command.alias
+        BOOL audio = [command.cmdString.uppercaseString isEqualToString:CommandManager.audioOutputCommand];
+        UIImage *image = audio
+            ? [QuickMenuIcon imageWithSymbolName:[self audio_outputSymbol] alias:command.alias diameter:kQuickMenuItemDiameter]
+            : [QuickMenuIcon imageFor:command diameter:kQuickMenuItemDiameter];
+        UIButton *item = [self quickMenu_itemWithImage:image
+                                                 label:audio ? [NSString stringWithFormat:@"%@: %@", command.alias, [self audioOutputStatus]] : command.alias
                                                 action:@selector(quickMenu_sendPinnedCommand:)];
         item.tag = (NSInteger)idx;
         [items addObject:item];
@@ -1412,6 +1420,10 @@ static const CGFloat kQuickMenuSpacing = 12;
     [self quickMenu_dismissAnimated:YES];
     if ([command.cmdString.uppercaseString isEqualToString:CommandManager.softKeyboardCommand]) {
         [self toggleSoftKeyboard];
+        return;
+    }
+    if ([command.cmdString.uppercaseString isEqualToString:CommandManager.audioOutputCommand]) {
+        [self cycleAudioOutput];
         return;
     }
     NSArray<NSString *> *keys = [CommandManager.shared extractKeyStringsFromComboCommandFrom:command.cmdString];
@@ -2572,6 +2584,93 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     return _audioHostGame || manualGame;
 }
 
+typedef NS_ENUM(NSInteger, AudioOutput) { AudioOutputAuto = 0, AudioOutputIPad = 1, AudioOutputPC = 2 };
+
+// The environment changed (or the stream ended): a manual output choice was
+// for the previous one, back to automatic.
+- (void)audio_environmentChanged {
+    if (_audioManual == AudioOutputAuto) return;
+    Log(LOG_I, @"[Audio] environment changed, manual output -> auto");
+    _audioManual = AudioOutputAuto;
+}
+
+// Command manager / quick menu "Audio Output": auto -> iPad only -> PC only -> auto.
+- (void)cycleAudioOutput {
+    if (!(_hasConnectionStarted && _audioFollowSession && VLAudioFollowsModeEnabled())) {
+        [self audio_showToast:[LocalizationHelper localizedStringForKey:@"Audio follows Game/Desk is off (takes effect on the next connection)"]];
+        return;
+    }
+    _audioManual = (_audioManual + 1) % 3;
+    Log(LOG_I, @"[Audio] manual output -> %ld", (long)_audioManual);
+    [self audio_update];
+    [self audio_showToast:[self audioOutputStatus]];
+}
+
+// "Auto · iPad", "iPad only", ... plus a note when the PC can't be switched.
+- (NSString *)audioOutputStatus {
+    if (!(_audioFollowSession && VLAudioFollowsModeEnabled())) {
+        return [LocalizationHelper localizedStringForKey:@"Audio follow off"];
+    }
+    BOOL game = [self audio_resolveEnvironmentIsGame];
+    NSString *text;
+    switch (_audioManual) {
+        case AudioOutputIPad: text = [LocalizationHelper localizedStringForKey:@"iPad only (manual)"]; break;
+        case AudioOutputPC: text = [LocalizationHelper localizedStringForKey:@"PC only (manual)"]; break;
+        default:
+            text = game ? [LocalizationHelper localizedStringForKey:@"Auto · iPad"]
+                        : [LocalizationHelper localizedStringForKey:@"Auto · PC"];
+            break;
+    }
+    if (!(_hostStateClient && _hostAgentLive)) {
+        text = [text stringByAppendingFormat:@" · %@", [LocalizationHelper localizedStringForKey:@"PC agent offline"]];
+    }
+    return text;
+}
+
+// SF Symbol for the quick-menu item: follows the current output.
+- (NSString *)audio_outputSymbol {
+    if (!(_audioFollowSession && VLAudioFollowsModeEnabled())) return @"speaker.slash.circle.fill";
+    BOOL ipad = _audioManual == AudioOutputIPad
+        || (_audioManual == AudioOutputAuto && [self audio_resolveEnvironmentIsGame]);
+    if (_audioManual == AudioOutputAuto) return ipad ? @"ipad.landscape" : @"desktopcomputer";
+    return ipad ? @"ipad.landscape.badge.play" : @"display";
+}
+
+- (void)audio_showToast:(NSString *)text {
+    if (text.length == 0) return;
+    if (!_audioToast) {
+        _audioToast = [[UILabel alloc] init];
+        _audioToast.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+        _audioToast.textColor = UIColor.whiteColor;
+        _audioToast.backgroundColor = [UIColor colorWithWhite:0 alpha:0.7];
+        _audioToast.textAlignment = NSTextAlignmentCenter;
+        _audioToast.numberOfLines = 0;
+        _audioToast.layer.cornerRadius = 16;
+        _audioToast.clipsToBounds = YES;
+        _audioToast.userInteractionEnabled = NO;
+    }
+    _audioToast.text = text;
+    // Sized against the view it goes on (the command manager sheet is narrower
+    // than the stream); long text wraps.
+    UIView *host = self.presentedViewController ? self.presentedViewController.view : self.view;
+    CGFloat maxW = MAX(120, host.bounds.size.width - 32);
+    CGSize size = [_audioToast sizeThatFits:CGSizeMake(maxW - 32, CGFLOAT_MAX)];
+    CGFloat w = MIN(ceil(size.width) + 32, maxW);
+    CGFloat h = MAX(32, ceil(size.height) + 14);
+    _audioToast.layer.cornerRadius = MIN(16, h / 2);
+    _audioToast.frame = CGRectMake((host.bounds.size.width - w) / 2, host.safeAreaInsets.top + 24, w, h);
+    if (_audioToast.superview != host) [host addSubview:_audioToast];
+    else [host bringSubviewToFront:_audioToast];
+    _audioToast.alpha = 1;
+    NSUInteger token = ++_audioToastToken;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (token != self->_audioToastToken) return;
+        [UIView animateWithDuration:0.25 animations:^{ self->_audioToast.alpha = 0; } completion:^(BOOL finished) {
+            if (token == self->_audioToastToken) [self->_audioToast removeFromSuperview];
+        }];
+    });
+}
+
 // Desk -> game is immediate; game -> desk waits a moment, so a launcher or a
 // focus hop while a game starts or switches windows doesn't bounce the audio.
 static const NSTimeInterval kAudioLeaveGameHold = 1.0;
@@ -2581,6 +2680,7 @@ static const NSTimeInterval kAudioLeaveGameHold = 1.0;
     if (game || !_audioHostKnown) {
         if (_audioLeavePending) { _audioHostToken++; _audioLeavePending = NO; }   // the game came back
         BOOL changed = !_audioHostKnown || game != _audioHostGame;
+        if (_audioHostKnown && game != _audioHostGame) [self audio_environmentChanged];
         _audioHostKnown = YES;
         _audioHostGame = game;
         if (changed) [self audio_update];
@@ -2593,6 +2693,7 @@ static const NSTimeInterval kAudioLeaveGameHold = 1.0;
         if (token != self->_audioHostToken || !self->_audioHostKnown) return;
         self->_audioLeavePending = NO;
         self->_audioHostGame = NO;
+        [self audio_environmentChanged];
         [self audio_update];
     });
 }
@@ -2606,9 +2707,30 @@ static const NSTimeInterval kAudioLeaveGameHold = 1.0;
     _audioOverrideTracked = NO;   // rebinds to what's on top once the agent is back
 }
 
+// The quick menu (while open) and the command manager row show the output;
+// rebuild them when it changes underneath them (e.g. the environment reset a
+// manual choice).
+- (void)audio_refreshIndicatorsIfNeeded {
+    NSString *status = [self audioOutputStatus];
+    if ([status isEqualToString:_audioShownStatus]) return;
+    _audioShownStatus = status;
+    if (_quickMenuPanel.superview) {
+        [self quickMenu_populatePanel];
+        [self quickMenu_layoutPanel];
+    }
+    if (toolBoxViewController.presentingViewController) [toolBoxViewController reloadTableView];
+}
+
 - (void)audio_update {
+    [self audio_updateRoute];
+    [self audio_refreshIndicatorsIfNeeded];
+}
+
+- (void)audio_updateRoute {
     BOOL follow = _hasConnectionStarted && _audioFollowSession && VLAudioFollowsModeEnabled();
     BOOL game = [self audio_resolveEnvironmentIsGame];
+    if (_audioManual == AudioOutputIPad) game = YES;
+    else if (_audioManual == AudioOutputPC) game = NO;
     VLSetStreamAudioMuted(follow && !game);
     NSString *to = (follow && game) ? @"ipad" : @"host";
     if (!follow && _audioRouteSent == nil) return;    // never routed: leave the PC alone
@@ -4493,6 +4615,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     dispatch_async(dispatch_get_main_queue(), ^{
         self->_hasConnectionStarted = YES;
         self->_audioFollowSession = self.streamConfig.playAudioOnPC && VLAudioFollowsModeEnabled();
+        self->_audioManual = AudioOutputAuto;
         [self audio_update];
         // Leave the spinner spinning until it's obscured by
         // the first frame of video.
@@ -4580,6 +4703,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     // A reconnect that starts streaming takes the route again.
     dispatch_async(dispatch_get_main_queue(), ^{
         self->_audioFollowSession = NO;
+        self->_audioManual = AudioOutputAuto;   // a manual choice ends with the stream
         [self audio_update];
     });
 

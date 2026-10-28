@@ -15,6 +15,8 @@ import UIKit
     @objc optional func toggleStatsOverlay()
     @objc optional func disconnectAndQuitApp()
     @objc optional func toggleSoftKeyboard()
+    @objc optional func cycleAudioOutput()
+    @objc optional func audioOutputStatus() -> String?
 }
 
 
@@ -339,7 +341,16 @@ import UIKit
         else {
             let command = CommandManager.shared.getAllCommands()[indexPath.row-specialEntries.count]
             cell.textLabel?.text = command.alias
-            cell.detailTextLabel?.text = nil
+            if command.cmdString.uppercased() == CommandManager.audioOutputCommand,
+               let status = specialEntryDelegate?.audioOutputStatus?() {
+                // Current audio output, dimmed after the name.
+                let text = NSMutableAttributedString(string: command.alias, attributes: [.foregroundColor: UIColor.white])
+                text.append(NSAttributedString(string: "   " + status, attributes: [
+                    .foregroundColor: UIColor(white: 1, alpha: 0.5),
+                    .font: UIFont.systemFont(ofSize: 15),
+                ]))
+                cell.textLabel?.attributedText = text
+            }
             // Only pinned commands show their quick-menu icon; the rest keep an
             // empty slot of the same size so every alias stays aligned.
             cell.imageView?.image = command.pinned
@@ -395,6 +406,13 @@ import UIKit
             }
             else {
                 let command = CommandManager.shared.getAllCommands()[indexPath.row-specialEntries.count]
+                if command.cmdString.uppercased() == CommandManager.audioOutputCommand {
+                    // Cycles in place: the sheet stays open, the row shows the new state.
+                    specialEntryDelegate?.cycleAudioOutput?()
+                    tableView.reloadRows(at: [indexPath], with: .none)
+                    tableView.deselectRow(at: indexPath, animated: true)
+                    return
+                }
                 if CommandManager.shared.isBuiltIn(command) {
                     // Performed by the stream once this sheet is gone (the keyboard
                     // can't become first responder under a dismissing modal).

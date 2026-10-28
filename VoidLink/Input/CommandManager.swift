@@ -514,8 +514,12 @@ import UIKit
     // not keystrokes: the stream performs them. They cannot be deleted and their
     // command string cannot be changed.
     @objc public static let softKeyboardCommand = "@SOFTKEYBOARD"
-    private static let builtInCommands: [(cmd: String, alias: String, icon: String)] = [
-        (softKeyboardCommand, "触摸键盘(Touch Keyboard)", "keyboard"),   // the Windows touch keyboard, via the host agent
+    // Cycles the audio output: auto -> iPad only -> PC only -> auto (see the
+    // stream's audio_cycleOutput). The row / quick-menu item shows the state.
+    @objc public static let audioOutputCommand = "@AUDIOOUTPUT"
+    private static let builtInCommands: [(cmd: String, alias: String, icon: String, pin: Bool)] = [
+        (softKeyboardCommand, "触摸键盘(Touch Keyboard)", "keyboard", true),   // the Windows touch keyboard, via the host agent
+        (audioOutputCommand, "音频输出(Audio Output)", "speaker.wave.2", false),
     ]
     private static let builtInsSeededKey = "builtInCommandsSeededV1"
 
@@ -974,7 +978,7 @@ import UIKit
             // Built-ins still work this session; nothing is written until the user
             // saves a change (the unreadable bytes are parked above).
             for b in CommandManager.builtInCommands where !commands.contains(where: { $0.cmdString.uppercased() == b.cmd }) {
-                commands.append(RemoteCommand(cmdString: b.cmd, alias: b.alias, pinned: true, iconName: b.icon))
+                commands.append(RemoteCommand(cmdString: b.cmd, alias: b.alias, pinned: b.pin, iconName: b.icon))
             }
         }
     }
@@ -1023,7 +1027,7 @@ import UIKit
             changed = true
         }
         for b in CommandManager.builtInCommands where !commands.contains(where: { $0.cmdString.uppercased() == b.cmd }) {
-            let pin = !seeded.contains(b.cmd) && pinnedCount() < CommandManager.maxPinnedCommands
+            let pin = b.pin && !seeded.contains(b.cmd) && pinnedCount() < CommandManager.maxPinnedCommands
             commands.append(RemoteCommand(cmdString: b.cmd, alias: b.alias, pinned: pin, iconName: b.icon))
             seeded.insert(b.cmd)
             changed = true
