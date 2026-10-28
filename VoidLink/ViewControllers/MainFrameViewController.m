@@ -845,7 +845,9 @@ static NSMutableSet* hostList;
     
     _streamConfig.bitRate = [streamSettings.bitrate intValue];
     _streamConfig.optimizeGameSettings = streamSettings.optimizeGames;
-    _streamConfig.playAudioOnPC = streamSettings.playAudioOnPC;
+    // Audio follows Game/Desk needs Sunshine to leave the PC's default device
+    // alone (host audio on); the host agent then routes it per mode.
+    _streamConfig.playAudioOnPC = streamSettings.playAudioOnPC || VLAudioFollowsModeEnabled();
     _streamConfig.swapABButtons = streamSettings.swapABButtons;
     _streamConfig.swapXYButtons = streamSettings.swapXYButtons;
     _streamConfig.swapABXYButtons = streamSettings.swapABButtons || streamSettings.swapXYButtons;

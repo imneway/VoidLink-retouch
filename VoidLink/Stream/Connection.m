@@ -6,6 +6,7 @@
 //  Copyright (c) 2015 Moonlight Stream. All rights reserved.
 //
 
+#include <stdatomic.h>
 #import "Connection.h"
 #import "Plot.h"
 #import "Utils.h"
@@ -45,6 +46,23 @@ static video_stats_t lastVideoStats;
 static NSLock* videoStatsLock;
 
 static SDL_AudioDeviceID audioDevice;
+static atomic_bool audioMuted;          // written on main, read on the audio thread
+static BOOL audioMuteApplied;           // audio thread only
+
+NSString * const VLAudioFollowsModeDefaultsKey = @"audioFollowsOscMode";
+
+BOOL VLAudioFollowsModeEnabled(void) {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    if ([ud objectForKey:VLAudioFollowsModeDefaultsKey] == nil) return YES;
+    return [ud boolForKey:VLAudioFollowsModeDefaultsKey];
+}
+
+void VLSetStreamAudioMuted(BOOL muted) {
+    bool was = atomic_exchange(&audioMuted, (bool)muted);
+    // Drop what SDL already holds right away (it locks the device itself);
+    // the audio thread also clears once on its next packet.
+    if (muted && !was && audioDevice != 0) SDL_ClearQueuedAudio(audioDevice);
+}
 static OPUS_MULTISTREAM_CONFIGURATION audioConfig;
 static void* audioBuffer;
 static int audioFrameSize;
@@ -321,6 +339,15 @@ void ArDecodeAndPlaySample(char* sampleData, int sampleLength)
                                               (float*)audioBuffer,
                                               audioConfig.samplesPerFrame,
                                               0);
+    if (atomic_load(&audioMuted)) {
+        // Drop what is already queued once, so muting is immediate.
+        if (!audioMuteApplied) {
+            SDL_ClearQueuedAudio(audioDevice);
+            audioMuteApplied = YES;
+        }
+        return;
+    }
+    audioMuteApplied = NO;
     if (decodeLen > 0 && !dropForLatency) {
         // Provide backpressure on the queue to ensure too many frames don't build up
         // in SDL's audio queue.

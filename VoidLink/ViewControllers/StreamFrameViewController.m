@@ -32,6 +32,7 @@
 #import "VoidLink-Swift.h"
 #import "OSCProfilesManager.h"
 #import "OSCSceneManager.h"
+#import "Connection.h"
 #import "ThemeManager.h"
 #import "HttpManager.h"
 #import "ServerInfoResponse.h"
@@ -284,6 +285,10 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // The agent's process on top (any mode) and its per-game profile.
     NSString *_hostProcess;
     GameProfile *_gameProfile;
+    // Audio follows Game/Desk (see audio_update).
+    BOOL _audioFollowSession;          // this connection launched with host audio on for it
+    NSString *_audioRouteSent;         // last "ipad"/"host" sent to the live agent, nil = none
+    CFTimeInterval _audioRouteSentAt;
     NSUInteger _nudgeGeneration;             // bumped by every mode switch and by stream stop: queued nudges die
     // OSC visibility model — see "OSC visibility & hide mode".
     BOOL _oscHidden;                         // right-edge swipe / detector
@@ -857,6 +862,7 @@ static const NSInteger kStreamCountdownPickerSecondRows = 6;
     NSLog(@"streamview gestures: %d", (uint32_t)[_streamView.gestureRecognizers count]);
     // Ensure ratio button is created/updated after reconfig
     [self updateSnapRatioButton];
+    [self audio_update];   // the follow switch may have been turned off
     if (_timeLabel && _batteryLabel) {
         [self updateTimeBatteryDisplay];
     }
@@ -2528,7 +2534,38 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     return ([self osc_effectiveHideMode] == OscHideModeGame) ? @"AUTO·GAME" : @"AUTO·DESK";
 }
 
+// Audio follows Game/Desk: game mode plays only on the iPad (the agent moves
+// the PC's default device to the virtual sink, which Sunshine follows), desk
+// mode leaves the PC's audio where it was and mutes the iPad. Follows the
+// effective mode with no extra delay: transient agent parking (dialogs, game
+// lists) never changes the effective mode, so it can't make the audio flap.
+- (void)audio_update {
+    BOOL follow = _hasConnectionStarted && _audioFollowSession && VLAudioFollowsModeEnabled();
+    BOOL game = [self osc_effectiveHideMode] == OscHideModeGame;
+    VLSetStreamAudioMuted(follow && !game);
+    NSString *to = (follow && game) ? @"ipad" : @"host";
+    if (!follow && _audioRouteSent == nil) return;    // never routed: leave the PC alone
+    if (!_hostStateClient || !_hostAgentLive) return;
+    if ([to isEqualToString:_audioRouteSent]) return;
+    Log(LOG_I, @"[Audio] route -> %@", to);
+    [_hostStateClient sendCommand:@"audio_route" arguments:@{@"to": to}];
+    _audioRouteSent = to;
+    _audioRouteSentAt = CACurrentMediaTime();
+}
+
+// The agent reports where the PC's audio is on every heartbeat. A request that
+// didn't take (virtual sink missing for a moment, a send lost) is retried.
+- (void)audio_noteAgentRoute:(NSString *)route {
+    if (route.length == 0 || _audioRouteSent == nil) return;
+    if ([route isEqualToString:_audioRouteSent]) return;
+    if (CACurrentMediaTime() - _audioRouteSentAt < 3.0) return;   // still in flight
+    Log(LOG_I, @"[Audio] agent reports %@, wanted %@: retrying", route, _audioRouteSent);
+    _audioRouteSent = nil;
+    [self audio_update];
+}
+
 - (void)osc_applyPresentation {
+    [self audio_update];
     OscPresentation presentation = OscPresentationShown;
     if (_oscAwaitingStream) {
         presentation = OscPresentationOff;
@@ -2731,6 +2768,7 @@ static NSString *OscContentClassName(StreamContentClass c) {
         _snapRatioOverride = SnapRatioOverrideNone;
     }
     if (classChanged) [self backdrop_updateRegions]; // pause over letterbox bars
+    if (classChanged) [self audio_update];   // audio follows the mode even while the layout editor is open
     // Never yank widgets out from under the layout editor; the state is kept and
     // applied by the next user action / reConfig.
     if (self->_streamView.widgetToolOpened) return;
@@ -2948,6 +2986,8 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     [_hostStateClient stop];
     _hostStateClient = nil;
     _hostAgentLive = NO;
+    _audioRouteSent = nil;                   // the agent restores the PC's device when we disconnect
+    VLSetStreamAudioMuted(NO);
     _nudgeGeneration++;                      // stream stop: nothing queued may reach the host
     [self aspect_noteHostState:nil];
     [self profile_noteHostProcess:nil];
@@ -2960,6 +3000,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
 
 - (void)hostStateClient:(HostStateClient *)client didReceiveState:(HostState *)state {
     if (client != _hostStateClient || !_hostAgentLive) return;
+    [self audio_noteAgentRoute:state.audioRoute];
     [self profile_noteHostProcess:state.process];
     [self agent_noteTransientDesk:state.transientDesk reason:state.reason];
     BOOL gameChanged = [self aspect_noteHostState:state]; // no game on top while transient: no ratio learning
@@ -2976,6 +3017,8 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
 - (void)hostStateClient:(HostStateClient *)client liveChanged:(BOOL)live {
     if (client != _hostStateClient) return;
     _hostAgentLive = live;
+    _audioRouteSent = nil;   // a new link is a new owner on the agent side: resend
+    dispatch_async(dispatch_get_main_queue(), ^{ [self audio_update]; });
     [self aspect_noteHostState:live ? client.lastState : nil];
     [self profile_noteHostProcess:live ? client.lastState.process : nil];
     if (live) {
@@ -4370,6 +4413,8 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     Log(LOG_I, @"Connection started");
     dispatch_async(dispatch_get_main_queue(), ^{
         self->_hasConnectionStarted = YES;
+        self->_audioFollowSession = self.streamConfig.playAudioOnPC && VLAudioFollowsModeEnabled();
+        [self audio_update];
         // Leave the spinner spinning until it's obscured by
         // the first frame of video.
         self->_stageLabel.hidden = YES;
@@ -4451,6 +4496,13 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
 
 - (void)connectionTerminated:(int)errorCode {
     Log(LOG_I, @"Connection terminated: %d", errorCode);
+    // No stream, no reason to keep the PC's audio on the virtual sink (the
+    // agent link may outlive the stream during reconnects / error alerts).
+    // A reconnect that starts streaming takes the route again.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self->_audioFollowSession = NO;
+        [self audio_update];
+    });
 
     unsigned int portFlags = LiGetPortFlagsFromTerminationErrorCode(errorCode);
     unsigned int portTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);

@@ -14,6 +14,14 @@
 
 #define CONN_TEST_SERVER "www.baidu.com"
 
+// "Audio follows Game/Desk": the stream launches with host audio on (Sunshine
+// leaves the PC's default device alone); the host agent moves the PC's default
+// device to the virtual sink in game mode, and the iPad mutes itself in desk mode.
+extern NSString * const VLAudioFollowsModeDefaultsKey;
+BOOL VLAudioFollowsModeEnabled(void);   // default YES
+// Mutes local playback (decoding continues so the Opus state stays in sync).
+void VLSetStreamAudioMuted(BOOL muted);
+
 @interface Connection : NSOperation <NSStreamDelegate>
 
 -(id) initWithConfig:(StreamConfiguration*)config renderer:(VideoDecoderRenderer*)myRenderer connectionCallbacks:(id<ConnectionCallbacks>)callbacks;

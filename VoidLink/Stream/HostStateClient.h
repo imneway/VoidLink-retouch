@@ -23,6 +23,8 @@ static const uint16_t HostStateClientDefaultPort = 48100;
 // top (behind one of its dialogs, or in its launcher / game list). The OSC
 // is parked, not put away: nothing the user chose is cleared.
 @property (nonatomic, readonly) BOOL transientDesk;
+// Where the agent has the PC's audio: "ipad" (default moved to the virtual sink) / "host"; nil from older agents.
+@property (nonatomic, readonly, copy, nullable) NSString *audioRoute;
 @property (nonatomic, readonly, copy, nullable) NSString *process;
 @property (nonatomic, readonly, copy, nullable) NSString *title;
 @property (nonatomic, readonly) BOOL taskbarOnDisplay;
@@ -64,6 +66,8 @@ static const uint16_t HostStateClientDefaultPort = 48100;
 // Sends {"cmd": command} as one JSON line to the agent. Fire-and-forget:
 // dropped (with a log line) when the link is not live. Any queue.
 - (void)sendCommand:(NSString *)command;
+// Same, with extra fields merged into the JSON object.
+- (void)sendCommand:(NSString *)command arguments:(nullable NSDictionary<NSString *, id> *)arguments;
 
 @end
 

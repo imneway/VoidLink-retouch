@@ -28,6 +28,7 @@ static const size_t kMaxLineBytes = 64 * 1024;
     _game = [mode isEqualToString:@"game"];
     _reason = [json[@"reason"] isKindOfClass:[NSString class]] ? [json[@"reason"] copy] : nil;
     _transientDesk = !_game && ([_reason isEqualToString:@"dialog"] || [_reason isEqualToString:@"idle"]);
+    _audioRoute = [json[@"audio"] isKindOfClass:[NSString class]] ? [json[@"audio"] copy] : nil;
     NSDictionary *top = [json[@"top"] isKindOfClass:[NSDictionary class]] ? json[@"top"] : nil;
     _process = [top[@"process"] isKindOfClass:[NSString class]] ? [top[@"process"] copy] : nil;
     _title = [top[@"title"] isKindOfClass:[NSString class]] ? [top[@"title"] copy] : nil;
@@ -117,13 +118,19 @@ static const size_t kMaxLineBytes = 64 * 1024;
 }
 
 - (void)sendCommand:(NSString *)command {
+    [self sendCommand:command arguments:nil];
+}
+
+- (void)sendCommand:(NSString *)command arguments:(NSDictionary<NSString *, id> *)arguments {
+    NSMutableDictionary *message = [NSMutableDictionary dictionaryWithDictionary:arguments ?: @{}];
+    message[@"cmd"] = command;
     dispatch_async(_queue, ^{
         nw_connection_t connection = self->_connection;
         if (!connection || !self->_live) {
             Log(LOG_W, @"[HostAgent] cmd %@ dropped: link not live", command);
             return;
         }
-        NSData *json = [NSJSONSerialization dataWithJSONObject:@{@"cmd": command} options:0 error:nil];
+        NSData *json = [NSJSONSerialization dataWithJSONObject:message options:0 error:nil];
         if (!json) return;
         NSMutableData *line = [json mutableCopy];
         [line appendBytes:"\n" length:1];

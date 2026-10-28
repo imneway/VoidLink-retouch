@@ -10,6 +10,7 @@
 //
 
 #import "SettingsViewController.h"
+#import "Connection.h"
 #import "TemporarySettings.h"
 #import "DataManager.h"
 #import "ControllerSupport.h"   // VoidGyroSettingsDidChangeNotification
@@ -27,6 +28,7 @@
 
 @implementation SettingsViewController {
     UISwitch *_streamTouchBlockSwitch;
+    UISwitch *_audioFollowsModeSwitch;
     NSLayoutConstraint *parentStackLeadingConstraint;
     NSLayoutConstraint *parentStackWidthConstraint;
     
@@ -669,6 +671,39 @@ BOOL isCustomResolution(int resolutionSelected) {
     else [parent insertArrangedSubview:row atIndex:index + 1];
 }
 
+// "Audio follows Game/Desk": game mode plays only on the iPad, desk mode keeps
+// the PC's audio and mutes the iPad (needs the host agent). While on, the
+// stream always launches with host audio on, so "Play audio on PC" is moot.
+- (UIStackView *)audioFollowsModeStack {
+    UILabel *reference = nil;
+    for (UIView *view in self.audioOnPcStack.arrangedSubviews) {
+        if ([view isKindOfClass:[UILabel class]]) { reference = (UILabel *)view; break; }
+    }
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.font = reference ? reference.font : [UIFont systemFontOfSize:17];
+    label.textColor = reference ? reference.textColor : [UIColor labelColor];
+    label.textAlignment = reference ? reference.textAlignment : NSTextAlignmentLeft;
+    label.numberOfLines = 0;
+    label.text = [LocalizationHelper localizedStringForKey:@"Audio follows Game/Desk mode"];
+
+    _audioFollowsModeSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    _audioFollowsModeSwitch.onTintColor = self.audioOnPcSwitch.onTintColor;
+    [_audioFollowsModeSwitch setOn:VLAudioFollowsModeEnabled()];
+    [_audioFollowsModeSwitch addTarget:self action:@selector(audioFollowsModeSwitchFlipped:) forControlEvents:UIControlEventValueChanged];
+    return [self swapButtonRowWithLabel:label switch:_audioFollowsModeSwitch];
+}
+
+- (void)audioFollowsModeSwitchFlipped:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:VLAudioFollowsModeDefaultsKey];
+    [self updateAudioOnPcAvailability];
+}
+
+- (void)updateAudioOnPcAvailability {
+    BOOL follow = VLAudioFollowsModeEnabled();
+    self.audioOnPcSwitch.enabled = !follow;
+    self.audioOnPcStack.alpha = follow ? 0.4 : 1.0;
+}
+
 // "Clear learned screen ratios": forgets which games were learned as
 // full-display and every per-game ratio choice (GameAspectMemory).
 - (UIStackView *)aspectMemoryResetStack {
@@ -1030,6 +1065,7 @@ BOOL isCustomResolution(int resolutionSelected) {
         [audioSection setSectionWithIcon:[UIImage imageNamed:@"speaker.wave.2"] andSize:20];
     }
     
+    [self addSetting:[self audioFollowsModeStack] ofId:@"audioFollowsModeStack" withInfoTag:NO withDynamicLabel:NO to:audioSection];
     [self addSetting:self.audioOnPcStack ofId:@"audioOnPcStack" withInfoTag:NO withDynamicLabel:NO to:audioSection];
     [self addSetting:self.audioConfigStack ofId:@"audioConfigStack" withInfoTag:NO withDynamicLabel:NO to:audioSection];
     [audioSection addToParentStack:_parentStack];
@@ -1909,6 +1945,7 @@ BOOL isCustomResolution(int resolutionSelected) {
 
 
     [self.audioOnPcSwitch setOn:currentSettings.playAudioOnPC];
+    [self updateAudioOnPcAvailability];
     _lastSelectedResolutionIndex = resolution;
     [self.resolutionSelector setSelectedSegmentIndex:resolution];
     [self.resolutionSelector addTarget:self action:@selector(newResolutionChosen) forControlEvents:UIControlEventValueChanged];
