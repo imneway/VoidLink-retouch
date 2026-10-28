@@ -236,6 +236,7 @@ static const size_t kMaxLineBytes = 64 * 1024;
         if (![json isKindOfClass:[NSDictionary class]]) continue;
         HostState *state = [[HostState alloc] initWithJSON:json];
         _lastState = state;
+        [self queue_sendPing];
         [self queue_armStaleTimer];
         [self queue_setLive:YES];
         __weak typeof(self) weakSelf = self;
@@ -245,6 +246,17 @@ static const size_t kMaxLineBytes = 64 * 1024;
             [self.delegate hostStateClient:self didReceiveState:state];
         });
     }
+}
+
+// Answer every state line (the agent's ~1 s heartbeat) with "ping": the agent
+// takes silence as "this iPad is gone" (app suspended in the background keeps
+// its socket open but stops reading) and gives the PC its audio back.
+- (void)queue_sendPing {
+    nw_connection_t connection = _connection;
+    if (!connection) return;
+    static const char ping[] = "ping\n";
+    dispatch_data_t payload = dispatch_data_create(ping, sizeof(ping) - 1, _queue, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+    nw_connection_send(connection, payload, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, false, ^(nw_error_t error) {});
 }
 
 - (void)queue_armStaleTimer {

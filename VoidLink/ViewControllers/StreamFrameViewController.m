@@ -289,6 +289,14 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     BOOL _audioFollowSession;          // this connection launched with host audio on for it
     NSString *_audioRouteSent;         // last "ipad"/"host" sent to the live agent, nil = none
     CFTimeInterval _audioRouteSentAt;
+    BOOL _audioHostKnown;              // the live agent has given a (non-transient) verdict
+    BOOL _audioHostGame;               // ...and it says a game is what's on the streamed display
+    NSUInteger _audioHostToken;        // pending game -> desk hold
+    BOOL _audioLeavePending;           // that hold is running (repeated desk lines don't restart it)
+    NSString *_audioHostProcess;       // top process of the last non-transient agent state
+    BOOL _audioOverrideTracked;        // a manual GAME is in force...
+    NSString *_audioOverrideProcess;   // ...for the process that was on top when it was set
+    NSUInteger _audioRetryCount;
     NSUInteger _nudgeGeneration;             // bumped by every mode switch and by stream stop: queued nudges die
     // OSC visibility model — see "OSC visibility & hide mode".
     BOOL _oscHidden;                         // right-edge swipe / detector
@@ -2534,14 +2542,73 @@ static NSString * const kOscHiddenKey = @"oscHidden";
     return ([self osc_effectiveHideMode] == OscHideModeGame) ? @"AUTO·GAME" : @"AUTO·DESK";
 }
 
-// Audio follows Game/Desk: game mode plays only on the iPad (the agent moves
-// the PC's default device to the virtual sink, which Sunshine follows), desk
-// mode leaves the PC's audio where it was and mutes the iPad. Follows the
-// effective mode with no extra delay: transient agent parking (dialogs, game
-// lists) never changes the effective mode, so it can't make the audio flap.
+// Audio follows the environment, not the OSC mode: a game on the streamed
+// display plays only on the iPad (the agent moves the PC's default device to the
+// virtual sink, which Sunshine follows); the desktop keeps the PC's audio and
+// mutes the iPad. The OSC mode is not the environment: BG3 flips to DESK for
+// keyboard and mouse while the game keeps running. So with a live agent its
+// game verdict decides (learned games and emulator profiles included; dialogs
+// and game lists keep the previous verdict), and a manual GAME also counts (a
+// windowed game the agent doesn't know yet) — but only for the process that was
+// on top when it was set: a GAME left on while moving to other desktop apps
+// (the agent saw desk all along, so nothing reset it) must not keep the audio.
+// Without the agent, the effective mode is all there is.
+- (BOOL)audio_resolveEnvironmentIsGame {
+    // Track the override first, agent or not: any change away from GAME ends it,
+    // and the next GAME binds to whatever is on top then.
+    if (_oscModeOverride != OscHideModeGame) _audioOverrideTracked = NO;
+    if (!_audioHostKnown) return [self osc_effectiveHideMode] == OscHideModeGame;
+    BOOL manualGame = NO;
+    if (_oscModeOverride == OscHideModeGame) {
+        // The last non-transient process: a dialog of another process popping
+        // up must not end the manual GAME.
+        NSString *process = _audioHostProcess ?: @"";
+        if (!_audioOverrideTracked) {
+            _audioOverrideTracked = YES;
+            _audioOverrideProcess = process;
+        }
+        manualGame = [process isEqualToString:_audioOverrideProcess];
+    }
+    return _audioHostGame || manualGame;
+}
+
+// Desk -> game is immediate; game -> desk waits a moment, so a launcher or a
+// focus hop while a game starts or switches windows doesn't bounce the audio.
+static const NSTimeInterval kAudioLeaveGameHold = 1.0;
+
+- (void)audio_noteHostGame:(BOOL)game process:(NSString *)process {
+    _audioHostProcess = [process copy];
+    if (game || !_audioHostKnown) {
+        if (_audioLeavePending) { _audioHostToken++; _audioLeavePending = NO; }   // the game came back
+        BOOL changed = !_audioHostKnown || game != _audioHostGame;
+        _audioHostKnown = YES;
+        _audioHostGame = game;
+        if (changed) [self audio_update];
+        return;
+    }
+    if (!_audioHostGame || _audioLeavePending) return;   // already desk, or the hold is running
+    _audioLeavePending = YES;
+    NSUInteger token = ++_audioHostToken;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kAudioLeaveGameHold * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (token != self->_audioHostToken || !self->_audioHostKnown) return;
+        self->_audioLeavePending = NO;
+        self->_audioHostGame = NO;
+        [self audio_update];
+    });
+}
+
+- (void)audio_forgetHost {
+    _audioHostToken++;
+    _audioLeavePending = NO;
+    _audioHostKnown = NO;
+    _audioHostGame = NO;
+    _audioHostProcess = nil;
+    _audioOverrideTracked = NO;   // rebinds to what's on top once the agent is back
+}
+
 - (void)audio_update {
     BOOL follow = _hasConnectionStarted && _audioFollowSession && VLAudioFollowsModeEnabled();
-    BOOL game = [self osc_effectiveHideMode] == OscHideModeGame;
+    BOOL game = [self audio_resolveEnvironmentIsGame];
     VLSetStreamAudioMuted(follow && !game);
     NSString *to = (follow && game) ? @"ipad" : @"host";
     if (!follow && _audioRouteSent == nil) return;    // never routed: leave the PC alone
@@ -2557,8 +2624,12 @@ static NSString * const kOscHiddenKey = @"oscHidden";
 // didn't take (virtual sink missing for a moment, a send lost) is retried.
 - (void)audio_noteAgentRoute:(NSString *)route {
     if (route.length == 0 || _audioRouteSent == nil) return;
-    if ([route isEqualToString:_audioRouteSent]) return;
-    if (CACurrentMediaTime() - _audioRouteSentAt < 3.0) return;   // still in flight
+    if ([route isEqualToString:_audioRouteSent]) { _audioRetryCount = 0; return; }
+    // 3 s for a request still in flight, then back off (a missing virtual sink
+    // would otherwise be retried, and logged on the PC, every few seconds).
+    NSTimeInterval wait = _audioRetryCount == 0 ? 3.0 : 15.0;
+    if (CACurrentMediaTime() - _audioRouteSentAt < wait) return;
+    _audioRetryCount++;
     Log(LOG_I, @"[Audio] agent reports %@, wanted %@: retrying", route, _audioRouteSent);
     _audioRouteSent = nil;
     [self audio_update];
@@ -2987,6 +3058,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     _hostStateClient = nil;
     _hostAgentLive = NO;
     _audioRouteSent = nil;                   // the agent restores the PC's device when we disconnect
+    [self audio_forgetHost];
     VLSetStreamAudioMuted(NO);
     _nudgeGeneration++;                      // stream stop: nothing queued may reach the host
     [self aspect_noteHostState:nil];
@@ -3001,6 +3073,8 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
 - (void)hostStateClient:(HostStateClient *)client didReceiveState:(HostState *)state {
     if (client != _hostStateClient || !_hostAgentLive) return;
     [self audio_noteAgentRoute:state.audioRoute];
+    if (!state.transientDesk) [self audio_noteHostGame:state.game process:state.process];
+    [self audio_update];   // the top process may have changed (manual GAME is per process); deduped
     [self profile_noteHostProcess:state.process];
     [self agent_noteTransientDesk:state.transientDesk reason:state.reason];
     BOOL gameChanged = [self aspect_noteHostState:state]; // no game on top while transient: no ratio learning
@@ -3018,6 +3092,11 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     if (client != _hostStateClient) return;
     _hostAgentLive = live;
     _audioRouteSent = nil;   // a new link is a new owner on the agent side: resend
+    _audioRetryCount = 0;
+    [self audio_forgetHost];
+    if (live && client.lastState && !client.lastState.transientDesk) {
+        [self audio_noteHostGame:client.lastState.game process:client.lastState.process];
+    }
     dispatch_async(dispatch_get_main_queue(), ^{ [self audio_update]; });
     [self aspect_noteHostState:live ? client.lastState : nil];
     [self profile_noteHostProcess:live ? client.lastState.process : nil];
