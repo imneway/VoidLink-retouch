@@ -19,9 +19,9 @@ static const uint16_t HostStateClientDefaultPort = 48100;
 @property (nonatomic, readonly) BOOL game;               // mode == "game"
 @property (nonatomic, readonly, copy) NSString *mode;
 @property (nonatomic, readonly, copy, nullable) NSString *reason;
-// mode == "desk" with reason "dialog" / "idle": the game process is still on
-// top (behind one of its dialogs, or in its launcher / game list). The OSC
-// is parked, not put away: nothing the user chose is cleared.
+// mode == "desk" with reason "dialog": the game process is still on top,
+// behind one of its dialogs. The OSC is parked, not put away: nothing the
+// user chose is cleared. (reason "idle", an emulator's game list, is a real desk.)
 @property (nonatomic, readonly) BOOL transientDesk;
 // Where the agent has the PC's audio: "ipad" (default moved to the virtual sink) / "host"; nil from older agents.
 @property (nonatomic, readonly, copy, nullable) NSString *audioRoute;

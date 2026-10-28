@@ -27,7 +27,10 @@ static const size_t kMaxLineBytes = 64 * 1024;
     _mode = [mode copy];
     _game = [mode isEqualToString:@"game"];
     _reason = [json[@"reason"] isKindOfClass:[NSString class]] ? [json[@"reason"] copy] : nil;
-    _transientDesk = !_game && ([_reason isEqualToString:@"dialog"] || [_reason isEqualToString:@"idle"]);
+    // Only dialogs are a passing moment over a running game. "idle" (an
+    // emulator's game list, no game running) is the desktop for real: AUTO·DESK,
+    // the PC's audio, and the game's manual settings end with the game.
+    _transientDesk = !_game && [_reason isEqualToString:@"dialog"];
     _audioRoute = [json[@"audio"] isKindOfClass:[NSString class]] ? [json[@"audio"] copy] : nil;
     NSDictionary *top = [json[@"top"] isKindOfClass:[NSDictionary class]] ? json[@"top"] : nil;
     _process = [top[@"process"] isKindOfClass:[NSString class]] ? [top[@"process"] copy] : nil;
