@@ -41,7 +41,11 @@ private func L(_ key: String, _ args: CVarArg...) -> String {
             ctx.cgContext.setBlendMode(.destinationOut)
             if let name = symbolName,
                let symbol = UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: d * 0.5, weight: .semibold)) {
-                draw(symbol, fittingIn: rect.insetBy(dx: d * 0.24, dy: d * 0.24), blendMode: .destinationOut)
+                // Same visual weight whatever the symbol's shape: a wide one
+                // (keyboard) fitted to the box read much bigger than the digits
+                // inside the disc symbols next to it. Scale by area, then keep it
+                // inside the box.
+                draw(symbol, fittingIn: rect.insetBy(dx: d * 0.24, dy: d * 0.24), areaSide: d * 0.36, blendMode: .destinationOut)
             } else {
                 let text = initials(of: alias) as NSString
                 let attrs: [NSAttributedString.Key: Any] = [
@@ -63,10 +67,11 @@ private func L(_ key: String, _ args: CVarArg...) -> String {
         return UIImage(systemName: name) != nil
     }
 
-    private static func draw(_ symbol: UIImage, fittingIn box: CGRect, blendMode: CGBlendMode) {
+    private static func draw(_ symbol: UIImage, fittingIn box: CGRect, areaSide: CGFloat? = nil, blendMode: CGBlendMode) {
         let s = symbol.size
         guard s.width > 0, s.height > 0 else { return }
-        let scale = min(box.width / s.width, box.height / s.height)
+        var scale = min(box.width / s.width, box.height / s.height)
+        if let side = areaSide { scale = min(scale, side / (s.width * s.height).squareRoot()) }
         let w = s.width * scale, h = s.height * scale
         let target = CGRect(x: box.midX - w / 2, y: box.midY - h / 2, width: w, height: h)
         symbol.withTintColor(.black, renderingMode: .alwaysOriginal).draw(in: target, blendMode: blendMode, alpha: 1)

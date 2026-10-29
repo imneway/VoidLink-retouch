@@ -23,11 +23,6 @@ import UIKit
 @objc public class ToolboxViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
     
     @objc weak var specialEntryDelegate: ToolboxSpecialEntryDelegate?
-    private static let emptyIconSlot: UIImage = {
-        let format = UIGraphicsImageRendererFormat.preferred()
-        format.opaque = false
-        return UIGraphicsImageRenderer(size: CGSize(width: 28, height: 28), format: format).image { _ in }
-    }()
     public let tableView = UITableView()
     private let addButton = UIButton(type: .system)
     private let deleteButton = UIButton(type: .system)
@@ -351,11 +346,9 @@ import UIKit
                 ]))
                 cell.textLabel?.attributedText = text
             }
-            // Only pinned commands show their quick-menu icon; the rest keep an
-            // empty slot of the same size so every alias stays aligned.
-            cell.imageView?.image = command.pinned
-                ? QuickMenuIcon.image(for: command, diameter: 28)
-                : ToolboxViewController.emptyIconSlot
+            // Only pinned commands show their quick-menu icon; the rest start at
+            // the left edge like the built-in entries above them.
+            cell.imageView?.image = command.pinned ? QuickMenuIcon.image(for: command, diameter: 28) : nil
             cell.imageView?.tintColor = UIColor(white: 1, alpha: 0.6)
             if command.pinned {
                 let pin = UIImageView(image: UIImage(systemName: "pin.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14)))
