@@ -36,24 +36,29 @@ private func L(_ key: String, _ args: CVarArg...) -> String {
                 draw(symbol, fittingIn: rect, blendMode: .normal)
                 return
             }
-            UIColor.black.setFill()
-            UIBezierPath(ovalIn: rect).fill()
+            // The disc is the "circle.fill" symbol drawn exactly like the disc
+            // symbols above, not a full-size oval: SF symbol images carry some
+            // padding, so a plain oval came out a size bigger than its neighbours.
+            var disc = rect
+            if let circle = UIImage(systemName: "circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: d)) {
+                disc = draw(circle, fittingIn: rect, blendMode: .normal)
+            } else {
+                UIColor.black.setFill()
+                UIBezierPath(ovalIn: rect).fill()
+            }
+            let k = disc.width
             ctx.cgContext.setBlendMode(.destinationOut)
             if let name = symbolName,
-               let symbol = UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: d * 0.5, weight: .semibold)) {
-                // Same visual weight whatever the symbol's shape: a wide one
-                // (keyboard) fitted to the box read much bigger than the digits
-                // inside the disc symbols next to it. Scale by area, then keep it
-                // inside the box.
-                draw(symbol, fittingIn: rect.insetBy(dx: d * 0.24, dy: d * 0.24), areaSide: d * 0.36, blendMode: .destinationOut)
+               let symbol = UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: k * 0.5, weight: .semibold)) {
+                draw(symbol, fittingIn: disc.insetBy(dx: k * 0.24, dy: k * 0.24), blendMode: .destinationOut)
             } else {
                 let text = initials(of: alias) as NSString
                 let attrs: [NSAttributedString.Key: Any] = [
-                    .font: UIFont.systemFont(ofSize: d * (text.length > 1 ? 0.36 : 0.44), weight: .bold),
+                    .font: UIFont.systemFont(ofSize: k * (text.length > 1 ? 0.36 : 0.44), weight: .bold),
                     .foregroundColor: UIColor.black,
                 ]
                 let size = text.size(withAttributes: attrs)
-                text.draw(at: CGPoint(x: (d - size.width) / 2, y: (d - size.height) / 2), withAttributes: attrs)
+                text.draw(at: CGPoint(x: disc.midX - size.width / 2, y: disc.midY - size.height / 2), withAttributes: attrs)
             }
         }
         return image.withRenderingMode(.alwaysTemplate)
@@ -67,14 +72,16 @@ private func L(_ key: String, _ args: CVarArg...) -> String {
         return UIImage(systemName: name) != nil
     }
 
-    private static func draw(_ symbol: UIImage, fittingIn box: CGRect, areaSide: CGFloat? = nil, blendMode: CGBlendMode) {
+    // Returns the rect the symbol was drawn in.
+    @discardableResult
+    private static func draw(_ symbol: UIImage, fittingIn box: CGRect, blendMode: CGBlendMode) -> CGRect {
         let s = symbol.size
-        guard s.width > 0, s.height > 0 else { return }
-        var scale = min(box.width / s.width, box.height / s.height)
-        if let side = areaSide { scale = min(scale, side / (s.width * s.height).squareRoot()) }
+        guard s.width > 0, s.height > 0 else { return box }
+        let scale = min(box.width / s.width, box.height / s.height)
         let w = s.width * scale, h = s.height * scale
         let target = CGRect(x: box.midX - w / 2, y: box.midY - h / 2, width: w, height: h)
         symbol.withTintColor(.black, renderingMode: .alwaysOriginal).draw(in: target, blendMode: blendMode, alpha: 1)
+        return target
     }
 
     // "Xbox Game Bar" -> "XG", "Eden" -> "Ed", "复制(Copy)" -> "复".
