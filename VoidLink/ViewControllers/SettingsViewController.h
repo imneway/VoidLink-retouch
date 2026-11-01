@@ -114,10 +114,6 @@
 @property (strong, nonatomic) UIStackView *mapGyroToStack;
 @property (strong, nonatomic) UILabel *mapGyroToLabel;
 @property (strong, nonatomic) UISegmentedControl *mapGyroToSelector;
-// Built programmatically. Apple Pencil Pro barrel roll while hovering:
-// off / arrow keys / wheel; persisted under NSUserDefaults @"pencilRollMode".
-@property (strong, nonatomic) UIStackView *pencilRollModeStack;
-@property (strong, nonatomic) UISegmentedControl *pencilRollModeSelector;
 // Stationary pencil contact: off / long press = right / long press + hard press.
 @property (strong, nonatomic) UIStackView *pencilHoldModeStack;
 @property (strong, nonatomic) UISegmentedControl *pencilHoldModeSelector;

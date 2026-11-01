@@ -28,12 +28,6 @@ typedef NS_ENUM(NSInteger, TouchMode) {
     NativeTouchOnly
 };
 
-// Apple Pencil Pro barrel roll while hovering (NSUserDefaults @"pencilRollMode").
-typedef NS_ENUM(NSInteger, PencilRollMode) {
-    PencilRollModeOff = 0,
-    PencilRollModeArrowKeys = 1, // one Up/Down key per step
-    PencilRollModeWheel = 2,     // one wheel notch per step
-};
 // What a stationary Apple Pencil contact becomes (NSUserDefaults @"pencilHoldMode").
 // Off: the left button goes down on contact (hold = left hold). Otherwise the
 // press is withheld until the contact declares itself: move = left drag,
@@ -62,16 +56,13 @@ typedef NS_ENUM(NSInteger, PencilHoldMode) {
 #define PalmRadiusThresholdDefault 40.0f // pt; fingertips measure 10–25
 #define PalmRadiusThresholdMin 25.0f
 #define PalmRadiusThresholdMax 80.0f
-// Pencil tuning (NSUserDefaults @"pencilRollStep" and the keys below).
+// Pencil tuning (NSUserDefaults keys below).
 // Squeeze scroll is quantized to whole wheel notches (one notch = what every
 // app treats as a wheel click, with a haptic tick): this many points of hover
 // travel per notch. NSUserDefaults @"pencilScrollPointsPerNotch".
 #define PencilScrollPointsPerNotchDefault 8.0f
 #define PencilScrollPointsPerNotchMin 3.0f
 #define PencilScrollPointsPerNotchMax 30.0f
-#define PencilRollStepDefault 30.0f     // degrees per step
-#define PencilRollStepMin 10.0f
-#define PencilRollStepMax 90.0f
 // Squeeze scroll, continuous zone: beyond this many points from the zone
 // centre the scroll runs on its own, up to this many notches per second at
 // the far end of a 120pt ramp. Pulling back inside re-centres the zone. NSUserDefaults @"pencilScrollZoneRadius" / @"pencilScrollMaxRate".

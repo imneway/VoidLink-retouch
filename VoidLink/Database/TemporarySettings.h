@@ -36,18 +36,12 @@
 // Where iPad gyroscope sensor data is routed; see MapGyroTo enum.
 // Stored in NSUserDefaults under @"mapGyroTo".
 @property (nonatomic, retain) NSNumber * mapGyroTo;
-// What an Apple Pencil Pro barrel roll does while hovering; see PencilRollMode.
-// Stored in NSUserDefaults under @"pencilRollMode"; defaults to arrow keys.
-@property (nonatomic, retain) NSNumber * pencilRollMode;
 // Pencil squeeze-and-move scroll: points of hover travel per wheel notch
 // (NSUserDefaults @"pencilScrollPointsPerNotch") and whether the content
 // follows the tip (YES, touch-like) or the tip drags the scrollbar (NO).
 // NSUserDefaults @"pencilScrollFollowsTip", default YES.
 @property (nonatomic, retain) NSNumber * pencilScrollPointsPerNotch;
 @property (nonatomic, assign) BOOL pencilScrollFollowsTip;
-// Pencil roll: degrees per step (and the engage dead zone).
-// NSUserDefaults @"pencilRollStep", default 30.
-@property (nonatomic, retain) NSNumber * pencilRollStep;
 // Squeeze scroll continuous zone, see DataManager.h PencilScrollZoneRadius* / PencilScrollMaxRate*.
 @property (nonatomic, retain) NSNumber * pencilScrollZoneRadius;
 @property (nonatomic, retain) NSNumber * pencilScrollMaxRate;

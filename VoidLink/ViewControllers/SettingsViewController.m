@@ -1016,8 +1016,6 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self addSetting:self.palmRejectionStack ofId:@"palmRejectionStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self installPencilHoldModeControl];
     [self addSetting:self.pencilHoldModeStack ofId:@"pencilHoldModeStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
-    [self installPencilRollModeControl];
-    [self addSetting:self.pencilRollModeStack ofId:@"pencilRollModeStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self installPencilScrollFollowsTipControl];
     [self addSetting:self.pencilScrollFollowsTipStack ofId:@"pencilScrollFollowsTipStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self installPencilSliderControls];
@@ -1651,7 +1649,9 @@ BOOL isCustomResolution(int resolutionSelected) {
     
     [self loadFavoriteSettingStackIdentifiers];
     for(NSString* settingIdentifier in _favoriteSettingStackIdentifiers){
-        [_parentStack addArrangedSubview:_settingStackDict[settingIdentifier]];
+        // A favorite saved by an older build may name a setting that no longer exists.
+        UIView *settingStack = _settingStackDict[settingIdentifier];
+        if (settingStack) [_parentStack addArrangedSubview:settingStack];
     }
     [self hideDynamicLabelsWhenOverlapped:self.parentStack];
     [self layoutSettingsView];
@@ -2359,34 +2359,6 @@ BOOL isCustomResolution(int resolutionSelected) {
     self.mapGyroToStack.translatesAutoresizingMaskIntoConstraints = NO;
 }
 
-// Apple Pencil Pro barrel roll while hovering. NSUserDefaults @"pencilRollMode",
-// persisted immediately; StreamView reads it through TemporarySettings on
-// every (re)configure. Order matches PencilRollMode: Off=0, ArrowKeys=1, Wheel=2.
-- (void) installPencilRollModeControl {
-    UILabel *label = [[UILabel alloc] init];
-    label.text = [LocalizationHelper localizedStringForKey:@"Pencil Roll"];
-    label.font = [UIFont systemFontOfSize:18];
-    label.textColor = [UIColor whiteColor];
-
-    self.pencilRollModeSelector = [[UISegmentedControl alloc] initWithItems:@[
-        [LocalizationHelper localizedStringForKey:@"Off"],
-        [LocalizationHelper localizedStringForKey:@"Arrow Keys"],
-        [LocalizationHelper localizedStringForKey:@"Wheel"],
-    ]];
-    id saved = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilRollMode"];
-    NSInteger savedIndex = saved ? [saved integerValue] : PencilRollModeArrowKeys;
-    if (savedIndex < 0 || savedIndex > 2) savedIndex = PencilRollModeArrowKeys;
-    self.pencilRollModeSelector.selectedSegmentIndex = savedIndex;
-    [self.pencilRollModeSelector setTitleTextAttributes:@{ NSForegroundColorAttributeName: [UIColor whiteColor] } forState:UIControlStateNormal];
-    [self.pencilRollModeSelector addTarget:self action:@selector(pencilRollModeChanged:) forControlEvents:UIControlEventValueChanged];
-
-    self.pencilRollModeStack = [[UIStackView alloc] initWithArrangedSubviews:@[label, self.pencilRollModeSelector]];
-    self.pencilRollModeStack.axis = UILayoutConstraintAxisVertical;
-    self.pencilRollModeStack.spacing = 4;
-    self.pencilRollModeStack.alignment = UIStackViewAlignmentFill;
-    self.pencilRollModeStack.translatesAutoresizingMaskIntoConstraints = NO;
-}
-
 // Palm rejection on the stream surface. NSUserDefaults @"palmRejection", default YES.
 - (void) installPalmRejectionControl {
     UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
@@ -2437,7 +2409,6 @@ BOOL isCustomResolution(int resolutionSelected) {
         @[@"palmRadiusThreshold",    @"Palm Radius Threshold",       @"pt", @(PalmRadiusThresholdMin),    @(PalmRadiusThresholdMax),    @(PalmRadiusThresholdDefault)],
         @[@"pencilHoldDelay",        @"Pencil Hold Delay",           @"ms", @(PencilHoldDelayMin),        @(PencilHoldDelayMax),        @(PencilHoldDelayDefault)],
         @[@"pencilHardPressThreshold", @"Pencil Hard Press Threshold", @"%", @(PencilHardPressThresholdMin), @(PencilHardPressThresholdMax), @(PencilHardPressThresholdDefault)],
-        @[@"pencilRollStep",         @"Pencil Roll Step",            @"°", @(PencilRollStepMin),         @(PencilRollStepMax),         @(PencilRollStepDefault)],
         @[@"pencilScrollPointsPerNotch", @"Pencil Scroll Points Per Notch", @"pt", @(PencilScrollPointsPerNotchMin), @(PencilScrollPointsPerNotchMax), @(PencilScrollPointsPerNotchDefault)],
         @[@"pencilScrollZoneRadius", @"Pencil Scroll Zone Radius",   @"pt", @(PencilScrollZoneRadiusMin), @(PencilScrollZoneRadiusMax), @(PencilScrollZoneRadiusDefault)],
         @[@"pencilScrollMaxRate",    @"Pencil Scroll Max Speed",     @"/s", @(PencilScrollMaxRateMin),    @(PencilScrollMaxRateMax),    @(PencilScrollMaxRateDefault)],
@@ -2515,10 +2486,6 @@ BOOL isCustomResolution(int resolutionSelected) {
 
 - (void) pencilHoldModeChanged:(UISegmentedControl* )sender {
     [[NSUserDefaults standardUserDefaults] setInteger:sender.selectedSegmentIndex forKey:@"pencilHoldMode"];
-}
-
-- (void) pencilRollModeChanged:(UISegmentedControl* )sender {
-    [[NSUserDefaults standardUserDefaults] setInteger:sender.selectedSegmentIndex forKey:@"pencilRollMode"];
 }
 
 - (void) mapGyroToChanged:(UISegmentedControl* )sender {

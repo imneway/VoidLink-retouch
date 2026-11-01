@@ -148,14 +148,10 @@ static BOOL BoolForUserDefaultKeyWithLegacyFallback(NSString *key, NSString *leg
     // mapGyroTo defaults to Motion (= 0), preserving legacy DS4-only behavior
     // for users upgrading without explicitly choosing a value.
     self.mapGyroTo = [NSNumber numberWithInteger:[[NSUserDefaults standardUserDefaults] integerForKey:@"mapGyroTo"]];
-    id pencilRoll = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilRollMode"];
-    self.pencilRollMode = pencilRoll ? @([pencilRoll integerValue]) : @(PencilRollModeArrowKeys);
     id pencilScrollPointsPerNotch = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollPointsPerNotch"];
     self.pencilScrollPointsPerNotch = pencilScrollPointsPerNotch ? @([pencilScrollPointsPerNotch floatValue]) : @(PencilScrollPointsPerNotchDefault);
     id pencilScrollFollowsTip = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollFollowsTip"];
     self.pencilScrollFollowsTip = pencilScrollFollowsTip ? [pencilScrollFollowsTip boolValue] : YES;
-    id pencilRollStep = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilRollStep"];
-    self.pencilRollStep = pencilRollStep ? @([pencilRollStep floatValue]) : @(PencilRollStepDefault);
     id pencilScrollZoneRadius = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollZoneRadius"];
     self.pencilScrollZoneRadius = pencilScrollZoneRadius ? @([pencilScrollZoneRadius floatValue]) : @(PencilScrollZoneRadiusDefault);
     id pencilScrollMaxRate = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollMaxRate"];

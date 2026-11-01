@@ -42,11 +42,6 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 // to settings.pencilScrollMaxRate this many points further out.
 #define PENCIL_SCROLL_RATE_MIN 4.0
 #define PENCIL_SCROLL_RATE_RAMP_POINTS 120.0
-// Barrel roll while hovering (Pencil Pro): degrees per step (and the engage
-// dead zone) come from settings.pencilRollStep. How far (points) the tip may
-// travel between hover samples before the roll is dropped as an ordinary
-// move / regrip.
-#define PENCIL_ROLL_MAX_TIP_TRAVEL 4.0f
 // Pencil taps: a second tap this soon and this close (normalized to the view)
 // to the last lift keeps the host cursor where it was, so Windows sees the
 // two clicks at one spot and makes a double click of them (SM_CXDOUBLECLK is
@@ -162,13 +157,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     CFTimeInterval pencilScrollLastTick;
     double pencilScrollRateNotchesPerSec; // signed
     double pencilScrollCarry;        // fractional notches not yet sent
-    // Barrel roll (Pencil Pro) while hovering, see handlePencilRoll:
-    BOOL pencilRollTracking;         // have a reference angle for this hover
-    BOOL pencilRollEngaged;          // past the dead zone: stepping, cursor frozen
-    CGFloat pencilRollLastAngle;     // radians, last hover sample
-    CGFloat pencilRollAccumulated;   // degrees since the last step / dead-zone start
-    CGPoint pencilRollLastLocation;  // tip position at the last hover sample
-    UICanvasFeedbackGenerator *pencilRollFeedback; // the only generator the Pencil Pro plays; built lazily by pencilHapticConfirm / pencilHapticTick
+    UICanvasFeedbackGenerator *pencilHapticFeedback; // the only generator the Pencil Pro plays; built lazily by pencilHapticConfirm / pencilHapticTick
     NSMutableSet* keysDown;
     float streamAspectRatio;
 
@@ -1429,27 +1418,27 @@ static __weak StreamView *sPalmClassifier = nil;
 // time it is needed while the view is on screen (a generator made before the
 // view had a window never plays) and rebuilt if the window changes. Apple
 // engineers also say the pencil may refuse to vibrate while it is only
-// hovering, so the wheel / roll ticks during hover may stay silent by design.
+// hovering, so the wheel ticks during hover may stay silent by design.
 - (UICanvasFeedbackGenerator *)pencilHapticGenerator API_AVAILABLE(ios(17.5)) {
     UIWindow *window = self.window;
     if (!window) {
         Log(LOG_W, @"Pencil haptic: no window, skipped");
         return nil;
     }
-    if (!pencilRollFeedback || pencilHapticWindow != window) {
-        pencilRollFeedback = [UICanvasFeedbackGenerator feedbackGeneratorForView:self];
+    if (!pencilHapticFeedback || pencilHapticWindow != window) {
+        pencilHapticFeedback = [UICanvasFeedbackGenerator feedbackGeneratorForView:self];
         pencilHapticWindow = window;
-        [pencilRollFeedback prepare];
+        [pencilHapticFeedback prepare];
         Log(LOG_I, @"Pencil haptic: canvas generator bound to window %p", window);
     }
-    return pencilRollFeedback;
+    return pencilHapticFeedback;
 }
 
 - (CGPoint)pencilHapticLocation {
     return pencilContactActive ? pencilContactDownLocation : pencilHoverLocation;
 }
 
-// Wheel notch / roll step: the alignment tick.
+// Wheel notch: the alignment tick.
 - (void)pencilHapticTick {
 #if defined(__IPHONE_17_5)
     if (@available(iOS 17.5, *)) {
@@ -1767,13 +1756,13 @@ static __weak StreamView *sPalmClassifier = nil;
             isPencilHovering = YES;
             CGPoint location = [gesture locationInView:self];
             pencilHoverLocation = location;
-            BOOL rollFrozeCursor = [self handlePencilRoll:gesture atLocation:location];
+            BOOL holdCursor = NO;
             // Between the two taps of a double click the hover briefly resumes;
             // a cursor move there would split the clicks just like a tap would.
             if ([NSProcessInfo processInfo].systemUptime - pencilLastLiftTime <= PENCIL_DOUBLE_CLICK_DEAD_ZONE_DELAY
                 && hypot((location.x - pencilLastLiftLocation.x) / self.bounds.size.width,
                          (location.y - pencilLastLiftLocation.y) / self.bounds.size.height) <= PENCIL_DOUBLE_CLICK_DEAD_ZONE_DELTA) {
-                rollFrozeCursor = YES;
+                holdCursor = YES;
             }
             if (pencilSqueezeHeld) {
                 // Squeeze held: movement is the scroll wheel and the cursor
@@ -1781,15 +1770,13 @@ static __weak StreamView *sPalmClassifier = nil;
                 // A hover that (re)starts mid-squeeze measures from here.
                 if (gesture.state == UIGestureRecognizerStateBegan) pencilSqueezeAnchor = location;
                 [self sendPencilSqueezeScrollTo:location];
-            } else if (!pencilContactActive && !rollFrozeCursor) {
+            } else if (!pencilContactActive && !holdCursor) {
                 [self updateCursorLocation:location isMouse:NO];
                 pencilLastLiftTime = 0; // cursor left the last click: no double-click pairing with it
             }
             break;
         }
         case UIGestureRecognizerStateEnded: {
-            pencilRollTracking = NO;
-            pencilRollEngaged = NO;
             // Hold the pencil-hover flag through one more frame so a trailing
             // pointerInteraction/touchesMoved update can't yank the host cursor
             // back and make it flicker (upstream adeb77cf).
@@ -1801,77 +1788,6 @@ static __weak StreamView *sPalmClassifier = nil;
         default:
             break;
     }
-}
-
-// Barrel roll while hovering → Up/Down keys or wheel notches, one per
-// PENCIL_ROLL_STEP_DEG once PENCIL_ROLL_DEAD_ZONE_DEG of roll has engaged it.
-// Returns YES while engaged, which freezes the cursor so the tip wobble that
-// comes with rolling does not drag the pointer around. Any real tip travel
-// (> PENCIL_ROLL_MAX_TIP_TRAVEL between samples), a squeeze or a contact
-// drops the roll: it is a regrip or a move, not a command.
-- (BOOL)handlePencilRoll:(UIHoverGestureRecognizer*)gesture atLocation:(CGPoint)location {
-#if defined(__IPHONE_17_5)
-    if (@available(iOS 17.5, *)) {
-        NSInteger mode = settings.pencilRollMode.integerValue;
-        if (mode == PencilRollModeOff) return NO;
-        CGFloat angle = gesture.rollAngle;
-        if (!pencilRollTracking || gesture.state == UIGestureRecognizerStateBegan) {
-            pencilRollTracking = YES;
-            pencilRollEngaged = NO;
-            pencilRollAccumulated = 0;
-            pencilRollLastAngle = angle;
-            pencilRollLastLocation = location;
-            return NO;
-        }
-        CGFloat tipTravel = hypot(location.x - pencilRollLastLocation.x, location.y - pencilRollLastLocation.y);
-        pencilRollLastLocation = location;
-        // Unwrap to (-180, 180]: the angle is periodic.
-        CGFloat deltaDeg = (angle - pencilRollLastAngle) * (180.0 / M_PI);
-        pencilRollLastAngle = angle;
-        while (deltaDeg > 180) deltaDeg -= 360;
-        while (deltaDeg <= -180) deltaDeg += 360;
-
-        if (tipTravel > PENCIL_ROLL_MAX_TIP_TRAVEL || pencilSqueezeHeld || pencilContactActive) {
-            pencilRollEngaged = NO;
-            pencilRollAccumulated = 0;
-            return NO;
-        }
-        pencilRollAccumulated += deltaDeg;
-        CGFloat stepDeg = MAX(PencilRollStepMin, settings.pencilRollStep.floatValue);
-        if (!pencilRollEngaged) {
-            if (fabs(pencilRollAccumulated) < stepDeg) return NO;
-            pencilRollEngaged = YES; // the dead zone is one full step: it fires below
-        }
-        while (fabs(pencilRollAccumulated) >= stepDeg) {
-            int direction = pencilRollAccumulated > 0 ? 1 : -1;
-            [self sendPencilRollStep:direction mode:mode atLocation:location];
-            pencilRollAccumulated -= direction * stepDeg;
-        }
-        return YES;
-    }
-#endif
-    return NO;
-}
-
-// direction +1 = rolled "forward" → Down arrow / wheel down (content moves up).
-- (void)sendPencilRollStep:(int)direction mode:(NSInteger)mode atLocation:(CGPoint)location {
-    if (mode == PencilRollModeArrowKeys) {
-        short keyCode = direction > 0 ? 0x28 /* VK_DOWN */ : 0x26 /* VK_UP */;
-        LiSendKeyboardEvent(keyCode, KEY_ACTION_DOWN, 0);
-        LiSendKeyboardEvent(keyCode, KEY_ACTION_UP, 0);
-    } else if (mode == PencilRollModeWheel) {
-        signed char notch = direction > 0 ? -1 : 1;
-        if (settings.reverseMouseWheelDirection) notch = -notch;
-        LiSendScrollEvent(notch);
-    } else {
-        return;
-    }
-    Log(LOG_D, @"Pencil roll step %+d (mode %ld)", direction, (long)mode);
-#if defined(__IPHONE_17_5)
-    if (@available(iOS 17.5, *)) {
-        [self pencilHapticTick];
-    }
-#endif
 }
 
 // Squeeze-and-move → wheel. The first PENCIL_SQUEEZE_SCROLL_SLOP points are
