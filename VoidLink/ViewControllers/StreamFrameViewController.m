@@ -2731,7 +2731,13 @@ static const NSTimeInterval kAudioLeaveGameHold = 1.0;
     BOOL game = [self audio_resolveEnvironmentIsGame];
     if (_audioManual == AudioOutputIPad) game = YES;
     else if (_audioManual == AudioOutputPC) game = NO;
-    VLSetStreamAudioMuted(follow && !game);
+    // The mute is only ever changed while following, or when the user turns the
+    // setting off mid-stream. Tearing the stream down (termination, quit, agent
+    // link closing) leaves it as it is: the decoder keeps playing for a moment
+    // after that, and a desk-mode session must not blurt out a second of audio.
+    if (_hasLeftStreamPage) return;   // quitting: nothing below may touch the mute or the host
+    if (follow) VLSetStreamAudioMuted(!game);
+    else if (_hasConnectionStarted && _audioFollowSession && !VLAudioFollowsModeEnabled()) VLSetStreamAudioMuted(NO);
     NSString *to = (follow && game) ? @"ipad" : @"host";
     if (!follow && _audioRouteSent == nil) return;    // never routed: leave the PC alone
     if (!_hostStateClient || !_hostAgentLive) return;
@@ -3181,7 +3187,6 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     _hostAgentLive = NO;
     _audioRouteSent = nil;                   // the agent restores the PC's device when we disconnect
     [self audio_forgetHost];
-    VLSetStreamAudioMuted(NO);
     _nudgeGeneration++;                      // stream stop: nothing queued may reach the host
     [self aspect_noteHostState:nil];
     [self profile_noteHostProcess:nil];
@@ -4616,6 +4621,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
         self->_hasConnectionStarted = YES;
         self->_audioFollowSession = self.streamConfig.playAudioOnPC && VLAudioFollowsModeEnabled();
         self->_audioManual = AudioOutputAuto;
+        if (!self->_audioFollowSession) VLSetStreamAudioMuted(NO);   // a session that doesn't follow is never muted
         [self audio_update];
         // Leave the spinner spinning until it's obscured by
         // the first frame of video.
