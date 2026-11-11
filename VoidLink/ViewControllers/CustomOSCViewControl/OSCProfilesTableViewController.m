@@ -158,21 +158,30 @@ static NSString * const kDefaultLayoutName = @"Default";
 }
 
 // Duplicate / Delete used to act on the "selected" row; they live in swipe actions now.
+// Import / Export are rebuilt in code on the right (where Duplicate / Delete were) so
+// they don't depend on the storyboard's crowded leading group, which iOS 26 can
+// collapse out of sight.
 - (void)osc_removeLegacyNavItems {
     UINavigationItem *item = self.profileTableViewNavigationBar.topItem;
     if (!item) return;
-    NSMutableArray *keep = [NSMutableArray array];
-    for (UIBarButtonItem *b in item.rightBarButtonItems) {
-        if (b.action == @selector(duplicateTapped:) || b.action == @selector(deleteTapped:)) continue;
-        [keep addObject:b];
-    }
-    item.rightBarButtonItems = keep;
-    keep = [NSMutableArray array];
+    NSMutableArray *left = [NSMutableArray array];
     for (UIBarButtonItem *b in item.leftBarButtonItems) {
-        if (b.action == @selector(duplicateTapped:) || b.action == @selector(deleteTapped:)) continue;
-        [keep addObject:b];
+        if (b.action == @selector(exitTapped:)) [left addObject:b];
     }
-    item.leftBarButtonItems = keep;
+    item.leftBarButtonItems = left;
+
+    UIBarButtonItem *export = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"square.and.arrow.up"]
+                                                               style:UIBarButtonItemStylePlain
+                                                              target:self
+                                                              action:@selector(exportDataTapped:)];
+    export.accessibilityLabel = [LocalizationHelper localizedStringForKey:@"ExportAll"];
+    UIBarButtonItem *import = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"square.and.arrow.down"]
+                                                               style:UIBarButtonItemStylePlain
+                                                              target:self
+                                                              action:@selector(importDataTapped:)];
+    import.accessibilityLabel = [LocalizationHelper localizedStringForKey:@"Import"];
+    item.rightBarButtonItems = @[export, import];
+
     [self osc_stripGlass:item.leftBarButtonItems];
     [self osc_stripGlass:item.rightBarButtonItems];
 }
