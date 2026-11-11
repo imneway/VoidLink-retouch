@@ -194,6 +194,13 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     NSDate *_streamCountdownEndDate;
     BOOL _streamCountdownFinishFeedbackShown;
     UIView *_streamCountdownEdgeGlowView;
+    // Session stopwatch shown while the countdown is idle. Only time spent
+    // streaming counts; a break shorter than kStreamSessionResetGapSeconds
+    // keeps the same session.
+    NSTimeInterval _streamSessionBankedSeconds;   // streamed time before the current stretch
+    CFTimeInterval _streamSessionActiveSince;     // monotonic start of the current stretch; 0 while away
+    BOOL _streamSessionConnectionLive;            // connection up and not yet terminated
+    NSDate *_streamSessionLastPersistDate;
 #if !TARGET_OS_TV
     UIPickerView *_streamCountdownDurationPicker;
 #endif
@@ -359,6 +366,9 @@ static const NSTimeInterval kStreamCountdownMaximumDurationSeconds = (23 * 60 * 
 static const NSInteger kStreamCountdownMaximumPickerMinutes = (23 * 60) + 59;
 static const NSInteger kStreamCountdownPickerSecondStep = 10;
 static const NSInteger kStreamCountdownPickerSecondRows = 6;
+static NSString * const kStreamSessionElapsedSecondsKey = @"StreamSessionElapsedSeconds";
+static NSString * const kStreamSessionLastActiveDateKey = @"StreamSessionLastActiveDate";
+static const NSTimeInterval kStreamSessionResetGapSeconds = 15 * 60;
 
 // 根据当前视图 bounds 判断是否横屏
 - (BOOL)osc_isCurrentLandscapeInViewBounds {
@@ -1686,7 +1696,7 @@ static const CGFloat kQuickMenuSpacing = 12;
     [_streamCountdownUpdateTimer invalidate];
     _streamCountdownUpdateTimer = nil;
 
-    if (_streamCountdownState != StreamCountdownStateRunning) {
+    if (_streamCountdownState != StreamCountdownStateRunning && _streamSessionActiveSince <= 0) {
         return;
     }
 
@@ -1699,7 +1709,99 @@ static const CGFloat kQuickMenuSpacing = 12;
 }
 
 - (void)streamCountdownUpdateTimerFired:(NSTimer *)timer {
+    if (_streamSessionActiveSince > 0) {
+        // Snapshot about once a second so a crash or kill loses at most ~1s.
+        if (!_streamSessionLastPersistDate || -[_streamSessionLastPersistDate timeIntervalSinceNow] >= 1.0) {
+            [self persistStreamSession];
+        }
+        if (_streamCountdownState == StreamCountdownStateIdle) {
+            [self updateStreamCountdownDisplay];
+        }
+    }
     [self refreshStreamCountdownFromClockWithFeedback:YES];
+}
+
+#pragma mark - Session stopwatch
+
+// Streamed seconds in the saved session, or 0 if it has expired.
+- (NSTimeInterval)storedStreamSessionSeconds {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSDate *lastActive = [defaults objectForKey:kStreamSessionLastActiveDateKey];
+    if (![lastActive isKindOfClass:[NSDate class]]) {
+        return 0;
+    }
+    NSTimeInterval gap = -[lastActive timeIntervalSinceNow];
+    // A negative gap means the clock was set back: start fresh.
+    if (gap < 0 || gap >= kStreamSessionResetGapSeconds) {
+        return 0;
+    }
+    return MAX(0, [defaults doubleForKey:kStreamSessionElapsedSecondsKey]);
+}
+
+- (NSTimeInterval)streamSessionElapsedSeconds {
+    if (_streamSessionActiveSince > 0) {
+        return _streamSessionBankedSeconds + MAX(0, CACurrentMediaTime() - _streamSessionActiveSince);
+    }
+    return [self storedStreamSessionSeconds];
+}
+
+- (void)persistStreamSession {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSDate *now = [NSDate date];
+    [defaults setDouble:[self streamSessionElapsedSeconds] forKey:kStreamSessionElapsedSecondsKey];
+    [defaults setObject:now forKey:kStreamSessionLastActiveDateKey];
+    _streamSessionLastPersistDate = now;
+}
+
+// Streaming = live connection on this page, and the stream is on screen
+// (foreground, or PiP / AirPlay).
+- (BOOL)streamSessionShouldBeActive {
+    if (!_streamSessionConnectionLive || _hasLeftStreamPage || !_streamMan) {
+        return NO;
+    }
+    if ([UIApplication sharedApplication].applicationState != UIApplicationStateBackground) {
+        return YES;
+    }
+    BOOL pipActive = self.pipController && self.pipController.isPictureInPictureActive;
+    return pipActive || [self isAirPlaying];
+}
+
+// Called when streaming starts or resumes (connection up, back to foreground).
+- (void)beginStreamSessionActivity {
+    if (_streamSessionActiveSince > 0 || ![self streamSessionShouldBeActive]) {
+        return;
+    }
+    _streamSessionBankedSeconds = [self storedStreamSessionSeconds];
+    _streamSessionActiveSince = CACurrentMediaTime();
+    [self persistStreamSession];
+    [self updateStreamCountdownTimer];
+    [self updateStreamCountdownDisplay];
+}
+
+// Called when the user leaves: back to the host list, app backgrounded,
+// connection lost. The leave time starts the reset gap.
+- (void)endStreamSessionActivity {
+    if (_streamSessionActiveSince <= 0) {
+        return;
+    }
+    [self persistStreamSession];
+    _streamSessionBankedSeconds = [self streamSessionElapsedSeconds];
+    _streamSessionActiveSince = 0;
+    [self updateStreamCountdownTimer];
+    [self updateStreamCountdownDisplay];
+}
+
+- (void)resetStreamSession {
+    _streamSessionBankedSeconds = 0;
+    if (_streamSessionActiveSince > 0) {
+        _streamSessionActiveSince = CACurrentMediaTime();
+        [self persistStreamSession];
+    } else {
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        [defaults removeObjectForKey:kStreamSessionElapsedSecondsKey];
+        [defaults removeObjectForKey:kStreamSessionLastActiveDateKey];
+    }
+    [self updateStreamCountdownDisplay];
 }
 
 - (void)refreshStreamCountdownFromClockWithFeedback:(BOOL)feedback {
@@ -1822,7 +1924,8 @@ static const CGFloat kQuickMenuSpacing = 12;
     UIColor *foregroundColor = baseTint;
     UIColor *backgroundColor = [UIColor clearColor];
     UIEdgeInsets textInsets = UIEdgeInsetsMake(3, 6, 3, 6);
-    NSString *displayText = [self formattedStreamCountdownSeconds:_streamCountdownDurationSeconds];
+    // Idle: the countdown is not in use, so show how long this session has streamed.
+    NSString *displayText = [self formattedStreamCountdownSeconds:floor([self streamSessionElapsedSeconds])];
 
     if (_streamCountdownState == StreamCountdownStateRunning) {
         displayText = [self formattedStreamCountdownSeconds:_streamCountdownRemainingSeconds];
@@ -2067,12 +2170,14 @@ static const NSTimeInterval kAgentParkSettle = 0.2;
     if (recognizer.state != UIGestureRecognizerStateEnded) {
         return;
     }
-    if (_streamCountdownState != StreamCountdownStateRunning &&
+    BOOL resetsSession = (_streamCountdownState == StreamCountdownStateIdle);
+    if (!resetsSession &&
+        _streamCountdownState != StreamCountdownStateRunning &&
         _streamCountdownState != StreamCountdownStatePaused) {
         return;
     }
 
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Reset timer?"
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:(resetsSession ? @"Reset session?" : @"Reset timer?")
                                                                    message:nil
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
@@ -2081,7 +2186,11 @@ static const NSTimeInterval kAgentParkSettle = 0.2;
     [alert addAction:[UIAlertAction actionWithTitle:@"Reset"
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction * _Nonnull action) {
-        [self resetStreamCountdownToIdle];
+        if (resetsSession) {
+            [self resetStreamSession];
+        } else {
+            [self resetStreamCountdownToIdle];
+        }
     }]];
     UIPopoverPresentationController *popover = alert.popoverPresentationController;
     if (popover) {
@@ -3934,6 +4043,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
             [_timeBatteryUpdateTimer invalidate];
             _timeBatteryUpdateTimer = nil;
         }
+        [self endStreamSessionActivity];
         if (_streamCountdownUpdateTimer != nil) {
             [_streamCountdownUpdateTimer invalidate];
             _streamCountdownUpdateTimer = nil;
@@ -4078,6 +4188,8 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
 
 - (void)returnToMainFrameAllowingBackgroundAutoResume:(BOOL)allowBackgroundResume {
     [self resetFinishedStreamCountdownToIdleIfNeeded];
+    _streamSessionConnectionLive = NO;
+    [self endStreamSessionActivity];
 
     // Reset display mode back to default
     [self updatePreferredDisplayMode:NO];
@@ -4263,6 +4375,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
         Log(LOG_I, @"Resuming ImGui renderer on foreground");
     }
     
+    [self beginStreamSessionActivity];
     [self refreshStreamCountdownFromClockWithFeedback:YES];
     [self updateTimeBatteryDisplay];
 
@@ -4327,6 +4440,10 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     // backgrounding. (The legacy 0-interval inactivity timer used to kill
     // even an active PiP; nothing sane wants that.)
     BOOL pipActive = self.pipController && self.pipController.isPictureInPictureActive;
+    // PiP / AirPlay still show the stream, so they count as streaming time.
+    if (!pipActive && ![self isAirPlaying]) {
+        [self endStreamSessionActivity];
+    }
     NSLog(@"[InputDiag] didEnterBackground pip=%d airplay=%d leftPage=%d remaining=%.0fs",
           pipActive, [self isAirPlaying], _hasLeftStreamPage,
           [UIApplication sharedApplication].backgroundTimeRemaining);
@@ -4619,6 +4736,8 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     Log(LOG_I, @"Connection started");
     dispatch_async(dispatch_get_main_queue(), ^{
         self->_hasConnectionStarted = YES;
+        self->_streamSessionConnectionLive = YES;
+        [self beginStreamSessionActivity];
         self->_audioFollowSession = self.streamConfig.playAudioOnPC && VLAudioFollowsModeEnabled();
         self->_audioManual = AudioOutputAuto;
         if (!self->_audioFollowSession) VLSetStreamAudioMuted(NO);   // a session that doesn't follow is never muted
@@ -4733,6 +4852,8 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
         // Allow the display to go to sleep now
         [UIApplication sharedApplication].idleTimerDisabled = NO;
         [self resetFinishedStreamCountdownToIdleIfNeeded];
+        self->_streamSessionConnectionLive = NO;
+        [self endStreamSessionActivity];
         
         NSString* title;
         NSString* message;
@@ -4859,6 +4980,8 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
         // Allow the display to go to sleep now
         [UIApplication sharedApplication].idleTimerDisabled = NO;
         [self resetFinishedStreamCountdownToIdleIfNeeded];
+        self->_streamSessionConnectionLive = NO;
+        [self endStreamSessionActivity];
         
         NSString* message = [NSString stringWithFormat:@"%s failed with error %d", stageName, errorCode];
         if (portTestFlags != 0) {
