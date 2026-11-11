@@ -18,6 +18,7 @@
 #import "LocalizationHelper.h"
 #import "VoidLink-Swift.h"
 #import "ThemeManager.h"
+#import "OSCMultiSelectController.h"
 
 static BOOL RSPADALT2ValueNear(CGFloat value, CGFloat target, CGFloat tolerance) {
     return fabs(value - target) < tolerance;
@@ -87,6 +88,10 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     BOOL rotationUnlocked;          // NO (default) = screen rotation locked while editing
     UIButton *rotationLockButton;   // top toolbar lock toggle
     CGFloat lastToolbarWidth;       // guards the adaptive-toolbar relayout against loops
+    OSCMultiSelectController *multiSelect;
+    UIButton *multiSelectButton;    // top toolbar, left of the rotation lock
+    __weak id offsetBaselineTarget; // single-select nudge offset: which control it belongs to
+    CGPoint offsetBaselinePoint;
 }
 
 // Shared OSC-editor rotation-lock state. SWRevealViewController is the app's ROOT
@@ -208,6 +213,53 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     [self osc_updateRotationLockButton];
 }
 
+- (void)osc_setupMultiSelectButton {
+    if (multiSelectButton) { return; }
+    UIView *bar = self.toolbarRootView ?: self.view;
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
+    btn.translatesAutoresizingMaskIntoConstraints = NO;
+    btn.tintColor = [UIColor systemTealColor];
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:25.0 weight:UIImageSymbolWeightSemibold];
+    [btn setImage:[UIImage systemImageNamed:@"checklist" withConfiguration:cfg] forState:UIControlStateNormal];
+    btn.accessibilityLabel = @"多选";
+    [btn addTarget:self action:@selector(osc_multiSelectTapped:) forControlEvents:UIControlEventTouchUpInside];
+    [bar addSubview:btn];
+    [NSLayoutConstraint activateConstraints:@[
+        [btn.trailingAnchor constraintEqualToAnchor:bar.trailingAnchor constant:-76.0],
+        [btn.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
+        [btn.widthAnchor constraintEqualToConstant:50.0],
+        [btn.heightAnchor constraintEqualToConstant:50.0],
+    ]];
+    multiSelectButton = btn;
+}
+
+- (void)osc_multiSelectTapped:(id)sender {
+    OSCProfile *profile = [profilesManager getSelectedProfile];
+    if (profile && [profilesManager isTemplateProfile:profile.name]) {
+        NSString *message = [NSString stringWithFormat:@"模板布局'%@'不可被修改", profile.name];
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"" message:message preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Ok"] style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    if (!multiSelect) {
+        multiSelect = [[OSCMultiSelectController alloc] initWithEditor:self];
+        __weak typeof(self) weakSelf = self;
+        multiSelect.activeChanged = ^(BOOL active) {
+            if (!active) [weakSelf OSCLayoutChanged];
+        };
+    }
+    // Drop the single selection; multi-select owns the editor until Cancel / Done.
+    [self hideStickIndicators];
+    selectedWidgetView = nil;
+    selectedControllerLayer = nil;
+    widgetViewSelected = false;
+    controllerLayerSelected = false;
+    offsetBaselineTarget = nil;
+    self.coordinateControlStack.hidden = YES;
+    [multiSelect enter];
+}
+
 - (void)osc_updateRotationLockButton {
     if (@available(iOS 13.0, *)) {
         NSString *symbol = rotationUnlocked ? @"lock.rotation.open" : @"lock.rotation";
@@ -250,6 +302,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     [self osc_layoutAdaptiveToolbarIfNeeded];
+    [multiSelect layoutForBoundsChange];
 }
 
 // Make the centered toolbar button row fit the current width. The storyboard pins
@@ -272,7 +325,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     NSUInteger n = buttons.count;
     if (n < 2) { return; }
 
-    const CGFloat kEndReserve = 76.0;   // ~18 margin + 50 button + 8 gap, for Exit/lock on each end
+    const CGFloat kEndReserve = 134.0;  // ~18 margin + 2x50 buttons + gaps: Exit (left), multi-select + lock (right)
     const CGFloat kFullSize   = 50.0;
     const CGFloat kMinSize    = 24.0;   // low enough that even a 320pt screen clears the Exit button
     const CGFloat kMinSpacing = 6.0;
@@ -336,6 +389,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 }
 
 - (void) viewWillDisappear:(BOOL)animated{
+    [multiSelect exitRestoring:YES];
     OnScreenWidgetView.editMode = false;
     for (OnScreenWidgetView* widgetView in self.onScreenWidgetViews){
         [widgetView.stickBallLayer removeFromSuperlayer];
@@ -438,6 +492,9 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 
 - (void)reloadOnScreenWidgetViews{
     NSLog(@"reloadOnScreenWidgets %f", CACurrentMediaTime());
+    // Widgets are rebuilt below; the multi-select state and batch history refer to the old ones.
+    [multiSelect exitRestoring:NO];
+    [multiSelect clearHistory];
     OnScreenWidgetView.editMode = true;
     [self hideStickIndicators];
 
@@ -740,6 +797,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     [self handleMissingToolBarIcon:toolbarRootView];
     [self profileRefresh];
     [self osc_setupRotationLockButton]; // screen-rotation lock toggle (locked by default)
+    [self osc_setupMultiSelectButton];
 }
 
 #pragma mark - Class Helper Functions
@@ -778,6 +836,9 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         NSLog(@"⚠️ 应用不在活跃状态，跳过旋转处理");
         return;
     }
+    // Point positions don't survive a resize; abandon an unfinished multi-select
+    // before the save below so it isn't persisted half-done.
+    [multiSelect exitRestoring:YES];
     viewWillBeResized = true;
     NSLog(@"✅ 设置 viewWillBeResized = true");
     [self hideStickIndicators];
@@ -839,7 +900,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 
 /* fades the 'Undo Button' in or out depending on whether the user has any OSC layout changes to undo */
 - (void) OSCLayoutChanged {
-    if ([self.layoutOSC.layoutChanges count] > 0) {
+    if ([self.layoutOSC.layoutChanges count] > 0 || [multiSelect hasBatchHistory]) {
         self.undoButton.alpha = 1.0;
     }
     else {
@@ -912,6 +973,15 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     }]];
 
     
+    if (multiSelect.active) return;
+
+    if(!widgetViewSelected && [multiSelect canUndoBatchWithLegacyChangeCount:self.layoutOSC.layoutChanges.count]){
+        [multiSelect undoLastBatch];
+        [self OSCLayoutChanged];
+        [self updateCoordinateDisplay];
+        return;
+    }
+
     if(!widgetViewSelected){
         if([self.layoutOSC.layoutChanges count] > 0) { // check if there are layout changes to roll back to
             OnScreenButtonState *buttonState = [self.layoutOSC.layoutChanges lastObject];   //  Get the 'OnScreenButtonState' object that contains the name, position, and visiblity state of the button the user last moved
@@ -950,6 +1020,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         NSInteger recordChangesCount = selectedWidgetView.layoutChanges.count;
         if(recordChangesCount>1) [selectedWidgetView undoRelocation];
         else [self presentViewController:nothingToUndoAlertController animated:YES completion:nil];
+        [self updateCoordinateDisplay];
         self.undoButton.alpha = selectedWidgetView.layoutChanges.count>1 ? 1.0 : 0.3;
     }
 }
@@ -1355,6 +1426,8 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 
 /* show pop up notification that lets users choose to save the current OSC layout configuration as a profile they can load when they want. User can also choose to cancel out of this pop up */
 - (IBAction) saveTapped:(id)sender {
+    // Auto-saves (background, rotation) must never persist an unfinished multi-select.
+    [multiSelect exitRestoring:YES];
     [OSCProfilesManager setLayoutViewBounds:self.view.bounds];
     
     if([self->profilesManager updateSelectedProfile:self.layoutOSC.OSCButtonLayers]){
@@ -2623,6 +2696,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
     trashCanButton.tintColor = trashCanButton.titleLabel.textColor = [self layerIsOverlappingWithTrashcanButton:widget.layer] ? [UIColor redColor] : trashCanStoryBoardColor;
 
     self.undoButton.alpha = 1.0;
+    if (widget == selectedWidgetView) [self updateCoordinateDisplay];
 }
 
 - (BOOL) widgetPanelTouched:(UITouch *)touch{
@@ -2656,6 +2730,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 }
 
 - (void) touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
+    if (multiSelect.active) return; // multi-select picks by tap gesture; nothing drags
 
     UITouch* touch = touches.anyObject;
     widgetPanelMovedByTouch = [self widgetPanelTouched:touch];
@@ -2698,6 +2773,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 }
 
 - (void) touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
+    if (multiSelect.active) return;
 
     [self handleWidgetPanelMove:touches.anyObject];
 
@@ -2710,6 +2786,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 
     // -------- for OSC buttons
     [self.layoutOSC touchesMoved:touches withEvent:event];
+    if (self.layoutOSC.layerBeingDragged != nil) [self updateCoordinateDisplay];
     
     trashCanButton.tintColor = trashCanButton.titleLabel.textColor = [self layerIsOverlappingWithTrashcanButton:self.layoutOSC.layerBeingDragged] ? [UIColor redColor] : trashCanStoryBoardColor;
 }
@@ -2735,6 +2812,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if (multiSelect.active) { widgetPanelMovedByTouch = false; return; }
     
     // removing keyboard buttons objs
     // UITouch *touch = [touches anyObject]; // Get the first touch in the set
@@ -2893,25 +2971,44 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
 }
 
 - (void)updateCoordinateDisplay {
+    id target = nil;
+    CGPoint point = CGPointZero;
     if (self->selectedWidgetView != nil && self->widgetViewSelected) {
-        if (self->selectedWidgetView.widgetType == WidgetTypeEnumFullscreenTrigger) {
-            // Pinned widget: no coordinate readout, no nudge buttons.
-            self.coordinateControlStack.hidden = YES;
-            return;
+        if (self->selectedWidgetView.widgetType != WidgetTypeEnumFullscreenTrigger) { // pinned widget: no readout, no nudges
+            target = self->selectedWidgetView;
+            point = self->selectedWidgetView.center;
         }
-        // 显示WidgetView的坐标
-        CGPoint center = self->selectedWidgetView.center;
-        self.coordinateLabel.text = [NSString stringWithFormat:@"坐标：[%.0f], [%.0f]", center.x, center.y];
-        self.coordinateControlStack.hidden = NO;
     } else if (self->selectedControllerLayer != nil && self->controllerLayerSelected) {
-        // 显示Legacy OSC按钮的坐标
-        CGPoint position = self->selectedControllerLayer.position;
-        self.coordinateLabel.text = [NSString stringWithFormat:@"坐标：[%.0f], [%.0f]", position.x, position.y];
-        self.coordinateControlStack.hidden = NO;
-    } else {
-        // 没有选中任何控件时隐藏坐标控件
-        self.coordinateControlStack.hidden = YES;
+        target = self->selectedControllerLayer;
+        point = self->selectedControllerLayer.position;
     }
+    if (!target) {
+        offsetBaselineTarget = nil; // re-selecting the same control later starts a fresh offset
+        self.coordinateControlStack.hidden = YES;
+        return;
+    }
+
+    // Offset accumulates while the same control stays selected (nudges and drags);
+    // selecting a different control starts it over.
+    if (target != offsetBaselineTarget) {
+        offsetBaselineTarget = target;
+        offsetBaselinePoint = point;
+    }
+    NSString *offset = OSCOffsetDescription(CGPointMake(point.x - offsetBaselinePoint.x, point.y - offsetBaselinePoint.y));
+    NSString *coord = [NSString stringWithFormat:@"坐标：[%.0f], [%.0f]", point.x, point.y];
+    if (offset.length == 0) {
+        self.coordinateLabel.text = coord;
+    } else {
+        NSMutableAttributedString *text = [[NSMutableAttributedString alloc] initWithString:[coord stringByAppendingString:@"  "]];
+        [text appendAttributedString:[[NSAttributedString alloc] initWithString:offset attributes:@{
+            NSForegroundColorAttributeName: [UIColor systemTealColor],
+            NSFontAttributeName: [UIFont monospacedDigitSystemFontOfSize:self.coordinateLabel.font.pointSize weight:UIFontWeightSemibold],
+        }]];
+        self.coordinateLabel.attributedText = text;
+    }
+    self.coordinateLabel.adjustsFontSizeToFitWidth = YES;
+    self.coordinateLabel.minimumScaleFactor = 0.6;
+    self.coordinateControlStack.hidden = NO;
 }
 
 - (void)moveSelectedControlByOffset:(CGPoint)offset {
@@ -2923,6 +3020,7 @@ UIInterfaceOrientationMask gOSCEditorLockedMask = UIInterfaceOrientationMaskLand
         CGPoint newCenter = CGPointMake(self->selectedWidgetView.center.x + offset.x,
                                        self->selectedWidgetView.center.y + offset.y);
         self->selectedWidgetView.center = newCenter;
+        self->selectedWidgetView.storedCenter = newCenter; // resize re-anchors to storedCenter
         [self updateCoordinateDisplay];
     } else if (self->selectedControllerLayer != nil && self->controllerLayerSelected) {
         // 移动Legacy OSC按钮

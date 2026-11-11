@@ -10,6 +10,7 @@
 		017883F22E73B68000235B70 /* AutoEnterDesktopIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 017883F02E73B68000235B70 /* AutoEnterDesktopIntent.swift */; };
 		18341A042DEB662C0094E5F2 /* FixedTintImageView.m in Sources */ = {isa = PBXBuildFile; fileRef = 18341A032DEB662C0094E5F2 /* FixedTintImageView.m */; };
 		187F4B282E04658A00EECC59 /* WidgetPanelStackView.m in Sources */ = {isa = PBXBuildFile; fileRef = 187F4B272E04658A00EECC59 /* WidgetPanelStackView.m */; };
+		A1C0DE012F0000000000A003 /* OSCMultiSelectController.m in Sources */ = {isa = PBXBuildFile; fileRef = A1C0DE012F0000000000A002 /* OSCMultiSelectController.m */; };
 		1888C1922E24C33100108730 /* AboutViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1888C1912E24C33100108730 /* AboutViewController.swift */; };
 		1888C1932E24C41000108730 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1888C1902E24C2C800108730 /* AboutView.swift */; };
 		188973D32E386A670025E48C /* widgetTemplatesIPhone.bin in Resources */ = {isa = PBXBuildFile; fileRef = 188973D22E386A670025E48C /* widgetTemplatesIPhone.bin */; };
@@ -165,6 +166,8 @@
 		18341A032DEB662C0094E5F2 /* FixedTintImageView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = FixedTintImageView.m; sourceTree = "<group>"; };
 		187F4B232E04633100EECC59 /* WidgetPanelStackView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WidgetPanelStackView.h; sourceTree = "<group>"; };
 		187F4B272E04658A00EECC59 /* WidgetPanelStackView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WidgetPanelStackView.m; sourceTree = "<group>"; };
+		A1C0DE012F0000000000A001 /* OSCMultiSelectController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OSCMultiSelectController.h; sourceTree = "<group>"; };
+		A1C0DE012F0000000000A002 /* OSCMultiSelectController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OSCMultiSelectController.m; sourceTree = "<group>"; };
 		1888C1902E24C2C800108730 /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 		1888C1912E24C33100108730 /* AboutViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutViewController.swift; sourceTree = "<group>"; };
 		188973D22E386A670025E48C /* widgetTemplatesIPhone.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; name = widgetTemplatesIPhone.bin; path = PresetConfigs/widgetTemplatesIPhone.bin; sourceTree = "<group>"; };
@@ -457,6 +460,8 @@
 				84351B252C29AD6000A77989 /* LayoutOnScreenControlsViewController.m */,
 				187F4B232E04633100EECC59 /* WidgetPanelStackView.h */,
 				187F4B272E04658A00EECC59 /* WidgetPanelStackView.m */,
+				A1C0DE012F0000000000A001 /* OSCMultiSelectController.h */,
+				A1C0DE012F0000000000A002 /* OSCMultiSelectController.m */,
 				84351B262C29AD6000A77989 /* OSCProfilesTableViewController.h */,
 				84351B272C29AD6000A77989 /* OSCProfilesTableViewController.m */,
 				84351B2A2C29AD6000A77989 /* ToolBarContainerView.h */,
@@ -1078,6 +1083,7 @@
 				FB89462B19F646E200339C8A /* StreamView.m in Sources */,
 				840751B32BF49C050096B657 /* CustomTapGestureRecognizer.m in Sources */,
 				187F4B282E04658A00EECC59 /* WidgetPanelStackView.m in Sources */,
+				A1C0DE012F0000000000A003 /* OSCMultiSelectController.m in Sources */,
 				FB4678FA1A55FFAD00377732 /* DiscoveryManager.m in Sources */,
 				841BAC922DE35D6B00DA639E /* ThemeManager.m in Sources */,
 				98D5856D1C0EA79600F6CC00 /* TemporaryHost.m in Sources */,
